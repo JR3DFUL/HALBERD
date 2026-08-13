@@ -87,7 +87,7 @@
 #include "pc/pc_platform.h"
 #include "pc/pc_backend.h"
 
-#define PC_MAX_THREADS 24
+#define PC_MAX_THREADS 64
 #define PC_STACK_SIZE  (512 * 1024)
 
 /* Per-thread host state. It cannot live inside OSThread: that struct's layout

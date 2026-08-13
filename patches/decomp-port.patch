@@ -1,6 +1,6 @@
 --- a/include/DObj.h
 +++ b/include/DObj.h
-@@ -35,6 +35,29 @@
+@@ -35,6 +35,29 @@ union Mtx3fi {
      OMMtxInt3 i;
  }; // size == 0x10
  
@@ -30,7 +30,7 @@
  // Some sort of payload to copy to the main glist
  typedef struct DObjPayloadTypeC {
      /* 0x00 */ s32 dlistID;
-@@ -52,6 +75,7 @@
+@@ -52,6 +75,7 @@ typedef struct DObjPayloadTypeG {
      /* 0x00 */ f32 drawDistance;
      /* 0x04 */ DObjPayloadTypeC* typeC;
  } DObjPayloadTypeG; // size = 0x08
@@ -38,7 +38,7 @@
  
  typedef struct DObj {
      /* 0x00 */ struct DObj* nextFree;
-@@ -69,8 +93,15 @@
+@@ -69,8 +93,15 @@ typedef struct DObj {
          /* 0x50 */ Gfx *glist;
          /* 0x50 */ DObjPayloadTypeC *typeC;
          /* 0x50 */ DObjPayloadTypeE *typeE;
@@ -54,9 +54,30 @@
      } data;
      u8 flags;
      u8 animCBReceiver;
+--- a/include/PR/gs2dex.h
++++ b/include/PR/gs2dex.h
+@@ -29,6 +29,18 @@ extern "C" {
+  *	Data structures for S2DEX microcode
+  *===========================================================================*/
+ 
++#ifdef PORT
++/* PORT NOTE: which layout these structs must have depends on the renderer
++ * fork consuming them. The JRickey/libultraship fork (BattleShip's, adopted
++ * for this port) reads S2DEX object structs in NATIVE host layout -- its
++ * F3DuObjBg/F3DuObjTxtr declare the image fields as real pointers (see
++ * lus_gbi.h) and take the struct address raw from w1. So under LP64 the
++ * image fields here stay true pointers and the structs are wider than the
++ * 40/24-byte N64 wire layout; game code and renderer agree because both are
++ * compiled LP64. (An earlier iteration against a different fork packed these
++ * to 32-bit wire words -- if the renderer is ever swapped again, this is the
++ * single decision point.) */
++#endif
+ typedef u64 *uS2DImagePtr;
+ #define US2D_IMAGE_CAST (u64 *)
+ 
 --- a/include/PR/os_convert.h
 +++ b/include/PR/os_convert.h
-@@ -102,8 +102,13 @@
+@@ -102,8 +102,13 @@ extern "C" {
     agree only while uintptr_t is u32, which stops being true once PORT widens
     it for LP64 -- so under PORT these have to be stated in the same terms. On
     N64 uintptr_t IS u32, so nothing about the matching build changes. */
@@ -72,7 +93,7 @@
  #endif  /* defined(_LANGUAGE_C) || defined(_LANGUAGE_C_PLUS_PLUS) */
 --- a/include/PR/ultratypes.h
 +++ b/include/PR/ultratypes.h
-@@ -32,11 +32,53 @@
+@@ -32,11 +32,53 @@ typedef float  f32;
  typedef double f64;
  
  #ifdef TARGET_N64
@@ -128,7 +149,7 @@
  #endif
 --- a/include/SPObj.h
 +++ b/include/SPObj.h
-@@ -30,6 +30,95 @@
+@@ -30,6 +30,95 @@ struct SPObj_40_A0 {
      u32 _000[0x60];
  };
  
@@ -224,7 +245,7 @@
  
  // spobj? according to debug string
  typedef struct SPObj {
-@@ -94,5 +183,6 @@
+@@ -94,5 +183,6 @@ typedef struct SPObj {
      u16 unkBA; // flag2
  } SPObj;
  
@@ -233,7 +254,7 @@
  #endif // SPOBJ_H
 --- a/include/geo_block_header.h
 +++ b/include/geo_block_header.h
-@@ -41,6 +41,63 @@
+@@ -41,6 +41,63 @@ struct GeoBlockHeader {
  };
  
  
@@ -297,7 +318,7 @@
  typedef struct TextureScroll {
      // start of a texture scroll struct?
      /* 0x08 */ u16 h_8;
-@@ -87,3 +144,4 @@
+@@ -87,3 +144,4 @@ typedef struct TextureScroll {
      /* 0x78 */ u32 unk78;
      /* 0x7C */ u32 unk7C;
  } TextureScroll;
@@ -339,7 +360,7 @@
  #endif
 --- a/src/main/anim.c
 +++ b/src/main/anim.c
-@@ -1102,6 +1102,32 @@
+@@ -1102,6 +1102,32 @@ void animUpdateTextureAnimatedParams(MObj *mobj) {
                                  interp = 0x100;
                              }
  
@@ -372,7 +393,7 @@
                              sp34.pack = 0;
                              sp38.pack = 0;
  
-@@ -1128,9 +1154,25 @@
+@@ -1128,9 +1154,25 @@ void animUpdateTextureAnimatedParams(MObj *mobj) {
  
                              color.color.b = sp38.color.r;
                              color.color.a = sp38.color.b;
@@ -398,7 +419,7 @@
                              break;
                      }
  
-@@ -1732,11 +1774,20 @@
+@@ -1732,11 +1774,20 @@ void func_8000F510(GObj *obj, UnkE4E4Arg* arg1, DObj **arg2) {
  
      while (arg1->unk_00 != ARRAY_COUNT(sp44)) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -419,7 +440,7 @@
          if (arg1->unk_00 & 0xF000) {
              omDObjAppendMtx(dobj, (u32)MTX_TYPE_TRANSLATE, 0);
          }
-@@ -1885,11 +1936,20 @@
+@@ -1885,11 +1936,20 @@ void func_8000F980(GObj *obj, UnkE4E4Arg* arg1, DObj **arg2, u8 arg3, u8 arg4, u
  
      while (arg1->unk_00 != 18) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -440,7 +461,7 @@
  
          if (arg1->unk_00 & 0xF000) {
              func_8000F754(dobj, arg3, arg4, arg5, arg1->unk_00 & 0xF000);
-@@ -1924,11 +1984,20 @@
+@@ -1924,11 +1984,20 @@ void func_8000FB10(GObj *gobj, UnkE4E4Arg* arg1, TextureScroll*** arg2, DObj **a
  
      while (arg1->unk_00 != 18) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -461,7 +482,7 @@
          if (arg1->unk_00 & 0xF000) {
              func_8000F754(dobj, arg4, arg5, arg6, arg1->unk_00 & 0xF000);
          } else {
-@@ -1939,6 +2008,24 @@
+@@ -1939,6 +2008,24 @@ void func_8000FB10(GObj *gobj, UnkE4E4Arg* arg1, TextureScroll*** arg2, DObj **a
          dobj->scale.v = arg1->scale;
  
          if (arg2 != NULL) {
@@ -486,7 +507,7 @@
              if (*arg2 != NULL) {
                  csr = *arg2;
                  msub = *csr;
-@@ -1949,6 +2036,7 @@
+@@ -1949,6 +2036,7 @@ void func_8000FB10(GObj *gobj, UnkE4E4Arg* arg1, TextureScroll*** arg2, DObj **a
                  }
              }
              arg2++;
@@ -494,7 +515,7 @@
          }
          if (arg3 != NULL) {
              *arg3 = dobj;
-@@ -1966,6 +2054,20 @@
+@@ -1966,6 +2054,20 @@ void func_8000FCE4(GObj *arg0, TextureScroll*** arg1) {
      dobj = arg0->data.dobj;
      while (dobj != NULL) {
          if (arg1 != NULL) {
@@ -515,7 +536,7 @@
              if (*arg1 != NULL) {
                  csr = *arg1;
                  msub = *csr;
-@@ -1976,6 +2078,7 @@
+@@ -1976,6 +2078,7 @@ void func_8000FCE4(GObj *arg0, TextureScroll*** arg1) {
                  }
              }
              arg1++;
@@ -525,7 +546,7 @@
      }
 --- a/src/main/anim.h
 +++ b/src/main/anim.h
-@@ -110,6 +110,22 @@
+@@ -110,6 +110,22 @@ typedef struct {
      /* 0x10 */ s32* ids;
  } AnimationHeader;
  
@@ -548,7 +569,7 @@
  typedef struct UnkE4E4Arg {
      /* 0x00 */ s32 unk_00;
      /* 0x04 */ void* unk04;
-@@ -117,6 +133,7 @@
+@@ -117,6 +133,7 @@ typedef struct UnkE4E4Arg {
      /* 0x14 */ Vector rotation;
      /* 0x20 */ Vector scale;
  } UnkE4E4Arg; // size == 0x2C
@@ -558,7 +579,7 @@
  // void anim_func_8000FBC4(GObj* obj, struct UnkE4E4Arg* arg1, DObj** arg2);
 --- a/src/main/audio.c
 +++ b/src/main/audio.c
-@@ -589,6 +589,13 @@
+@@ -589,6 +589,13 @@ void auStopBGM(void) {
  
  // NOTE: this used to store the interrupt mask
  u32 auPlaySong(s32 playerID, u32 songID) {
@@ -574,7 +595,7 @@
          auBGMSongId[playerID] = songID;
 --- a/src/main/dma.c
 +++ b/src/main/dma.c
-@@ -70,6 +70,28 @@
+@@ -70,6 +70,28 @@ void dma_copy(OSPiHandle *handle, u32 physAddr, u32 vAddr, u32 size, u8 directio
  }
  
  void dma_overlay_load(struct Overlay *ovl) {
@@ -603,9 +624,35 @@
      if ((s32) ovl->textEnd - (s32) ovl->textStart != 0) {
          osInvalICache((void*)(s32) ovl->textStart, (s32) ovl->textEnd - (s32) ovl->textStart);
          osInvalDCache((void*)(s32) ovl->textStart, (s32) ovl->textEnd - (s32) ovl->textStart);
+@@ -86,9 +108,25 @@ void dma_overlay_load(struct Overlay *ovl) {
+     }
+ }
+ 
++#ifdef PORT
++/* dma_copy carries the destination through a u32, faithfully to the N64
++ * signature -- which truncates an LP64 heap pointer above 4 GiB before the
++ * PI ever sees it. The failure that found it: func_800A94F4's temporary
++ * big-endian buffer came from malloc, glibc served it from an mmap'd arena
++ * at 0x7f..., and pc_rom_read memcpy'd into the low 32 bits of that address.
++ * Every dma_read target is a cartridge read into host memory, so go to the
++ * cartridge image directly with the full pointer; the cache operations and
++ * 64 KB chunking dma_copy adds are no-ops on the PC PI anyway. */
++void dma_read(u32 physAddr, void *vAddr, u32 size) {
++    extern u32 pc_rom_read(u32 off, void *dst, u32 size);
++
++    pc_rom_read(physAddr, vAddr, size);
++}
++#else
+ void dma_read(u32 physAddr, void *vAddr, u32 size) {
+     dma_copy(gRomHandle, physAddr, (u32)vAddr, size, OS_READ);
+ }
++#endif
+ 
+ void dma_write(void *vAddr, u32 physAddr, u32 size) {
+     dma_copy(gRomHandle, physAddr, (u32)vAddr, size, OS_WRITE);
 --- a/src/main/fault.c
 +++ b/src/main/fault.c
-@@ -388,7 +388,15 @@
+@@ -388,7 +388,15 @@ void crash_screen_print(s32 x, s32 y, const char *fmt, ...) {
  
      
  
@@ -621,7 +668,7 @@
  
      if (size > 0) {
          ptr = buf;
-@@ -673,7 +681,11 @@
+@@ -673,7 +681,11 @@ void crash_screen_printf(const char *fmt, ...) {
      va_list args;
      va_start(args, fmt);
  
@@ -633,7 +680,7 @@
  
      va_end(args);
  }
-@@ -812,7 +824,9 @@
+@@ -812,7 +824,9 @@ void fatal_printf(const char *fmt, ...) {
      s32 pri;
      va_list args;
      va_start(args, fmt);
@@ -645,7 +692,7 @@
      pri = osGetThreadPri(NULL);
 --- a/src/main/gtl.c
 +++ b/src/main/gtl.c
-@@ -115,6 +115,39 @@
+@@ -115,6 +115,39 @@ void func_800053B4(u16 arg0, u16 arg1) {
  }
  
  void gtlSetupHeap(void *start, u32 size) {
@@ -685,7 +732,7 @@
      mlSetup(&gDynamicBuffer2, 0x10000, start, size);
  }
  
-@@ -425,21 +458,80 @@
+@@ -425,21 +458,80 @@ void func_80005CC0(s32 isL3DEX2, Gfx *glistp) {
      }
  }
  
@@ -766,7 +813,7 @@
              loadedSpriteUcode = 1;
              break;
          case 11: case 12: case 13: case 14: case 15: default:
-@@ -848,7 +940,12 @@
+@@ -848,7 +940,12 @@ void gtlStart(BufferSetup* setup, void (*postInitFunc)(void)) {
      struct DLBuffer dlBuffers[2][4];
  
      gtlNumContexts = setup->numContexts;
@@ -779,7 +826,7 @@
      gtlMainFuncTable.onPrivUpdate = setup->onUpdate;
      gtlMainFuncTable.onPrivDraw = setup->onDraw;
  
-@@ -901,6 +998,34 @@
+@@ -901,6 +998,34 @@ void func_80007328(BufferSetup *arg) {
      gtlStart(arg, NULL);
  }
  
@@ -814,7 +861,7 @@
  
  void gtlCreateScene(SceneSetup *scene) {
      gtlSetupHeap(scene->gtlSetup.heapBase, scene->gtlSetup.heapSize);
-@@ -916,26 +1041,62 @@
+@@ -916,26 +1041,62 @@ void gtlCreateScene(SceneSetup *scene) {
      gtlCurrentScene.unk_14 = scene->unk4C;
      gtlCurrentScene.processes = gtlMalloc(scene->procCount * 0x24, 4);
      gtlCurrentScene.numProcesses = (s32) scene->procCount;
@@ -879,7 +926,7 @@
      gtlMainFuncTable.onDraw = gtlDraw;
 --- a/src/main/gtl.h
 +++ b/src/main/gtl.h
-@@ -26,6 +26,51 @@
+@@ -26,6 +26,51 @@ enum UcodeTypes {
      UCODE_12_NON_XBUS = 15
  };
  
@@ -931,7 +978,7 @@
  typedef struct {
      /* 0x00 */ u16 flags;
      /* 0x04 */ void (*onUpdate)(void);
-@@ -44,12 +89,37 @@
+@@ -44,12 +89,37 @@ typedef struct {
      /* 0x38 */ void (*beforeRender)(Gfx**);
      /* 0x3C */ void (*contpadPoll)(void); // controller read callback?
  } BufferSetup;                              // size == 0x40
@@ -969,7 +1016,7 @@
  typedef struct {
      /* 0x00 */ BufferSetup gtlSetup;
      /* 0x40 */ u32 threadCount;
-@@ -72,6 +142,7 @@
+@@ -72,6 +142,7 @@ typedef struct {
      /* 0x84 */ u32 omCameraSize;
      /* 0x88 */ void (*postInitFunc)(void);
  } SceneSetup; // size = 0x70
@@ -979,7 +1026,7 @@
      /* 0x00 */ u16 flags;
 --- a/src/main/object_manager.c
 +++ b/src/main/object_manager.c
-@@ -595,6 +595,20 @@
+@@ -595,6 +595,20 @@ void omEndProcess(struct GObjProcess *proc) {
      void (*temp_v0_3)(struct ObjStack *);
  
      if ((proc == 0) || (proc == omCurrentProc)) {
@@ -1002,7 +1049,7 @@
          if (temp_v0_4 == 0 || temp_v0_4 == 2) {
 --- a/src/main/render.c
 +++ b/src/main/render.c
-@@ -41,11 +41,20 @@
+@@ -41,11 +41,20 @@ void guLookAtF(f32 mf[4][4], f32 xEye, f32 yEye, f32 zEye, f32 xAt, f32 yAt, f32
  void guMtxCatF(f32 m[4][4], f32 n[4][4], f32 r[4][4]);
  
  // like DObjPayloadTypeC, but with a second display list drawn in front
@@ -1023,7 +1070,7 @@
  
  void renderSetCameraScissors(s32 top, s32 bottom, s32 left, s32 right) {
      renderCameraScissorTop = top;
-@@ -2056,7 +2065,14 @@
+@@ -2056,7 +2065,14 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
  
          if (flags & 0x4)
          {
@@ -1038,7 +1085,7 @@
  
              if (flags & (0x2 | 0x1))
              {
-@@ -2084,11 +2100,22 @@
+@@ -2084,11 +2100,22 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
          }
          if (flags & 0x1000)
          {
@@ -1061,7 +1108,7 @@
          }
          if (flags & (0x200 | 0x10 | 0x8))
          {
-@@ -2149,6 +2176,17 @@
+@@ -2149,6 +2176,17 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
          {
              s32 block_siz = ((u8)mobj->texture.siz2 == G_IM_SIZ_32b) ? G_IM_SIZ_32b : G_IM_SIZ_16b;
  
@@ -1079,7 +1126,7 @@
              gDPSetTextureImage
              (
                  branch_dl++,
-@@ -2157,6 +2195,7 @@
+@@ -2157,6 +2195,7 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
                  1,
                  mobj->texture.textures[mobj->texIndex2]
              );
@@ -1087,7 +1134,7 @@
              if (flags & (0x10 | 0x1))
              {
                  gDPLoadSync(branch_dl++);
-@@ -2216,6 +2255,16 @@
+@@ -2216,6 +2255,16 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
          }
          if (flags & (0x10 | 0x1))
          {
@@ -1104,7 +1151,7 @@
              gDPSetTextureImage
              (
                  branch_dl++,
-@@ -2224,6 +2273,7 @@
+@@ -2224,6 +2273,7 @@ void renderLoadTextures(DObj *dobj, Gfx **dl_head)
                  1,
                  mobj->texture.textures[mobj->texIndex1]
              );
@@ -1112,7 +1159,7 @@
          }
          if (flags & 0x20)
          {
-@@ -2574,7 +2624,12 @@
+@@ -2574,7 +2624,12 @@ void renderDrawGObjWithDObjTypeE(GObj* obj) {
  
  void renderDrawDObj_LevelOfDetail(DObj* dobj) {
      s32 ret;
@@ -1125,7 +1172,7 @@
      UNUSED s32 temp;
  
      if (!(dobj->flags & 2)) {
-@@ -2672,7 +2727,12 @@
+@@ -2672,7 +2727,12 @@ void renderDrawObject_TypeG(GObj* obj) {
                  payload++;
              }
  
@@ -1138,7 +1185,7 @@
          }
      }
  }
-@@ -2680,7 +2740,12 @@
+@@ -2680,7 +2740,12 @@ void renderDrawObject_TypeG(GObj* obj) {
  void func_8001503C(DObj* dobj) {
      void* segaddr = NULL;
      s32 ret;
@@ -1151,7 +1198,7 @@
      DObjPayloadTypeC* curPayload;
      Gfx* sp3C;
      s32 i;
-@@ -2690,7 +2755,11 @@
+@@ -2690,7 +2755,11 @@ void func_8001503C(DObj* dobj) {
          f32 sp30 = renderObjectScale;
          payload = dobj->data.typeH;
          if (payload != NULL) {
@@ -1163,7 +1210,7 @@
          }
  
          sp3C = D_8004ABA0;
-@@ -2769,7 +2838,12 @@
+@@ -2769,7 +2838,12 @@ void func_80015368(GObj* obj) {
                  renderLevelOfDetail++;
              }
  
@@ -1176,7 +1223,7 @@
              sp30 = D_8004ABA0;
              ret = renderPrepareModelMatrix(&D_8004ABA0, dobj);
  
-@@ -2826,7 +2900,13 @@
+@@ -2826,7 +2900,13 @@ void func_800156C4(DObj* dobj) {
      UNUSED s32 pad;
      f32 sp24;
      UNUSED s32 pad2;
@@ -1190,7 +1237,7 @@
  
      payload = dobj->data.data;
  
-@@ -2946,8 +3026,14 @@
+@@ -2946,8 +3026,14 @@ void func_80015BFC(DObj* dobj) {
      s32 ret;
      UNUSED s32 pad;
      f32 sp24;
@@ -1205,7 +1252,7 @@
  
      lodList = dobj->data.data;
  
-@@ -2955,7 +3041,11 @@
+@@ -2955,7 +3041,11 @@ void func_80015BFC(DObj* dobj) {
          sp24 = renderObjectScale;
  
          if (lodList != NULL) {
@@ -1217,7 +1264,7 @@
          }
  
          if (lodList != NULL && payload[0] != NULL && !(dobj->flags & 1)) {
-@@ -3043,14 +3133,23 @@
+@@ -3043,14 +3133,23 @@ void func_80015F78(DObj* dobj) {
      DObjPayloadTypeI* payload;
      Gfx* sp3C;
      s32 i;
@@ -1241,7 +1288,7 @@
          }
  
          sp3C = D_8004ABA0;
-@@ -3131,7 +3230,12 @@
+@@ -3131,7 +3230,12 @@ void func_800162D8(GObj* obj) {
                  renderLevelOfDetail++;
              }
  
@@ -1254,7 +1301,7 @@
              sp30 = D_8004ABA0;
              ret = renderPrepareModelMatrix(&D_8004ABA0, dobj);
  
-@@ -3895,4 +3999,4 @@
+@@ -3895,4 +3999,4 @@ void func_800183BC(void) {
  }
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/main/render/func_800183BC.s")
@@ -1263,7 +1310,7 @@
 \ No newline at end of file
 --- a/src/main/sched.c
 +++ b/src/main/sched.c
-@@ -1337,6 +1337,16 @@
+@@ -1337,6 +1337,16 @@ void scThreadMain(void *arg) {
      while (1) {
          osRecvMesg(&scTaskMQ, &mesg, OS_MESG_BLOCK);
  
@@ -1282,7 +1329,7 @@
                  scHandleVRetrace();
 --- a/src/main/vi.c
 +++ b/src/main/vi.c
-@@ -97,7 +97,31 @@
+@@ -97,7 +97,31 @@ void viSetScreenParams(s32 width, s32 height, u32 flags) {
  }
  
  void viApplyScreenSettings(ScreenSettings* settings) {
@@ -1316,7 +1363,7 @@
  }
 --- a/src/ovl1/ovl1.c
 +++ b/src/ovl1/ovl1.c
-@@ -147,6 +147,43 @@
+@@ -147,6 +147,43 @@ typedef struct UnkScript {
      u8 bytecode[1];
  } UnkScript;
  
@@ -1360,7 +1407,7 @@
  typedef struct UnkScriptDesc {
      s32 scripts_num;
      UnkScript *scripts[1];
-@@ -167,6 +204,7 @@
+@@ -167,6 +204,7 @@ typedef struct UnkTextureDesc {
      s32 textures_num;
      UnkTexture *textures[1];
  } UnkTextureDesc;
@@ -1368,7 +1415,7 @@
  
  void *gtlMalloc(u32 size, u32 alignment);
  void func_8009E834(GObj *arg0);
-@@ -259,6 +297,72 @@
+@@ -259,6 +297,72 @@ void func_8009B72C(void *arg0, u8 arg1) {
      *(UnkEmitter **)((u8 *)arg0 + 0x4C) = func_8009B5E8(arg1, *(u16 *)((u8 *)arg0 + 4));
  }
  
@@ -1441,7 +1488,7 @@
  void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *texture_desc) {
      s32 i, j;
  
-@@ -297,6 +401,7 @@
+@@ -297,6 +401,7 @@ void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *text
          }
      }
  }
@@ -1449,7 +1496,7 @@
  
  GObj *func_8009B99C(s32 num) {
      s32 i;
-@@ -2663,6 +2768,618 @@
+@@ -2663,6 +2768,618 @@ block_146:
      temp_s1_39->unk4 = 0;
      *arg2 = temp_s1_39 + 8;
  }
@@ -2068,7 +2115,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_8009E8F4.s")
  #endif
-@@ -3275,6 +3992,16 @@
+@@ -3275,6 +3992,16 @@ block_105:
          } while (var_s0 != NULL);
      }
  }
@@ -2085,7 +2132,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A09AC.s")
  #endif
-@@ -3461,6 +4188,19 @@
+@@ -3461,6 +4188,19 @@ void *func_800A19EC(s32 arg0, s32 arg1) {
      }
      return temp_v0;
  }
@@ -2105,7 +2152,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A19EC.s")
  #endif
-@@ -3863,6 +4603,167 @@
+@@ -3863,6 +4603,167 @@ void func_800A2550(void *arg0) {
          } while (!(temp_t9 & 0x80000000));
      }
  }
@@ -2275,7 +2322,7 @@
  #endif
 --- a/src/ovl1/ovl1_3.c
 +++ b/src/ovl1/ovl1_3.c
-@@ -38,12 +38,32 @@
+@@ -38,12 +38,32 @@ void ohSleep(s32);
  extern GObj *D_800DE350[];
  
  // A node in the dynamic-buffer free-list allocator (see func_800A82C0 / func_800A8358).
@@ -2308,11 +2355,18 @@
  
  extern u32 D_800D7BB0;
  extern u32 D_800D7BB4;
-@@ -155,9 +175,82 @@
-     var_a1->unkC = 1;
+@@ -117,6 +137,7 @@ s32 func_800A8310(s32 arg0) {
+ }
+ 
+ #ifdef NON_MATCHING
++#ifndef PORT
+ // Correct structure; remaining diff is register allocation only (compiler
+ // caches &D_800D7BD0[temp_v1] in a2, target keeps base + recomputes index).
+ void *func_800A8358(s32 arg0) {
+@@ -156,8 +177,82 @@ block_found:
      return (u8 *)var_a1 + 0x10;
  }
-+#elif defined(PORT)
+ #else
 +/* Same function through the 16-byte PORT header (CL() widens the 32-bit
 + * link slots; pointer stores narrow with a cast). */
 +void *func_800A8358(s32 arg0) {
@@ -2351,7 +2405,8 @@
 +    var_a1->unkC = 1;
 +    return (u8 *)var_a1 + 0x10;
 +}
- #else
++#endif
++#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A8358.s")
  #endif
 +#ifdef PORT
@@ -2391,7 +2446,7 @@
  struct CacheLine *func_800A840C(u32 arg0, s32 arg1) {
      struct CacheLine *sp1C;
      struct CacheLine *temp_a3;
-@@ -188,6 +281,7 @@
+@@ -188,6 +283,7 @@ struct CacheLine *func_800A840C(u32 arg0, s32 arg1) {
      memcpy((u8 *)sp1C->unk4 + 0x10, D_800C4640, 0x10);
      return sp1C;
  }
@@ -2399,11 +2454,18 @@
  
  #ifdef NON_MATCHING
  // 4/10, one-slot temp rotation (t7/t8/t9 vs t6/t7/t8). Swept: 24 source forms
-@@ -274,6 +368,53 @@
-     }
+@@ -228,6 +324,7 @@ void *func_800A8564(struct CacheLine *arg0, s32 arg1) {
+ }
+ 
+ #ifdef NON_MATCHING
++#ifndef PORT
+ // Nearly matching (28/52 insns identical incl. all structure); remaining diff
+ // is a one-slot temp-register rotation in the free path (t8/t9/t0.. vs t7/t8/t9..).
+ // K&R definition needed: callers pass 1-4 args for regalloc.
+@@ -275,6 +372,54 @@ s32 arg0;
      return 0;
  }
-+#elif defined(PORT)
+ #else
 +/* Free/deref through the 16-byte PORT header; arena pointers fit the u32
 + * link slots, so only the derefs widen (CL). Semantics identical to the
 + * NON_MATCHING body above. */
@@ -2450,10 +2512,12 @@
 +    }
 +    return 0;
 +}
- #else
++#endif
++#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A8578.s")
  #endif
-@@ -305,7 +446,11 @@
+ s32 func_800A8648(void) {
+@@ -305,7 +450,11 @@ s32 func_800A86C8(s32 arg0, s32 *arg1, s32 *arg2) {
              count++;
              total = total + size + 0x10;
          }
@@ -2465,7 +2529,7 @@
      } while (cur != start);
      *arg1 = total;
      *arg2 = count;
-@@ -334,6 +479,32 @@
+@@ -334,6 +483,32 @@ s32 func_800A8724(s32 arg0) {
      u32 *sizes;
  
      count = 0;
@@ -2498,7 +2562,7 @@
      func_800A82C0();
      for (i = 0; i < 8; i++) {
          for (j = 0; j < D_800D00E4[i]; j++) {
-@@ -460,6 +631,45 @@
+@@ -460,6 +635,45 @@ struct BGHeader *func_800A8BAC(u32 arg0) {
      return (*temp_v1)[idx];
  }
  
@@ -2544,7 +2608,7 @@
  struct BGHeader *func_800A8C40(u32 arg0) {
      struct BGHeader ***temp_a2;
      s32 idx;
-@@ -475,6 +685,7 @@
+@@ -475,6 +689,7 @@ struct BGHeader *func_800A8C40(u32 arg0) {
      }
      return (*temp_a2)[idx];
  }
@@ -2552,7 +2616,7 @@
  
  #ifdef NON_MATCHING
  // 2/33 (was 9): reusing `arg0` as the scratch for the masked, doubled index --
-@@ -853,6 +1064,1093 @@
+@@ -853,6 +1068,1131 @@ void *func_800A9250(u32 arg0, s32 arg1) {
      }
      return temp_v0;
  }
@@ -2866,9 +2930,9 @@
 +                    gsw_w32(g, m + i);
 +                }
 +            }
-+        } else if (op == 0xE1) { /* G_RDPHALF_1 carries G_BRANCH_Z's target */
++        } else if (op == 0xE1) { /* G_RDPHALF: may carry the next 0x04's DL target */
 +            half1 = w1;
-+        } else if (op == 0x04) { /* G_BRANCH_Z */
++        } else if (op == 0x04) { /* G_SELECT_DL (S2DEX pair) / G_BRANCH_Z */
 +            if (gsw_seg4(g, half1, 8) && gsw_dl_ok(g, half1 & 0xFFFFFF)) {
 +                gsw_dl_walk(g, half1 & 0xFFFFFF, depth + 1);
 +            }
@@ -3189,6 +3253,16 @@
 +            if (gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
 +                gw_measure(w, w1 & 0xFFFFFF, depth + 1);
 +            }
++        } else if (op == 0xE1) {
++            /* S2DEX gSPSelectDL pair: G_RDPHALF_0 (0xE1) carries a seg-4 DL
++             * target and the following G_SELECT_DL (0x04) branches to it
++             * (the fork's handlers take the branch unconditionally). Treat
++             * it exactly like a G_DL reference. An 0xE1 not followed by
++             * 0x04 is a texrect half and stays a plain copy. */
++            if (i + 1 < len && (gw_rd32(g, off + (i + 1) * 8) >> 24) == 0x04 &&
++                gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
++                gw_measure(w, w1 & 0xFFFFFF, depth + 1);
++            }
 +        } else if (op == 0x01) {
 +            u32 nv = (w0 >> 12) & 0xFF;
 +            if (gsw_seg4(g, w1, nv * 0x10)) {
@@ -3219,6 +3293,7 @@
 +    u8 *base;
 +    u64 *pend_slot = NULL;
 +    u32 pend_w1off = 0, pend_w1 = 0, pend_siz = 0;
++    int kill_next_04 = 0;
 +
 +    if (w->fail || depth > 24) {
 +        w->fail = 1;
@@ -3258,6 +3333,33 @@
 +            } else {
 +                w0v = 0xDF000000u; /* branch with no target: end here */
 +                w1v = 0;
++            }
++        } else if (op == 0xE1) {
++            /* S2DEX gSPSelectDL pair (see gw_measure): the fork's handler
++             * stashes this w1 verbatim and calls it when the following
++             * G_SELECT_DL (0x04) executes, so it must become the widened
++             * copy's host address. If the target cannot be widened, the
++             * whole pair is neutralized (E1 w1 = 0 and the 0x04 becomes a
++             * G_SPNOOP) so the interpreter never branches into raw packed
++             * data. An 0xE1 not followed by 0x04 (texrect half) copies
++             * through untouched. */
++            if (i + 1 < len && (gw_rd32(g, off + (i + 1) * 8) >> 24) == 0x04) {
++                uintptr_t child = 0;
++                if (gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
++                    child = gw_emit(w, w1 & 0xFFFFFF, depth + 1);
++                }
++                if (child != 0) {
++                    w1v = child;
++                } else {
++                    w1v = 0;
++                    kill_next_04 = 1;
++                }
++            }
++        } else if (op == 0x04) {
++            if (kill_next_04) {
++                w0v = 0; /* G_SPNOOP */
++                w1v = 0;
++                kill_next_04 = 0;
 +            }
 +        } else if (op == 0x01) {
 +            u32 nv = (w0 >> 12) & 0xFF;
@@ -3646,7 +3748,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9250.s")
  #endif
-@@ -932,6 +2230,124 @@
+@@ -932,6 +2272,124 @@ loop_4:
      }
      return sp24;
  }
@@ -3771,7 +3873,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A94F4.s")
  #endif
-@@ -976,6 +2392,34 @@
+@@ -976,6 +2434,34 @@ void *func_800A9648(void *arg0) {
      }
      return arg0;
  }
@@ -3806,7 +3908,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9648.s")
  #endif
-@@ -1050,6 +2494,45 @@
+@@ -1050,6 +2536,45 @@ void func_800A9864(u32 arg0, s32 arg1, s32 arg2) {
      func_800A9A2C(omCurrentObj->objId);
      func_800A9648(sp1C);
  }
@@ -3852,7 +3954,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9864.s")
  #endif
-@@ -1077,7 +2560,17 @@
+@@ -1077,7 +2602,17 @@ void func_800A9A2C(s32 arg0) {
          D_800DFBD0[omCurrentObj->objId] = (struct DObj **)-1;
          return;
      }
@@ -3870,7 +3972,7 @@
  }
  
  // `arg0 &= 0xFFFF;` as the scratch is load-bearing -- see func_800A89E0.
-@@ -1108,7 +2601,14 @@
+@@ -1108,7 +2643,14 @@ s32 func_800A9B48(s32 arg0) {
      u32 temp_v0_2;
  
      temp_v0 = func_800A94F4(arg0);
@@ -3887,7 +3989,7 @@
          var_a0 = &D_800DF850[temp_v1->objId];
 --- a/src/ovl1/ovl1_6.c
 +++ b/src/ovl1/ovl1_6.c
-@@ -49,7 +49,22 @@
+@@ -49,7 +49,22 @@ void initTrack(s32 track) {
      D_800DEF90[track] = NULL;
      D_800DF150[track] = NULL;
  
@@ -3912,7 +4014,7 @@
  
 --- a/src/ovl1/ovl1_7.c
 +++ b/src/ovl1/ovl1_7.c
-@@ -269,6 +269,23 @@
+@@ -269,6 +269,23 @@ void func_800AF618(void *arg0, TextureScroll ***arg1, DObj **arg2) {
      }
      while (node != NULL) {
          if (arg1 != NULL) {
@@ -3936,7 +4038,7 @@
              if (*arg1 != NULL) {
                  mobjs = *arg1;
                  t = *mobjs;
-@@ -279,6 +296,7 @@
+@@ -279,6 +296,7 @@ void func_800AF618(void *arg0, TextureScroll ***arg1, DObj **arg2) {
                  }
              }
              arg1++;
@@ -3944,7 +4046,7 @@
          }
          node = animModelTreeNextNode(node);
      }
-@@ -329,6 +347,22 @@
+@@ -329,6 +347,22 @@ void func_800AF8F0(GObj *gobj, u8 link, u8 flags) {
  }
  
  void func_800AF920(s32 arg0) {
@@ -3967,7 +4069,7 @@
      UnkStruct800B158C *tmp = omCurrentObj->unk4C;
  
      if (arg0 < 0) {
-@@ -340,12 +374,20 @@
+@@ -340,12 +374,20 @@ void func_800AF920(s32 arg0) {
          return;
      }
      tmp->unk13 = tmp->unk13 | 8;
@@ -3988,7 +4090,7 @@
  }
  
  void func_800AF980(s32 pri) {
-@@ -853,6 +895,68 @@
+@@ -853,6 +895,68 @@ void procMainMove(GObj *gobj) {
  }
  
  #ifdef NON_MATCHING
@@ -4057,7 +4159,7 @@
  void func_800B158C(GObj *gobj) {
      UnkStruct800B158C *gobj_4C = gobj->unk4C;
      u16 var_a0;
-@@ -888,6 +992,7 @@
+@@ -888,6 +992,7 @@ void func_800B158C(GObj *gobj) {
          }
      }
  }
@@ -4065,9 +4167,84 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_7/func_800B158C.s")
  #endif
+@@ -935,6 +1040,20 @@ void func_800B18B4(GObj *arg0) {
+ void func_800B1900(u16 track) {
+     GObj *gobj;
+ 
++#ifdef PORT
++    /* Dozens of callers across the overlays pass `((u16 *) omCurrentObj)[1]`,
++     * which on big-endian N64 is the LOW half of GObj.objId -- and tracks are
++     * indexed by objId (src/ovl1/ovl1_6.c stores D_800DE350[i] under the id it
++     * gives HS64_omMakeGObj). On a little-endian host the same expression
++     * reads the HIGH half, which is 0 for every real id, so those calls all
++     * arrive as track 0 and dereference an empty slot. Track 0 is never
++     * handed out, so a 0 here with a current object that owns its own slot is
++     * always that misread; recover the intended id. */
++    if (track == 0 && omCurrentObj != NULL &&
++        D_800DE350[(u16)omCurrentObj->objId] == omCurrentObj) {
++        track = (u16)omCurrentObj->objId;
++    }
++#endif
+     gobj = D_800DE350[track];
+     func_800A9D64(track);
+     func_800A99E4(track);
+@@ -1338,6 +1457,53 @@ void func_800B26D8(Vector *vec, struct DObj *node, u32 track) {
+     }
+     utilWrapRotation(vec);
+ }
++#elif defined(PORT)
++/* Functional port; the weak stub aborted the world map's travel state the
++ * first time the port ever reached it. The asm walks the PARENT chain
++ * (lw 0x14 = DObj.parent; the sketch above calls that field `child`, an m2c
++ * naming artifact) and the loop processes each node then stops after the one
++ * whose parent is the sentinel 1 -- the same shape as the matched
++ * func_800B2928 below, with rotation in place of scale. The euler extraction
++ * mirrors the matched extractor in src/ovl1/util.c (asinf/atan2f rows). */
++void func_800B26D8(Vector *vec, struct DObj *node, u32 track) {
++    Mat4 finalMtx;
++    Mat4 tmpMtx;
++
++    if (track == 0xFFFF) {
++        track = omCurrentObj->objId;
++    }
++    if (node == NULL) {
++        node = omCurrentObj->data.dobj;
++    }
++    guMtxIdentF(finalMtx);
++    do {
++        if ((u32)(uintptr_t)node->parent != 1) {
++            if ((node->angle.v.x != 0.0f) || (node->angle.v.y != 0.0f) || (node->angle.v.z != 0.0f)) {
++                HS64_MkRotationMtxF(tmpMtx, node->angle.v.x, node->angle.v.y, node->angle.v.z);
++                guMtxCatF(finalMtx, tmpMtx, finalMtx);
++            }
++        } else {
++            if ((gEntitiesAngleXArray[track] != 0.0f) || (gEntitiesAngleYArray[track] != 0.0f) ||
++                (gEntitiesAngleZArray[track] != 0.0f)) {
++                HS64_MkRotationMtxF(tmpMtx, gEntitiesAngleXArray[track], gEntitiesAngleYArray[track],
++                                    gEntitiesAngleZArray[track]);
++                guMtxCatF(finalMtx, tmpMtx, finalMtx);
++            }
++        }
++        node = node->parent;
++    } while ((u32)(uintptr_t)node != 1);
++
++    vec->y = asinf(-finalMtx[0][2]);
++    if ((vec->y == 1.5707964f) || (vec->y == -1.5707964f)) {
++        vec->x = (vec->y == 1.5707964f) ? atan2f(finalMtx[1][0], finalMtx[1][1])
++                                        : atan2f(-finalMtx[1][0], finalMtx[1][1]);
++        vec->z = 0.0f;
++    } else {
++        vec->x = atan2f(finalMtx[1][2], finalMtx[2][2]);
++        vec->z = atan2f(finalMtx[0][1], finalMtx[0][0]);
++    }
++    utilWrapRotation(vec);
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_7/func_800B26D8.s")
+ #endif
 --- a/src/ovl1/sprite.c
 +++ b/src/ovl1/sprite.c
-@@ -491,6 +491,21 @@
+@@ -491,6 +491,21 @@ void func_800AC820(uObjTxtr *tx, struct C954Arg2 *arg1) {
  }
  
  void func_800AC8E0(struct SPObj_68 *arg0, struct C954Arg2 *arg1) {
@@ -4089,7 +4266,7 @@
      arg0->unk0 = 0x30;
      arg0->unk4 = arg1->unkC;
      arg0->unk8 = 0x100;
-@@ -499,6 +514,7 @@
+@@ -499,6 +514,7 @@ void func_800AC8E0(struct SPObj_68 *arg0, struct C954Arg2 *arg1) {
      arg0->unkE = 0;
      arg0->unk10 = arg1->unkC;
      arg0->unk14 = -1;
@@ -4097,7 +4274,7 @@
  }
  
  void func_800AC924(uObjMtx *mtx) {
-@@ -515,6 +531,12 @@
+@@ -515,6 +531,12 @@ void func_800AC924(uObjMtx *mtx) {
  // makes IDO emit the ROM's 3-words-per-pass loop.
  struct SPObjBlk { u32 w[0x18]; };
  
@@ -4110,7 +4287,7 @@
  // The RSP command block SPObj carries twice, at 0x40 and at 0xA0; spobj->unk12
  // selects the copy so the CPU never rewrites the block the RSP is reading.
  typedef union SPObjGfx {
-@@ -535,6 +557,7 @@
+@@ -535,6 +557,7 @@ typedef struct SPObjBufs {
  } SPObjBufs;
  
  #define SPOBJ_GFX(sp) (&((SPObjBufs *) (sp))->gfx[(sp)->unk12])
@@ -4118,7 +4295,7 @@
  
  SPObj* func_800AC954(GObj* gobj, u32 kind, struct C954Arg2 *arg2) {
      SPObj* sprite;
-@@ -582,6 +605,45 @@
+@@ -582,6 +605,45 @@ SPObj* func_800AC954(GObj* gobj, u32 kind, struct C954Arg2 *arg2) {
      sprite->xOffset = sprite->yOffset = 0.0f;
      sprite->unk30 = sprite->unk34 = sprite->unk38 = 0.0f;
      sprite->xScale = sprite->yScale = 1.0f;
@@ -4164,7 +4341,7 @@
      switch (kind) {
          case 0:
              func_800AC688(&sprite->unk40, arg2);
-@@ -613,6 +675,7 @@
+@@ -613,6 +675,7 @@ SPObj* func_800AC954(GObj* gobj, u32 kind, struct C954Arg2 *arg2) {
              break;
      }
      *(struct SPObjBlk *) ((u8 *) sprite + 0xA0) = *(struct SPObjBlk *) ((u8 *) sprite + 0x40);
@@ -4172,7 +4349,7 @@
      return sprite;
  }
  
-@@ -911,7 +974,19 @@
+@@ -911,7 +974,19 @@ void gtlLoadUcode(Gfx **, u32);
  void func_80017E84(GObj *, s32);
  
  void func_800ADD14(GObj *camObj) {
@@ -4192,7 +4369,7 @@
      u32 savedUcode;
      s32 ulx;
      s32 uly;
-@@ -954,7 +1029,11 @@
+@@ -954,7 +1029,11 @@ void func_800ADD14(GObj *camObj) {
  // (> 0x100), so the port derives the stride from the real size (it is already
  // 8-aligned; SPObj.h asserts that) or the freelist would thread each SPObj's
  // buffers into the next slot.
@@ -4206,43 +4383,581 @@
  // applied verbatim): `q` forks the extra source-level temp IDO needs to keep
 --- a/src/ovl2/ovl2.c
 +++ b/src/ovl2/ovl2.c
-@@ -219,6 +219,15 @@
+@@ -19,6 +19,69 @@ extern s32 D_800D7B68;
+ void func_801114E0(void);
+ void func_800F7578(void);
+ void func_8000A498(GObj *, u8, s32);
++#ifdef PORT
++/* PORT support for the in-level scene's postInit/update (arms below).
++ * object_manager.h supplies the host Camera/OMMtx layouts the real bodies
++ * poke; everything else is the usual local-extern set. Cross-symbol N64
++ * arithmetic that survives on this build:
++ *   - D_800D6B18 is a 12-byte block (PC bss 24); its +8 slot holds the scene
++ *     camera GObj*, written/read only by the two arms below, so it is stored
++ *     as a full host pointer at the same byte offset (bytes 8..15);
++ *   - D_800D6F3C's +4/+6/+8 u16s are written at their N64 byte offsets --
++ *     the compiled reader (func_800F62A4's D_800D6F42) reaches the same
++ *     bytes through the linker defsym D_800D6F42=D_800D6F3C+0x6;
++ *   - D_800D6B6C's +4 slot is read exactly the way the compiled
++ *     func_800F6AD4 writes it.
++ * D_800EC2E0 is a MultiType array (8-byte cells on LP64), so the N64's
++ * byte-offset store becomes a real index. */
++#include "main/object_manager.h"
++
++extern u16 D_800D6B30;
++extern u8 D_800D6B18[];
++extern s32 D_800BE500, D_800BE504, D_800BE508, D_800BE534, D_800BE4FC;
++extern u8 D_800D6E20[];
++extern s32 D_800D6B48;
++extern s32 D_800D6B6C;
++extern f32 gKirbyHp;
++extern s32 D_800BE4EC;
++extern u32 D_800D478C[];
++extern f32 D_800D6ED0[4][4];
++extern Controller_800D6FE8 gPlayerControllers[];
++union PcMulti { u32 as_u32; s32 as_s32; void *as_ptr; };
++extern union PcMulti D_800EC2E0[];
++
++struct UnkStruct801290D8_pc {
++    u8 filler[0xA];
++    u16 bgColor;  /* 0x0A */
++    u32 musicId;  /* 0x0C */
++};
++extern struct UnkStruct801290D8_pc *D_801290D8;
++
++void func_800AE048(u32);
++void func_800AE0F0(void);
++void func_800A6E64(void);
++void func_800A78D0(s32);
++s32 func_800A8724(s32);
++void func_800F8274(void);
++s32 func_800F8560(void); /* same prototype as the one below */
++void func_80114CCC(void);
++void func_8010DCDC(void);
++void func_800FF2C8(void);
++void func_8011C838(void);
++void func_800BE098(void);
++void func_800A6BC0(s32);
++s32 func_800B9DF8(s32);  /* takes ONE arg (save_file.c); the ROM's caller
++                          * leaves the music id in $a1, which it ignores */
++s32 play_music(s32, s32);
++void func_800BBF60(void);
++void func_800BB3F0(void);
++s32 func_800AEA64(s32, s32, s32);
++void guLookAtF(f32 mf[4][4], f32, f32, f32, f32, f32, f32, f32, f32, f32);
++void HS64_PerspectiveF(f32 mf[4][4], u16 *, f32, f32, f32, f32, f32);
++void guMtxCatF(f32 m[4][4], f32 n[4][4], f32 r[4][4]);
++void utilPauseAllGObjs(void);
++void utilResumeAllGObjs(void);
++#endif /* PORT */
+ 
+ void func_800F61A0(void) {
+     s32 *p;
+@@ -33,6 +96,31 @@ void func_800F61A0(void) {
+         if (D_800D7B68 != 0) {
+             func_800F7578();
+         }
++#ifdef PORT
++        /* The matching loop is a byte-offset walk with two cross-symbol
++         * assumptions that do not survive this build: the bound
++         * `p == &D_800DD84C` compares against an interior label of
++         * D_800DD710's block ((0x800DD84C-0x800DD710)/4 = 79 slots) that is
++         * a SEPARATE weak stub here, so the walk would never terminate; and
++         * D_800DE350 is an array of host GObj pointers (8-byte slots -- see
++         * utilResumeAllGObjs), so `(u8 *)D_800DE350 + i` with i advancing 4
++         * per slot reads half-pointers. Same iteration, spelled with
++         * indices. */
++        {
++            s32 slot;
++            GObj *go;
++            for (slot = 0; slot < 79; slot++) {
++                if (D_800DD710[slot] != -1) {
++                    v = D_800DDA90[slot];
++                    if (v & 0x38) {
++                        go = D_800DE350[slot];
++                        func_8000A498(go, v & 7, go->pri);
++                        D_800DDA90[slot] = go->link;
++                    }
++                }
++            }
++        }
++#else
+         for (i = 0, p = D_800DD710; ; ) {
+             q = (u32 *)((u8 *)D_800DDA90 + i);
+             if (*p != -1) {
+@@ -49,6 +137,7 @@ void func_800F61A0(void) {
+                 break;
+             }
+         }
++#endif
+     }
+ }
+ 
+@@ -219,6 +308,101 @@ void func_800F64B0(void) {
      utilSetRectColorFullScreen(0, 0, 0);
      utilSpawnRect(0xFF, -0x10, 0);
  }
 +#elif defined(PORT)
-+/* PORT SCAFFOLD, NOT A PORT: this is the in-level/demo scene's postInit.
-+ * The real body (m2c sketch above) needs func_800F78E4's level-config
-+ * loader first (D_801290D8 stays NULL without it, and the music selection
-+ * below dereferences it). Until that lands, a no-op keeps the attract
-+ * cycle alive -- the demo scene ticks black instead of aborting the whole
-+ * run through the weak stub. */
++/* PORT: the in-level/demo scene's postInit, from asm/nonmatchings/ovl2/ovl2/
++ * func_800F64B0.s (the m2c sketch above misdecodes the camera accesses and
++ * the func_800B9DF8 arity). Camera pokes go through the host Camera/OMMtx
++ * structs instead of the N64 byte offsets (+8 viewport, +0x64/+0x68
++ * matrices, byte +4 kind); the scene camera GObj lives in the D_800D6B18
++ * block's +8 slot as a host pointer (see the PORT note at the top of this
++ * file). func_800F8274 -> func_800F78E4 (ovl2_2.c PORT arm) fills
++ * D_801290D8 before the music read. */
 +void func_800F64B0(void) {
++    GObj *g;
++    Camera *cam;
++    s32 i;
++    s32 mus;
++
++    D_800D6B30 = 0;
++    g = ohCreateCameraWrapper(0x19, 0x80000000, 0x63, 3, 0xFF);
++    *(GObj **)(D_800D6B18 + 8) = g;
++    func_80007C00(&g->data.cam->viewport, 10.0f, 10.0f, 310.0f, 182.0f);
++    HS64_omMakeGObj(0, (void (*)(GObj *))func_800F62A4, 0x1A, 0x80000000);
++    func_800AE048(0x40);
++    func_800AE0F0();
++    func_800A6E64();
++    func_800A78D0(0);
++    if (((D_800BE500 == 6) && (D_800BE504 == 0) && (D_800BE534 == 2)) ||
++        ((D_800BE500 == 5) && (D_800BE504 == 3))) {
++        func_800A8724(2);
++    } else if ((D_800BE500 == 4) && (D_800BE504 == 3) && (D_800BE534 == 3) &&
++               (D_800BE508 != 0)) {
++        func_800A8724(3);
++    } else {
++        func_800A8724(0);
++    }
++    func_800F8274();
++    if (func_800F8560() != 9) {
++        func_80114CCC();
++        func_8010DCDC();
++        func_800FF2C8();
++    }
++    func_8011C838();
++    func_800BE098();
++    func_800A6BC0(5);
++    cam = D_800D799C->data.cam;
++    for (i = 0; i < 2; i++) {
++        OMMtx *m = cam->matrices[i];
++        if (m->kind == 6) {
++            m->kind = 12;
++            m = cam->matrices[i];
++        }
++        if (m->kind == 7) {
++            m->kind = 13;
++        }
++    }
++    mus = (s32)D_801290D8->musicId;
++    switch (mus) {
++        case 0x27:
++            if (func_800B9DF8(2) != 0) {
++                mus = 0xD;
++            }
++            break;
++        case 0x28:
++            if (func_800B9DF8(2) != 0) {
++                mus = 0x12;
++            }
++            break;
++        case 0x29:
++            if (func_800B9DF8(2) != 0) {
++                mus = 8;
++            }
++            break;
++        case 0x22:
++            if (D_800D6E20[D_800BE508] != 0) {
++                mus = D_800D6B48;
++            }
++            break;
++    }
++    D_800D6B48 = mus;
++    if (*(s32 *)((u8 *)&D_800D6B6C + 4) == 1) {
++        mus = (s32)D_801290D8->musicId;
++    }
++    if ((D_800D6F3C >= 3) && (D_800D6F3C != 4)) {
++        mus = 0;
++    }
++    play_music(0, mus);
++    if (func_800F8560() == 2) {
++        func_800BB98C(2, 0);
++        return;
++    }
++    if ((D_800BE508 == 0) && (D_800BE4FC == 0)) {
++        func_800BB98C(0, 0);
++        return;
++    }
++    utilSetRectColorFullScreen(0, 0, 0);
++    utilSpawnRect(0xFF, -0x10, 0);
 +}
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2/func_800F64B0.s")
  #endif
-@@ -270,6 +279,17 @@
+@@ -270,6 +454,74 @@ void func_800F6830(void) {
      omUpdateAll();
      func_800F629C();
  }
 +#elif defined(PORT)
-+/* PORT SCAFFOLD, NOT A PORT: per-frame update of the in-level/demo scene
-+ * (pairs with the func_800F64B0 scaffold above). With the setup scaffolded
-+ * out, this scene owns no objects and the track/config globals it would
-+ * read are stale from the previous scene (func_800F61A0's track walk
-+ * dereferences D_800DE350 entries, and its func_800F7578 branch is still a
-+ * weak stub), so the only safe per-frame body is nothing -- the measured
-+ * behavior of the weak stub under KIRBY_PC_TRACE, which kept the attract
-+ * cycle alive for minutes. */
++/* PORT: per-frame update of the in-level/demo scene, from asm/nonmatchings/
++ * ovl2/ovl2/func_800F6830.s. The N64 byte pokes become their host struct
++ * accesses: the controller mirror u16s go to D_800D6F3C's +4/+6/+8 bytes
++ * (the defsym'd family func_800F62A4 reads back), the camera reads use the
++ * Camera struct, the scene camera GObj comes from D_800D6B18+8, and the
++ * bg-color bytes are re-derived from D_800D478C's value-preserving u32
++ * words ((w>>24)/(w>>16)/(w>>8) are the N64's byte 0/1/2 reads). The
++ * matrix D_800D6ED0 is the view*proj product func_800F7578's frustum test
++ * consumes later this same tick. */
 +void func_800F6830(void) {
++    f32 look[4][4];
++    u16 perspNorm;
++    Camera *cam;
++    GObj *sceneCam;
++    u32 w;
++    u32 color;
++    s32 v;
++
++    *(u16 *)((u8 *)&D_800D6F3C + 4) = gPlayerControllers[0].buttonHeld;
++    *(u16 *)((u8 *)&D_800D6F3C + 6) = gPlayerControllers[0].buttonPressed;
++    *(u16 *)((u8 *)&D_800D6F3C + 8) = gPlayerControllers[0].buttonHeldLong;
++    if (D_800D7B68 != 0) {
++        cam = D_800D799C->data.cam;
++        guLookAtF(look,
++                  cam->viewMtx.lookAt.eye.x, cam->viewMtx.lookAt.eye.y,
++                  cam->viewMtx.lookAt.eye.z, cam->viewMtx.lookAt.at.x,
++                  cam->viewMtx.lookAt.at.y, cam->viewMtx.lookAt.at.z,
++                  cam->viewMtx.lookAt.up.x, cam->viewMtx.lookAt.up.y,
++                  cam->viewMtx.lookAt.up.z);
++        HS64_PerspectiveF(D_800D6ED0, &perspNorm,
++                          cam->perspMtx.persp.fovy, cam->perspMtx.persp.aspect,
++                          cam->perspMtx.persp.near, cam->perspMtx.persp.far,
++                          cam->perspMtx.persp.scale);
++        guMtxCatF(look, D_800D6ED0, D_800D6ED0);
++    }
++    w = D_800D478C[D_801290D8->bgColor * 3];
++    color = (((w >> 24) & 0xFF) << 24) | (((w >> 16) & 0xFF) << 16) |
++            (((w >> 8) & 0xFF) << 8) | 0xFF;
++    sceneCam = *(GObj **)(D_800D6B18 + 8);
++    sceneCam->data.cam->bgcolor = color;
++    D_800BE4EC += 1;
++    func_800BBF60();
++    v = D_800BE544;
++    if (v >= 0 && D_800BE4F8 == 1 && gKirbyHp != 0.0f) {
++        if (func_800F8560() != 3) {
++            if (v == 0) {
++                if (gPlayerControllers[0].buttonPressed & 0x1000) {
++                    func_800BB3F0();
++                    utilPauseAllGObjs();
++                    v = func_800AEA64(0x27, 0x4A, 0x70);
++                    D_800BE544 = v;
++                    D_800EC2E0[v].as_s32 = 0;
++                }
++            } else if (v & 0x8000) {
++                D_800BE544 = 0;
++                utilResumeAllGObjs();
++            }
++        }
++    } else if ((f32)v == -9999.0f) {
++        D_800BE544 = -9999;
++    } else if (v < 0) {
++        D_800BE544 = v + 1;
++    }
++    func_800F61A0();
++    omUpdateAll();
++    func_800F629C();
 +}
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2/func_800F6830.s")
  #endif
 --- a/src/ovl2/ovl2_2.c
 +++ b/src/ovl2/ovl2_2.c
-@@ -148,6 +148,106 @@
+@@ -26,6 +26,284 @@ extern u8 D_800D7010[];
+ extern u8 D_80124000[];
+ 
+ void func_800A5404(void *, void *);
++#ifdef PORT
++/* ============================================================================
++ * PORT support for the in-level scene: the level-config loader func_800F78E4
++ * and its helpers (arms further down this file).
++ *
++ * Two data worlds meet here and each needs its own treatment:
++ *
++ *  1. TABLES THE TRANSLATION ALREADY MADE NATIVE. D_800D1F98/D_800D01A4 (the
++ *     StageArea rows) and D_800D4668 (skybox particle tables) come from
++ *     tools/pc/gen_data.py as merged void*[] runs: every original 4-byte word
++ *     is one 8-byte host slot, scalars value-preserved in the low half,
++ *     pointers relinked. A StageArea row is therefore NINE 8-byte slots, and
++ *     nothing that expects the N64's packed 0x24-byte row can read it. The
++ *     loader below rebuilds the selected row into pc_stage_cfg, a static
++ *     struct with the exact N64 field OFFSETS (u16s at +0x8/+0xA/+0x14/+0x16,
++ *     u32s elsewhere), because the compiled readers touch it at byte offsets:
++ *     func_800F8560 (u16 +0x16), plylib's D_801290D8->unk14 (u16 +0x14),
++ *     ovl2.c's music/bgcolor reads (+0xC/+0xA), func_800F81A4's
++ *     ((s32*)cfg)[1], func_800F6E30/func_800F72B0's ((u32*)cfg)[0]/[1].
++ *
++ *  2. THE AREA-SETUP BLOB (func_800A9AA8): raw BIG-ENDIAN cartridge bytes in
++ *     the game arena (which sits below 4 GiB, so a u32 slot holds a host
++ *     pointer -- same rule as func_800A9250's PORT arm in ovl1_3.c). The
++ *     format is documented in include/level_settings_structs.h. Decode is
++ *     ON LOAD, TO NATIVE, exactly once (the established decode-on-load
++ *     pattern), because every live consumer is compiled C:
++ *       - collision header: 17 words byteswapped in place; func_800F8378's
++ *         PORT arm then publishes them as a NATIVE LP64 vCollisionHeader in
++ *         D_80129418 (ovl2_7's compiled walkers read Triangles/Vertices/
++ *         Normals/... through that struct's host layout);
++ *       - collision arrays: homogeneous regions (u16 triangles/vertices/
++ *         cells/norm-cells/destructables, f32 normals) byteswapped between
++ *         section boundaries -- the boundary set is every offset named by any
++ *         header, so no element-count formula is ever guessed; WaterData is
++ *         the one mixed-layout section and is swapped field-wise;
++ *       - track nodes: rebuilt as a NATIVE array of struct Unk80129114_4
++ *         (include/unk_structs/D_80129114.h -- the layout ovl2_3/plylib/
++ *         ovl2_10's compiled indexing uses on this host), each pointing at a
++ *         native PcTrackFooter (LP64 InterpDesc/TrackFooter/Unk80129114_4_4
++ *         all share that layout; asserted below) whose point/keyframe/
++ *         quartic f32 arrays are byteswapped in the blob;
++ *       - kirby/camera nodes: fixed 0x90-byte layout, field-wise swap in
++ *         place (scalar-only struct, so LP64 layout == N64 layout);
++ *       - node connectors and the routing matrix (D_8012912C): byte data,
++ *         left in memory order untouched -- compiled readers use u8 fields;
++ *       - entity list: struct Entity is scalar-only (LP64 == N64), decoded
++ *         field-wise in place up to the 0x99 terminator.
++ *
++ * The N64 body relocates offsets inside the blob; consumers here never read
++ * the blob's own header words again (they go through the D_8012xxxx globals),
++ * so the in-blob writeback is limited to what something might legitimately
++ * chase: the three main-header words.
++ * ==========================================================================*/
++#include "ovl2/ovl2_6.h"          /* level-settings-block format (the header
++                                   * ovl2_7's compiled collision code uses) */
++#include "unk_structs/D_80129114.h"
++
++struct UnkStruct80129418; /* full definition further down this file */
++
++extern struct BankHeader *D_800D0184[]; /* native bank table (translated data) */
++extern void *D_800D1F98[];              /* stage-area table: 8-byte slots */
++extern void *D_800D4668[];              /* skybox particle record tables */
++extern s32 D_800D6F3C;                  /* +0xC = area count (defsym family) */
++extern u8 D_800D6C90[];                 /* entity active flags (canonical base,
++                                         * same one spawn.c/helplib/enelib use) */
++extern s32 D_801290DC;
++extern struct UnkStruct80129418 *D_8012911C;
++extern s32 D_80129118;
++extern s32 D_80129124;
++extern s32 D_80129128;
++extern void *D_80129120;
++extern struct Entity *D_801290E0;
++extern u8 *D_8012912C;                  /* node routing matrix (bytes) */
++extern f32 *D_80129130;                 /* per-node track-length table */
++extern s32 D_8012B9B0;
++extern u8 D_8012B9B8[];                 /* 10 records x 0x30 (bss, doubled) */
++extern u32 D_800BE548[];                /* scene light: ambient pair... */
++extern u32 D_800BE550[];                /* ...and Lights1 color/dir words */
++extern u8 D_800D7B80[];
++extern void *D_800D6AB8[];              /* native pointer array on PC (ovl1.c) */
++extern f32 D_800D6ED0[4][4];            /* view*proj, built by func_800F6830 */
++
++void *func_800A8358(s32);
++s32 func_800A9AA8(s32, s32); /* same prototype as the one further down */
++u16 func_800F8560(void);
++void func_800A7A70(s32, s32, s32);
++void func_800A7BF4(s16 *, u8 *);
++void utilLoadOverlay(u32);
++f32 func_800FA1D4(struct Unk80129114_4_4 *, Vector *, s32);
++u32 spawn_entity(u32, struct Entity *);
++void pc_levelload_debug(unsigned int id, unsigned int bytes, unsigned int nodes,
++                        unsigned int ents, const void *base);
++
++/* Native mirror of one StageArea row, N64 field offsets (see block comment). */
++struct PcStageCfg {
++    /* 0x00 */ u32 liGeoBlockA;
++    /* 0x04 */ u32 liGeoBlockB;
++    /* 0x08 */ u16 skyboxId;
++    /* 0x0A */ u16 bgColor;
++    /* 0x0C */ u32 musicId;
++    /* 0x10 */ u32 biAreaSetup;
++    /* 0x14 */ u16 deathCamera;
++    /* 0x16 */ u16 stageContents;
++    /* 0x18 */ u32 biDustSettings;
++    /* 0x1C */ u32 biDustImg;
++    /* 0x20 */ u32 areaName32; /* truncated host pointer; statics sit < 4 GiB */
++};
++static struct PcStageCfg pc_stage_cfg;
++typedef char pc_stage_cfg_check[(sizeof(struct PcStageCfg) == 0x24) ? 1 : -1];
++
++/* Native track header handed to every D_80129114 consumer. */
++static struct UnkStruct80129114 pc_track_hdr;
++
++/* Native footer: must be layout-identical to the three views compiled code
++ * reads it through -- struct Unk80129114_4_4 (unk2/unk8/unkC), ovl2_3.c's
++ * TrackFooter (adds unk10/unk14) and interpolation.c's InterpDesc/InterpData
++ * (mtxGetInterpolatedPosition / func_8001E344). */
++struct PcTrackFooter {
++    u8 kind;        /* 0x00: interpolation kind */
++    u8 unk1;        /* 0x01 */
++    s16 n;          /* 0x02: point count */
++    f32 unk04;
++    void *points;   /* +0x08 on LP64 */
++    f32 length;     /* +0x10 */
++    f32 *keyframes; /* +0x18 */
++    f32 *quartics;  /* +0x20, nullable */
++};
++typedef char pc_footer_check[
++    (sizeof(struct PcTrackFooter) == 40 &&
++     __builtin_offsetof(struct PcTrackFooter, n) == __builtin_offsetof(struct Unk80129114_4_4, unk2) &&
++     __builtin_offsetof(struct PcTrackFooter, unk04) == __builtin_offsetof(struct Unk80129114_4_4, unk4) &&
++     __builtin_offsetof(struct PcTrackFooter, points) == __builtin_offsetof(struct Unk80129114_4_4, unk8) &&
++     __builtin_offsetof(struct PcTrackFooter, length) == __builtin_offsetof(struct Unk80129114_4_4, unkC) &&
++     __builtin_offsetof(struct PcTrackFooter, keyframes) == 24 &&
++     __builtin_offsetof(struct PcTrackFooter, quartics) == 32) ? 1 : -1];
++typedef char pc_noderec_check[
++    (sizeof(struct Unk80129114_4) == 24 &&
++     __builtin_offsetof(struct Unk80129114_4, unk4) == 8 &&
++     __builtin_offsetof(struct Unk80129114_4, unk8) == 16 &&
++     __builtin_offsetof(struct Unk80129114_4, unkE) == 22) ? 1 : -1];
++
++static inline u32 pc_be32(u32 v) { return __builtin_bswap32(v); }
++static inline u16 pc_be16(u16 v) { return __builtin_bswap16(v); }
++static inline u32 pc_rd32(const u8 *p) { return pc_be32(*(const u32 *)p); }
++static inline u16 pc_rd16(const u8 *p) { return pc_be16(*(const u16 *)p); }
++static inline f32 pc_rdf32(const u8 *p) {
++    union { u32 u; f32 f; } c;
++    c.u = pc_rd32(p);
++    return c.f;
++}
++static void pc_sw32(u8 *p) { *(u32 *)p = pc_be32(*(u32 *)p); }
++static void pc_sw16(u8 *p) { *(u16 *)p = pc_be16(*(u16 *)p); }
++
++/* ---- homogeneous-region swap machinery --------------------------------
++ * A region is (blob offset, element width); its extent is "up to the next
++ * known boundary", where the boundary set is every offset any header names
++ * plus the blob size. Regions are deduplicated (two footers may share a
++ * keyframe table) so nothing is ever swapped twice. On overflow the whole
++ * swap pass is skipped: deterministic garbage geometry, never corruption. */
++#define PC_LVL_MAX_MARKS 1024
++static u32 pc_lvl_bounds[PC_LVL_MAX_MARKS];
++static int pc_lvl_nbounds;
++static struct { u32 off; u8 w; } pc_lvl_regions[PC_LVL_MAX_MARKS];
++static int pc_lvl_nregions;
++static int pc_lvl_overflow;
++static u32 pc_lvl_size;
++
++static void pc_lvl_reset(u32 nbytes) {
++    pc_lvl_nbounds = 0;
++    pc_lvl_nregions = 0;
++    pc_lvl_overflow = 0;
++    pc_lvl_size = nbytes;
++}
++static void pc_lvl_bound(u32 off) {
++    int i;
++    if (off == 0 || off >= pc_lvl_size) {
++        return;
++    }
++    for (i = 0; i < pc_lvl_nbounds; i++) {
++        if (pc_lvl_bounds[i] == off) {
++            return;
++        }
++    }
++    if (pc_lvl_nbounds >= PC_LVL_MAX_MARKS) {
++        pc_lvl_overflow = 1;
++        return;
++    }
++    pc_lvl_bounds[pc_lvl_nbounds++] = off;
++}
++static void pc_lvl_region(u32 off, u8 w) {
++    int i;
++    if (off == 0 || off >= pc_lvl_size) {
++        return;
++    }
++    for (i = 0; i < pc_lvl_nregions; i++) {
++        if (pc_lvl_regions[i].off == off) {
++            return;
++        }
++    }
++    if (pc_lvl_nregions >= PC_LVL_MAX_MARKS) {
++        pc_lvl_overflow = 1;
++        return;
++    }
++    pc_lvl_regions[pc_lvl_nregions].off = off;
++    pc_lvl_regions[pc_lvl_nregions].w = w;
++    pc_lvl_nregions++;
++    pc_lvl_bound(off);
++}
++static void pc_lvl_swap_regions(u8 *base) {
++    int i, j;
++    if (pc_lvl_overflow) {
++        return;
++    }
++    for (i = 0; i < pc_lvl_nregions; i++) {
++        u32 off = pc_lvl_regions[i].off;
++        u32 end = pc_lvl_size;
++        u32 o;
++        for (j = 0; j < pc_lvl_nbounds; j++) {
++            if (pc_lvl_bounds[j] > off && pc_lvl_bounds[j] < end) {
++                end = pc_lvl_bounds[j];
++            }
++        }
++        if (pc_lvl_regions[i].w == 2) {
++            for (o = off; o + 2 <= end; o += 2) {
++                pc_sw16(base + o);
++            }
++        } else {
++            for (o = off; o + 4 <= end; o += 4) {
++                pc_sw32(base + o);
++            }
++        }
++    }
++}
++
++/* Collision header at h (17 NATIVE words, level_settings_structs.h order):
++ * register its array sections. WaterData (mixed layout) swaps field-wise. */
++static void pc_lvl_collect_collision(u8 *base, const u32 *h) {
++    u32 i;
++    pc_lvl_region(h[0], 2);  /* Triangles: u16 x10 each */
++    pc_lvl_region(h[2], 2);  /* Vertices: s16 triplets */
++    pc_lvl_region(h[4], 4);  /* Normals: f32 quads */
++    pc_lvl_region(h[6], 2);  /* Triangle_Cells: u16 */
++    pc_lvl_region(h[8], 2);  /* Triangle_Norm_Cells: u16 x4 each */
++    pc_lvl_region(h[11], 2); /* Destructable_Groups: u16 x3 each */
++    pc_lvl_region(h[12], 2); /* Destructable_Indices: u16 */
++    pc_lvl_region(h[15], 4); /* Water_Normals: f32 quads */
++    if (h[13] != 0 && h[13] < pc_lvl_size) {
++        pc_lvl_bound(h[13]);
++        for (i = 0; i < h[14] && h[13] + (i + 1) * 0x18 <= pc_lvl_size; i++) {
++            u8 *w = base + h[13] + i * 0x18;
++            pc_sw16(w + 0x0);
++            pc_sw16(w + 0x2);
++            pc_sw32(w + 0x8);
++            pc_sw32(w + 0xC);
++            pc_sw32(w + 0x10);
++            pc_sw32(w + 0x14);
++        }
++    }
++}
++
++/* Kirby/camera node: fixed 0x90-byte scalar layout (ovl2_3.c TrackKirbyNode /
++ * the KirbyNode+CameraNode doc in level_settings_structs.h). */
++static void pc_lvl_swap_kirby_node(u8 *p) {
++    u32 o;
++    pc_sw16(p + 0x02);              /* entryDirection */
++    pc_sw16(p + 0x0C);              /* bytes 0-1 and 4-0xB stay bytes */
++    pc_sw16(p + 0x0E);              /* flags */
++    pc_sw16(p + 0x10);
++    pc_sw16(p + 0x12);
++    pc_sw32(p + 0x14);
++    pc_sw32(p + 0x18);
++    pc_sw32(p + 0x1C);
++    pc_sw16(p + 0x2A);              /* camera: bytes 0x20-0x29 stay bytes */
++    for (o = 0x2C; o <= 0x8C; o += 4) {
++        pc_sw32(p + o);             /* camera f32 block */
++    }
++}
++#endif /* PORT */
+ 
+ void func_800F6C40(s32 arg0, UNUSED s32 arg1) {
+     D_800BE4F8 = 2;
+@@ -148,6 +426,106 @@ void func_800F6E30(s32 arg0) {
      *(&D_800DF310 + var_v1) = &func_800F6E0C;
      curObjSleepForever();
  }
@@ -4349,9 +5064,776 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F6E30.s")
  #endif
+@@ -227,6 +605,29 @@ end:
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F72B0.s")
+ #endif
+ 
++#ifdef PORT
++/* PORT: unpack the save-file's 64 "permanently collected" bits for this area
++ * into one byte per entity. The matching body walks from &D_800D6C94[0x3C]
++ * to the ABSOLUTE N64 address 0x800D6D10 (== D_800D6C94 + 0x7C there); on
++ * the host that literal never terminates the loop, so the bound is spelled
++ * as the two 32-bit words it really is. D_800D6C94[0x3C..0x7B] is the
++ * canonical byte range for these flags -- the same one the matching
++ * func_800F7484 packs from and func_800F753C (PORT arm above) sets. */
++extern u8 D_800D6C94[];
++
++void func_800F7404(s32 arg0) {
++    s32 w;
++    s32 i;
++
++    for (w = 0; w < 2; w++) {
++        u32 val = D_800D6D10[arg0][w];
++        for (i = 0; i < 0x20; i++) {
++            D_800D6C94[0x3C + w * 0x20 + i] = val & 1;
++            val >>= 1;
++        }
++    }
++}
++#else
+ #ifdef NON_MATCHING
+ // 13/32 diffs; the residue is ONLY the whole $t file allocated one slot low
+ // (ROM t8/t7 then t9/t1/t2/t3, IDO t7/t6 then t8/t9/t1/t2 -- the bound is $t0
+@@ -270,7 +671,31 @@ void func_800F7404(s32 arg0) {
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F7404.s")
+ #endif
++#endif /* PORT */
++
++#ifdef PORT
++/* PORT: inverse of func_800F7404 above -- pack the 64 per-entity flag bytes
++ * back into the two save words. Same absolute-bound problem, same canonical
++ * D_800D6C94[0x3C..0x7B] range. Reached from compiled code TODAY:
++ * func_800F6AD4 (scene create) calls this before the matching build's
++ * initializer has ever populated the byte range, exactly as on console. */
++void func_800F7484(s32 arg0) {
++    s32 w;
++    s32 i;
++    extern u8 D_800D6C94[];
+ 
++    for (w = 0; w < 2; w++) {
++        u32 val = 0;
++        for (i = 0; i < 0x20; i++) {
++            val >>= 1;
++            if (D_800D6C94[0x3C + w * 0x20 + i] & 1) {
++                val |= 0x80000000;
++            }
++        }
++        D_800D6D10[arg0][w] = val;
++    }
++}
++#else
+ #ifdef NON_MATCHING
+ // 22/46 diffs. Body and instruction count are exact; the residue is the whole
+ // $t register file allocated one slot low (ROM t7/t8/t9 where IDO takes
+@@ -318,7 +743,26 @@ void func_800F7484(s32 arg0) {
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F7484.s")
+ #endif
++#endif /* PORT */
++
++#ifdef PORT
++/* PORT: D_800D6C68 + 0x68 is the N64 address 0x800D6CD0 -- a byte INSIDE
++ * D_800D6C94's block (offset 0x3C), not inside D_800D6C68's own 0x28-byte
++ * object. splat split that bss run into separate symbols, so on the host
++ * the cross-object spelling writes past D_800D6C68[] into unrelated storage.
++ * D_800D6C94[0x3C + i] is the canonical host spelling: it is the byte the
++ * compiled func_800F7404/func_800F7484 (PORT arms below) and the spawner
++ * func_800F7578 read for the same flag. */
++void func_800F753C(void) {
++    s32 temp_v0;
++    extern u8 D_800D6C94[];
+ 
++    temp_v0 = D_800E76C0[omCurrentObj->objId];
++    if ((temp_v0 >= 0) && (temp_v0 < 0x40)) {
++        D_800D6C94[temp_v0 + 0x3C] = 1;
++    }
++}
++#else
+ void func_800F753C(void) {
+     s32 temp_v0;
+ 
+@@ -327,6 +771,7 @@ void func_800F753C(void) {
+         D_800D6C68[temp_v0 + 0x68] = 1;
+     }
+ }
++#endif
+ 
+ #ifdef MIPS_TO_C
+ 
+@@ -393,6 +838,72 @@ block_14:
+         }
+     }
+ }
++#elif defined(PORT)
++/* PORT: per-frame entity spawner, from asm/nonmatchings/ovl2/ovl2_2/
++ * func_800F7578.s. Each entity's world position is pushed through the
++ * combined view*projection matrix D_800D6ED0 (built by func_800F6830 earlier
++ * in the same tick); entities whose clip coordinates land inside the
++ * [-1.4,1.4]x[-2.0,2.0]x[-0.9,0.9] guard band get spawn_entity()ed. The two
++ * flag arrays are the canonical host bytes described at func_800F753C:
++ * active = D_800D6C90[i] (N64 0x800D6CB0 - 0x28 base), permanent =
++ * D_800D6C94[0x3C + i]. Flag protocol per the asm: bit0 = alive now,
++ * bit7 = has been spawned at least once (kept set while on screen so the
++ * one-shot spawn kinds do not respawn). Entities with unk5 bit3 set are
++ * never frustum-spawned; unk5 bit5 skips the depth test. */
++void func_800F7578(void) {
++    extern u8 D_800D6C94[];
++    s32 i;
++    struct Entity *e;
++
++    if (D_80129124 == 0 || D_800BE4F8 == 6) {
++        return;
++    }
++    e = D_801290E0;
++    for (i = 0; i < D_80129124; i++, e++) {
++        u8 *active = &D_800D6C90[i];
++        u8 a;
++        s32 visible;
++
++        if (e->unk5 & 8) {
++            continue;
++        }
++        a = *active;
++        visible = 0;
++        if (!((D_800D6C94[0x3C + i] | a) & 1)) {
++            f32 x = e->pos[0];
++            f32 y = e->pos[1];
++            f32 z = e->pos[2];
++            f32 w = 1.0f / (D_800D6ED0[3][3] + (D_800D6ED0[0][3] * x +
++                            D_800D6ED0[1][3] * y + D_800D6ED0[2][3] * z));
++            f32 sx = (D_800D6ED0[3][0] + (D_800D6ED0[0][0] * x +
++                      D_800D6ED0[1][0] * y + D_800D6ED0[2][0] * z)) * w;
++            if (!(sx > 1.4f) && !(sx < -1.4f)) {
++                f32 sy = (D_800D6ED0[3][1] + (D_800D6ED0[0][1] * x +
++                          D_800D6ED0[1][1] * y + D_800D6ED0[2][1] * z)) * w;
++                if (!(sy > 2.0f) && !(sy < -2.0f)) {
++                    if (e->unk5 & 0x20) {
++                        visible = 1;
++                    } else {
++                        f32 sz = (D_800D6ED0[3][2] + (D_800D6ED0[0][2] * x +
++                                  D_800D6ED0[1][2] * y + D_800D6ED0[2][2] * z)) * w;
++                        if (!(sz > 0.9f) && !(sz < -0.9f)) {
++                            visible = 1;
++                        }
++                    }
++                }
++            }
++        }
++        if (visible) {
++            if (a & 0x80) {
++                *active = a | 0x80;
++            } else if (spawn_entity(i, e) != (u32)-1) {
++                *active = 0x81;
++            }
++        } else if (!(a & 1)) {
++            *active = a & 0x7F;
++        }
++    }
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F7578.s")
+ #endif
+@@ -671,6 +1182,309 @@ loop_8:
+             break;
+     }
+ }
++#elif defined(PORT)
++/* PORT: the level-config loader, from asm/nonmatchings/ovl2/ovl2_2/
++ * func_800F78E4.s and the format doc in include/level_settings_structs.h.
++ * See the big block comment at the top of this file for the data-world map
++ * (what is already native, what is big-endian, and which consumers dictate
++ * each native layout). Differences from the N64 body, all forced by LP64:
++ *   - D_801290D8 points at pc_stage_cfg (a native mirror of the 9-slot
++ *     translated StageArea row) instead of into the translated table;
++ *   - D_80129114 points at pc_track_hdr, whose unk4 is a NATIVE array of
++ *     struct Unk80129114_4 records backed by native PcTrackFooter
++ *     descriptors, because ovl2_3/plylib/ovl2_10 index those structs with
++ *     host strides. The in-blob node array itself is left alone -- nothing
++ *     reads it once these records exist;
++ *   - the entity walk decodes each 0x2C record in place (struct Entity is
++ *     scalar-only, so LP64 == N64) before handing it to the compiled
++ *     func_800FA1D4/spawn_entity;
++ *   - the D_800BE548/D_800BE550 light block is copied in N64 MEMORY order
++ *     (bswap of the value-preserving translated words): its consumers --
++ *     func_800A5404-family and func_800A7BF4 -- read r,g,b BYTES, and
++ *     gSPLight hands the RSP raw memory. Same canonical-byte-order rule as
++ *     the ColorPack note in func_800A9250's PORT arm;
++ *   - D_800D6AB8 is a native 8-slot pointer array on this build (see
++ *     src/ovl1/ovl1.c), so the N64 byte offsets 8/0x10/0x1C become slots
++ *     2/4/7;
++ *   - the D_8012B9B8 skybox-particle records copy the translated words
++ *     value-preserved, except the one u16 pair at +8/+A that ovl2_6's
++ *     compiled readers access as u16 fields. */
++void func_800F78E4(void) {
++    void **rows;
++    void **row;
++    u32 id;
++    u32 nbytes;
++    struct BankHeader *bank;
++    u32 *entry;
++    u8 *base;
++    u32 h0, h1, h2;
++    u32 *ch;
++    u32 count, nodesOff, u8Off, f32Off;
++    struct Unk80129114_4 *recs;
++    struct PcTrackFooter *foots;
++    u32 i;
++    s32 n;
++
++    /* -- stage-area config ------------------------------------------- */
++    rows = (void **)D_800D1F98[D_800BE500 * 12 + D_800BE504];
++    row = rows + D_800BE508 * 9;
++    pc_stage_cfg.liGeoBlockA   = (u32)(uintptr_t)row[0];
++    pc_stage_cfg.liGeoBlockB   = (u32)(uintptr_t)row[1];
++    pc_stage_cfg.skyboxId      = (u16)((u32)(uintptr_t)row[2] >> 16);
++    pc_stage_cfg.bgColor       = (u16)(u32)(uintptr_t)row[2];
++    pc_stage_cfg.musicId       = (u32)(uintptr_t)row[3];
++    pc_stage_cfg.biAreaSetup   = (u32)(uintptr_t)row[4];
++    pc_stage_cfg.deathCamera   = (u16)((u32)(uintptr_t)row[5] >> 16);
++    pc_stage_cfg.stageContents = (u16)(u32)(uintptr_t)row[5];
++    pc_stage_cfg.biDustSettings = (u32)(uintptr_t)row[6];
++    pc_stage_cfg.biDustImg     = (u32)(uintptr_t)row[7];
++    pc_stage_cfg.areaName32    = (u32)(uintptr_t)row[8];
++    D_801290D8 = (struct UnkStruct801290D8_2 *)&pc_stage_cfg;
++
++    n = 0;
++    while ((u32)(uintptr_t)rows[n * 9] != 0) {
++        n++;
++    }
++    *(s32 *)((u8 *)&D_800D6F3C + 0xC) = n; /* defsym family, N64 byte offset */
++
++    /* -- area-setup blob (raw big-endian cartridge bytes) ------------- */
++    id = pc_stage_cfg.biAreaSetup;
++    bank = D_800D0184[id >> 16];
++    entry = bank->miscBlockTable + (id & 0xFFFF);
++    nbytes = ((entry[1] - entry[0]) + 3) & 0xFFFFFC;
++    base = (u8 *)(uintptr_t)(u32)func_800A9AA8((s32)id, 3);
++    D_801290DC = (s32)(uintptr_t)base;
++
++    pc_lvl_reset(nbytes);
++    h0 = pc_rd32(base + 0);
++    h1 = pc_rd32(base + 4);
++    h2 = pc_rd32(base + 8);
++    *(u32 *)(base + 0) = (u32)(uintptr_t)(base + h0);
++    *(u32 *)(base + 4) = (u32)(uintptr_t)(base + h1);
++    *(u32 *)(base + 8) = (u32)(uintptr_t)(base + h2);
++    pc_lvl_bound(h0);
++    pc_lvl_bound(h1);
++    pc_lvl_bound(h2);
++
++    /* -- collision header: native words in place ---------------------- */
++    ch = (u32 *)(base + h0);
++    for (i = 0; i < 17; i++) {
++        ch[i] = pc_be32(ch[i]);
++    }
++    D_8012911C = (struct UnkStruct80129418 *)ch;
++    pc_lvl_collect_collision(base, ch);
++
++    /* -- track/path node section -------------------------------------- */
++    {
++        u8 *sec = base + h1;
++        count = pc_rd32(sec + 0);
++        nodesOff = pc_rd32(sec + 4);
++        u8Off = pc_rd32(sec + 8);
++        f32Off = pc_rd32(sec + 12);
++        *(u32 *)(sec + 0) = count;
++        *(u32 *)(sec + 4) = (u32)(uintptr_t)(base + nodesOff);
++        *(u32 *)(sec + 8) = (u32)(uintptr_t)(base + u8Off);
++        *(u32 *)(sec + 12) = (u32)(uintptr_t)(base + f32Off);
++        pc_lvl_bound(nodesOff);
++        pc_lvl_bound(u8Off);         /* routing matrix: bytes, no swap */
++        pc_lvl_region(f32Off, 4);    /* track-length table: f32s */
++
++        if (count == 0 || count > 0x100) {
++            count = 0; /* corrupt/degenerate section: publish an empty track
++                        * set; every consumer bounds itself on D_80129118 */
++        }
++        recs = (struct Unk80129114_4 *)func_800A8358(
++            (s32)(((count + 1) * (sizeof(struct Unk80129114_4) + sizeof(struct PcTrackFooter))) | 3));
++        foots = (struct PcTrackFooter *)(recs + count + 1);
++        for (i = 0; i < count; i++) {
++            u8 *nr = base + nodesOff + i * 0x10;
++            u32 kOff = pc_rd32(nr + 0);
++            u32 fOff = pc_rd32(nr + 4);
++            u32 cOff = pc_rd32(nr + 8);
++            u8 *fr = base + fOff;
++            u32 pOff, kfOff, qOff;
++
++            pc_lvl_bound(fOff);
++            pc_lvl_bound(cOff);
++            if (kOff != 0 && kOff + 0x90 <= nbytes) {
++                u32 j;
++                for (j = 0; j < i; j++) {
++                    if (pc_rd32(base + nodesOff + j * 0x10) == kOff) {
++                        break; /* shared kirby node: already swapped */
++                    }
++                }
++                if (j == i) {
++                    pc_lvl_bound(kOff);
++                    pc_lvl_swap_kirby_node(base + kOff);
++                }
++            }
++
++            foots[i].kind = fr[0];
++            foots[i].unk1 = fr[1];
++            foots[i].n = (s16)pc_rd16(fr + 2);
++            foots[i].unk04 = pc_rdf32(fr + 4);
++            pOff = pc_rd32(fr + 8);
++            foots[i].points = base + pOff;
++            pc_lvl_region(pOff, 4);
++            foots[i].length = pc_rdf32(fr + 0xC);
++            kfOff = pc_rd32(fr + 0x10);
++            foots[i].keyframes = (f32 *)(base + kfOff);
++            pc_lvl_region(kfOff, 4);
++            qOff = pc_rd32(fr + 0x14);
++            foots[i].quartics = (qOff != 0) ? (f32 *)(base + qOff) : NULL;
++            pc_lvl_region(qOff, 4);
++
++            recs[i].unk0 = (struct Unk80129114_4_0 *)(base + kOff);
++            recs[i].unk4 = (struct Unk80129114_4_4 *)&foots[i];
++            recs[i].unk8 = (u32)(uintptr_t)(base + cOff);
++            recs[i].unkC = nr[0xC];
++            recs[i].unkD = nr[0xD];
++            recs[i].unkE = (s16)pc_rd16(nr + 0xE);
++        }
++        pc_track_hdr.unk0 = count;
++        pc_track_hdr.unk4 = recs;
++        D_80129114 = &pc_track_hdr;
++        D_80129118 = (s32)count;
++        D_8012912C = base + u8Off;
++        D_80129130 = (f32 *)(base + f32Off);
++    }
++
++    /* one pass over every registered homogeneous region */
++    pc_lvl_swap_regions(base);
++
++    /* -- entity list (after the swaps: func_800FA1D4 walks the now-native
++     *    footer point arrays to seat each entity on its track node) ----- */
++    D_80129128 = 0;
++    D_80129124 = 0;
++    D_801290E0 = (struct Entity *)(base + h2);
++    D_80129120 = D_801290E0;
++    if (h2 != 0) {
++        struct Entity *e = D_801290E0;
++        while (*(u8 *)e != 0x99 && (u32)((u8 *)e - base) + 0x2C <= nbytes) {
++            pc_sw16((u8 *)e + 6);
++            for (i = 8; i < 0x2C; i += 4) {
++                pc_sw32((u8 *)e + i);
++            }
++            if ((e->respawnFlag == 0 || e->respawnFlag == 2) && e->nodeNum < count) {
++                Vector pos;
++                pos.x = e->pos[0];
++                pos.y = e->pos[1];
++                pos.z = e->pos[2];
++                e->scale[1] = func_800FA1D4(recs[e->nodeNum].unk4, &pos,
++                                            recs[e->nodeNum].unkE);
++            }
++            D_80129124++;
++            e++;
++        }
++    }
++
++    /* -- per-area runtime state --------------------------------------- */
++    for (i = 0; i < 0x40; i++) {
++        D_800D6C90[i] = 0; /* entity active flags (canonical base) */
++    }
++    func_800F7404(D_800BE508);
++
++    /* -- skybox particle records --------------------------------------- */
++    D_8012B9B0 = 0;
++    if (pc_stage_cfg.skyboxId != 0) {
++        u32 *rec = (u32 *)D_800D4668[pc_stage_cfg.skyboxId];
++        if (rec != NULL && rec[0] != 0) {
++            for (;;) {
++                u8 *dst = D_8012B9B8 + D_8012B9B0 * 0x30;
++                u32 k;
++                *(u32 *)(dst + 0) = rec[0];
++                *(u32 *)(dst + 4) = rec[1];
++                *(u16 *)(dst + 8) = (u16)(rec[2] >> 16); /* u16 pair: ovl2_6 */
++                *(u16 *)(dst + 10) = (u16)rec[2];        /* reads halves */
++                for (k = 3; k < 12; k++) {
++                    *(u32 *)(dst + k * 4) = rec[k];
++                }
++                D_8012B9B0++;
++                if (rec[12] == 0 || D_8012B9B0 >= 10) {
++                    break; /* 10 = D_8012B9B8's capacity (0x1E0/0x30) */
++                }
++                rec += 12;
++            }
++        }
++    }
++
++    /* -- scene light block, N64 memory order (see block comment) ------- */
++    {
++        u32 w[6];
++        w[0] = D_800BE548[0];
++        w[1] = D_800BE548[1];
++        w[2] = D_800BE550[0];
++        w[3] = D_800BE550[1];
++        w[4] = D_800BE550[2];
++        w[5] = D_800BE550[3];
++        for (i = 0; i < 6; i++) {
++            *(u32 *)(&D_800D7010[0x30] + i * 4) = pc_be32(w[i]);
++            *(u32 *)((u8 *)&gKirbyController + 0x10 + i * 4) = pc_be32(w[i]);
++        }
++    }
++
++    /* -- sound banks, color-mod slots, overlays ------------------------ */
++    func_800A7A70(0, 1, 2);
++    func_800A7A70(5, 1, 2);
++    func_800A7A70(1, 0x20001, 0x20002);
++    func_800A7A70(2, 0x20001, 0x20002);
++    D_800D6AB8[2] = D_800D7B80 + 0x18; /* N64 byte offset 0x8 -> slot 2 */
++    func_800A7A70(3, 0x10001, 0x10002);
++    D_800D6AB8[4] = D_800D7B80 + 0x20; /* 0x10 -> slot 4 */
++    func_800A7A70(6, (s32)pc_stage_cfg.biDustSettings, (s32)pc_stage_cfg.biDustImg);
++    D_800D6AB8[7] = D_800D7B80 + 0x28; /* 0x1C -> slot 7 */
++    func_800A7BF4((s16 *)(D_800D7B80 + 0x10), (u8 *)&gKirbyController + 0x10);
++    func_800A7BF4((s16 *)(D_800D7B80 + 0x28), &D_800D7010[0x30]);
++
++    pc_levelload_debug(id, nbytes, count, (u32)D_80129124, base);
++
++    switch (func_800F8560()) {
++        case 9:
++            utilLoadOverlay(7);
++            utilLoadOverlay(0x10);
++            return;
++        case 2:
++            utilLoadOverlay(7);
++            switch (D_800BE500) {
++                case 0:
++                    utilLoadOverlay(0xA);
++                    return;
++                case 1:
++                    utilLoadOverlay(0xB);
++                    return;
++                case 2:
++                    utilLoadOverlay(0xC);
++                    return;
++                case 3:
++                    utilLoadOverlay(0xD);
++                    return;
++                case 4:
++                    utilLoadOverlay(0xE);
++                    return;
++                case 5:
++                    utilLoadOverlay(0xF);
++                    return;
++                default:
++                    return;
++            }
++            break;
++        case 1:
++        case 3:
++            utilLoadOverlay(7);
++            utilLoadOverlay(9);
++            return;
++        case 10:
++            utilLoadOverlay(8);
++            utilLoadOverlay(0x12);
++            return;
++        default:
++            utilLoadOverlay(8);
++            if (D_800D6F3C >= 3) {
++                utilLoadOverlay(0x12);
++            }
++            break;
++    }
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F78E4.s")
+ #endif
+@@ -814,6 +1628,53 @@ extern struct UnkStruct80129418 *D_80129410;
+ extern struct UnkStruct80129418 *D_8012911C;
+ extern s32 D_801290DC;
+ 
++#ifdef PORT
++/* PORT: publish the level collision header NATIVELY. The matching body
++ * mirrors the blob's 17 offset/length words into D_80129418 as packed s32s;
++ * ovl2_7's compiled collision walkers, however, read D_80129410 through
++ * struct vCollisionHeader (include/level_settings_structs.h), whose LP64
++ * layout has 8-byte pointers. So this arm builds that host struct instead.
++ * D_80129418's bss block is 0xF0 bytes on the PC build (N64 0x78, doubled),
++ * which holds the 136-byte LP64 vCollisionHeader; the offset words were made
++ * native by func_800F78E4's PORT arm, and base fits in s32 because the game
++ * arena sits below 2 GiB. */
++void func_800F8378(void) {
++    struct UnkStruct80129418 *src = D_8012911C;
++    uintptr_t base = (uintptr_t)(u32)D_801290DC;
++    struct vCollisionHeader *dst = (struct vCollisionHeader *)&D_80129418;
++    s32 temp;
++
++    dst->usingFloatVertices = 0;
++    dst->header.Triangles = (struct CollisionTriangle *)(base + (u32)src->unk0);
++    dst->header.Len_Triangles = (u32)src->unk4;
++    dst->header.vertices.Vertices = (s16 *)(base + (u32)src->unk8);
++    dst->header.Len_Vertices = (u32)src->unkC;
++    dst->header.Triangle_Normals = (struct Normal *)(base + (u32)src->unk10);
++    dst->header.Len_Triangle_Normals = (u32)src->unk14;
++    dst->header.Triangle_Cells = (u16 *)(base + (u32)src->unk18);
++    dst->header.Len_Triangle_Cells = (u32)src->unk1C;
++    dst->header.Triangle_Norm_Cells = (struct bgmaprecord *)(base + (u32)src->unk20);
++    dst->header.Len_Triangle_Norm_Cells = (u32)src->unk24;
++    dst->header.Num_Floor_Norms = (u32)src->unk28;
++    dst->header.Destructable_Groups = (struct DynGeo_List *)(base + (u32)src->unk2C);
++    dst->header.Destructable_Indices = (u16 *)(base + (u32)src->unk30);
++    temp = src->unk34;
++    if (temp != 0) {
++        dst->header.WaterData = (struct WaterData *)(base + (u32)temp);
++    } else {
++        dst->header.WaterData = NULL;
++    }
++    dst->header.Len_WaterData = (u32)src->unk38;
++    temp = src->unk3C;
++    if (temp != 0) {
++        dst->header.Water_Normals = (struct Normal *)(base + (u32)temp);
++    } else {
++        dst->header.Water_Normals = NULL;
++    }
++    dst->header.Len_Water_Normals = (u32)src->unk40;
++    D_80129410 = (struct UnkStruct80129418 *)dst;
++}
++#else
+ void func_800F8378(void) {
+     struct UnkStruct80129418 *src = D_8012911C;
+     s32 base = D_801290DC;
+@@ -849,9 +1710,64 @@ void func_800F8378(void) {
+     D_80129418.unk44 = src->unk40;
+     D_80129410 = &D_80129418;
+ }
++#endif /* PORT */
+ 
+ s32 func_800A9AA8(s32, s32);
+ 
++#ifdef PORT
++/* PORT: loader for a standalone OBJECT-collision blob (destructible level
++ * pieces; ovl2_10's func_80114DBC allocates the 0x48-byte destination and
++ * func_80114A14 -- compiled -- reads it back as PACKED s32 WORDS, so unlike
++ * D_80129418 above this one keeps the N64 word layout, with in-arena
++ * addresses that fit s32). The blob is raw BE cartridge bytes: word +0 is
++ * the header offset, the 17 header words are decoded on read, and the
++ * collision arrays are byteswapped with the same region machinery the level
++ * loader uses (boundaries = every offset the header names + blob size). */
++void func_800F8464(s32 arg0, struct UnkStruct80129418 *dst) {
++    u8 *base;
++    u32 nbytes;
++    struct BankHeader *bank;
++    u32 *entry;
++    u32 h[17];
++    u32 hdrOff;
++    u32 i;
++    s32 ibase;
++
++    bank = D_800D0184[(u32)arg0 >> 16];
++    entry = bank->miscBlockTable + ((u32)arg0 & 0xFFFF);
++    nbytes = ((entry[1] - entry[0]) + 3) & 0xFFFFFC;
++    base = (u8 *)(uintptr_t)(u32)func_800A9AA8(arg0, 3);
++    ibase = (s32)(uintptr_t)base;
++
++    hdrOff = pc_rd32(base);
++    for (i = 0; i < 17; i++) {
++        h[i] = pc_rd32(base + hdrOff + i * 4);
++    }
++    pc_lvl_reset(nbytes);
++    pc_lvl_bound(hdrOff);
++    pc_lvl_collect_collision(base, h);
++    pc_lvl_swap_regions(base);
++
++    dst->unk0 = 0;
++    dst->unk4 = (s32)h[0] + ibase;
++    dst->unk8 = (s32)h[1];
++    dst->unkC = (s32)h[2] + ibase;
++    dst->unk10 = (s32)h[3];
++    dst->unk14 = (s32)h[4] + ibase;
++    dst->unk18 = (s32)h[5];
++    dst->unk1C = (s32)h[6] + ibase;
++    dst->unk20 = (s32)h[7];
++    dst->unk24 = (s32)h[8] + ibase;
++    dst->unk28 = (s32)h[9];
++    dst->unk2C = (s32)h[10];
++    dst->unk30 = (s32)h[11] + ibase;
++    dst->unk34 = (s32)h[12] + ibase;
++    dst->unk38 = (h[13] != 0) ? (s32)h[13] + ibase : 0;
++    dst->unk3C = (s32)h[14];
++    dst->unk40 = (h[15] != 0) ? (s32)h[15] + ibase : 0;
++    dst->unk44 = (s32)h[16];
++}
++#else
+ void func_800F8464(s32 arg0, struct UnkStruct80129418 *dst) {
+     s32 base = func_800A9AA8(arg0, 3);
+     struct UnkStruct80129418 *src = (struct UnkStruct80129418 *) (*(s32 *) base + base);
+@@ -886,6 +1802,7 @@ void func_800F8464(s32 arg0, struct UnkStruct80129418 *dst) {
+     }
+     dst->unk44 = src->unk40;
+ }
++#endif /* PORT */
+ 
+ 
+ 
+--- a/src/ovl2/ovl2_3.c
++++ b/src/ovl2/ovl2_3.c
+@@ -236,7 +236,14 @@ void func_800F88C8(GObj *g, s32 arg1, f32 arg2) {
+ 
+     D_800E6150[objId] = arg1;
+     D_800E5F90[objId] = arg1;
++#ifdef PORT
++    /* D_80129114->unk4 is a NATIVE record array on this build (built by
++     * func_800F78E4's PORT arm in ovl2_2.c); the 0x10 byte stride is the
++     * N64 record size, so index instead. */
++    sub4 = &D_80129114->unk4[arg1];
++#else
+     sub4 = (struct Unk80129114_4 *) ((arg1 * 0x10) + (s32) D_80129114->unk4);
++#endif
+     sub4_4 = sub4->unk4;
+     if (arg2 <= 0.0f) {
+         arg2 = 0.001f;
+@@ -287,6 +294,82 @@ void func_800F8A24(s32 arg0) {
+     }
+ }
+ 
++#ifdef PORT
++/* PORT: same body, but through the NATIVE node records func_800F78E4's PORT
++ * arm builds (ovl2_2.c). TrackNodeHeader's LP64 layout does not match those
++ * records (its unk8 pointer widens to 8 bytes and pushes unkC/unkE), so the
++ * node accesses go through struct Unk80129114_4: the connection count is the
++ * big-endian s16 the record keeps as its two raw bytes (unkC<<8|unkD), the
++ * connection array pointer lives in the u32 unk8 slot (arena < 4 GiB), and
++ * the footer is the native descriptor whose LP64 TrackFooter view is
++ * asserted layout-identical in ovl2_2.c. */
++s32 func_800F8B1C(s32 arg0) {
++    s32 *nodePtr;
++    s32 cur;
++    struct Unk80129114_4 *node;
++    s32 n;
++    f32 *progressPtr;
++    f32 progress;
++    s32 dir;
++    s32 idx;
++    struct TrackConnection *conn;
++    f32 len;
++    f32 dist;
++    f32 nextLen;
++    f32 newProgress;
++
++    nodePtr = &D_800E5F90[arg0];
++    cur = *nodePtr;
++    node = &D_80129114->unk4[cur];
++    n = (s16)((node->unkC << 8) | node->unkD);
++    if (n == 0) {
++        return 0;
++    }
++    dir = 0;
++    progressPtr = &D_800E6BD0[arg0];
++    progress = *progressPtr;
++    idx = -1;
++    if (progress > 1.0f) {
++        dir = 1;
++    }
++    if (progress < 0.0f) {
++        dir = -1;
++    }
++    if (dir == 0) {
++        return 0;
++    }
++    conn = (struct TrackConnection *)(uintptr_t)node->unk8;
++    if (dir > 0) {
++        if ((n != 0) && (conn[n - 1].unk0 != 0)) {
++            idx = n - 1;
++        }
++    } else if (conn->unk0 == 0) {
++        idx = 0;
++    }
++    if (idx == -1) {
++        return 0;
++    }
++    len = ((struct TrackFooter *)node->unk4)->unkC;
++    if (dir > 0) {
++        dist = (progress * len) - len;
++    } else {
++        dist = progress * len;
++    }
++    n = conn[idx].unk2;
++    node = &D_80129114->unk4[n];
++    nextLen = ((struct TrackFooter *)node->unk4)->unkC;
++    if (dir > 0) {
++        newProgress = dist / nextLen;
++    } else {
++        newProgress = (nextLen + dist) / nextLen;
++    }
++    D_800E6150[arg0] = cur;
++    *nodePtr = n;
++    D_800E6D90[arg0] = newProgress;
++    *progressPtr = newProgress;
++    return 1;
++}
++#else
+ s32 func_800F8B1C(s32 arg0) {
+     s32 *nodePtr;
+     s32 cur;
+@@ -353,6 +436,7 @@ s32 func_800F8B1C(s32 arg0) {
+     *progressPtr = newProgress;
+     return 1;
+ }
++#endif /* PORT */
+ 
+ #ifdef NON_MATCHING
+ // close but not matching: stack layout and register allocation differ
+@@ -385,7 +469,12 @@ void func_800F8C70(s32 *arg0) {
+     if (newNode == *nodePtr) {
+         return;
+     }
++#ifdef PORT
++    /* native records: index with the real stride (see func_800F8B1C) */
++    footer = (struct TrackFooter *) D_80129114->unk4[newNode].unk4;
++#else
+     footer = ((struct TrackNodeHeader *) D_80129114->unk4)[newNode].unk4;
++#endif
+     cell = hit->unk12;
+     idx = cell;
+     if (footer->unk0 != 0) {
+@@ -618,7 +707,12 @@ s32 func_800F9438(s32 arg0) {
+     if (D_800BE4F8 != 1) {
+         return 0;
+     }
++#ifdef PORT
++    /* native records: index with the real stride (see func_800F8B1C) */
++    node = (struct TrackKirbyNode *) D_80129114->unk4[arg0].unk0;
++#else
+     node = ((struct TrackNodeHeader *) D_80129114->unk4)[arg0].unk0;
++#endif
+     if (!(node->unkE & 1)) {
+         return 0;
+     }
+@@ -1198,7 +1292,12 @@ void func_800FA438(s32 arg0, struct Ovl2CamState *arg1) {
+     f32 t;
+ 
+     t = D_800E6BD0[arg0];
++#ifdef PORT
++    /* native records: index with the real stride (see func_800F8B1C) */
++    cam = &((struct TrackKirbyNode *) D_80129114->unk4[D_800E5F90[arg0]].unk0)->unk20;
++#else
+     cam = &((struct TrackNodeHeader *) D_80129114->unk4)[D_800E5F90[arg0]].unk0->unk20;
++#endif
+     arg1->unk0 = cam->unk0;
+     arg1->unk2 = cam->unk1;
+     arg1->unk4 = ((cam->unk24 - cam->unk20) * t) + cam->unk20;
+@@ -1961,7 +2060,12 @@ void func_800FBE1C(void) {
+ void func_800FBF18(s32 arg0) {
+     struct TrackCameraNode *cam;
+ 
++#ifdef PORT
++    /* native records: index with the real stride (see func_800F8B1C) */
++    cam = &((struct TrackKirbyNode *) D_80129114->unk4[arg0].unk0)->unk20;
++#else
+     cam = &((struct TrackNodeHeader *) D_80129114->unk4)[arg0].unk0->unk20;
++#endif
+     D_80129210.unk0 = cam->unk0;
+     D_80129210.unk2 = cam->unk1;
+     D_80129210.unk4 = cam->unk20;
 --- a/src/ovl20/tamper_check.c
 +++ b/src/ovl20/tamper_check.c
-@@ -35,7 +35,14 @@
+@@ -35,7 +35,14 @@ void tamper_check_ovl20(void) {
      osWritebackDCache(&D_80300170, 0xC0);
      osInvalICache(&D_80300170, 0xC0);
      gGameTampered = 0;
@@ -4366,9 +5848,205 @@
      }
 +#endif
  }
+--- a/src/ovl4/ovl4_2.c
++++ b/src/ovl4/ovl4_2.c
+@@ -246,7 +246,92 @@ s32 func_801524E4_ovl4(void) {
+     return 0x29A;
+ }
+ 
++#ifdef PORT
++#include "main/contpad.h"
++/* Functional port of the planet-map cursor proc; there was no sketch and the
++ * weak stub exited the process on the first A press at the world map. Shape
++ * follows the asm exactly: bail while a map transition runs (D_800D6B80), a
++ * per-object cooldown counts down in D_800E9AA0, A/START confirms the hovered
++ * spot (0 = the planet's exit node, backs out exactly like B; 0x29A = nothing
++ * hovered), B backs out to planet select, the held d-pad slides the cursor
++ * DObj inside the map's clamp box (X within +/-110 by func_801522D0_ovl4,
++ * Z within -70..90 by func_80152318_ovl4), and func_801524E4_ovl4 re-derives
++ * the hovered level dot every frame. */
++void func_801525E8_ovl4(struct GObj *arg0) {
++    extern s32 D_8015C694_ovl4;
++    extern s32 D_8015C698_ovl4;
++    extern s32 D_800D6B9C;
++    extern s32 D_800D6B80;
++    extern s32 D_800E9C60[];
++    extern s32 D_800E98E0[];
++    struct DObj *cursor;
++    s32 *slot;
++    u16 pressed;
++    u16 held;
++    f32 v;
++    s32 sel;
++
++    (void)arg0;
++    if (D_800D6B80 != 0) {
++        return;
++    }
++    slot = &((s32 *) D_800E9AA0)[omCurrentObj->objId];
++    if (*slot != 0) {
++        *slot = *slot - 1;
++        return;
++    }
++    if ((D_800E9C60[omCurrentObj->objId] != 0) || (((s32 *) D_800E9AA0)[D_8015C694_ovl4] != 0)) {
++        D_800E98E0[D_8015C698_ovl4] = 0;
++        return;
++    }
++    pressed = gPlayerControllers[0].buttonPressed;
++    if (pressed & 0x9000) {
++        sel = D_800E9FE0[omCurrentObj->objId].as_s32;
++        if (sel == 0) {
++            D_8015C690_ovl4 = 4;
++            play_sound(0x276);
++            D_800D6B78 = 1;
++            return;
++        }
++        if (sel != 0x29A) {
++            D_8015C690_ovl4 = 3;
++            D_800D6B9C = D_800E9FE0[D_8015C698_ovl4].as_s32 - 1;
++            D_800E9C60[omCurrentObj->objId] = 1;
++            play_sound(0x275);
++            return;
++        }
++    }
++    if (pressed & 0x4000) {
++        D_8015C690_ovl4 = 4;
++        play_sound(0x276);
++        D_800D6B78 = 1;
++        return;
++    }
++    held = gPlayerControllers[0].buttonHeld;
++    cursor = D_800DE350[D_8015C6A0_ovl4]->data.dobj->firstChild;
++    if (held & 0x100) {              /* d-pad right */
++        v = cursor->pos.v.x + 6.0f;
++        cursor->pos.v.x = func_801522D0_ovl4(v) ? v : 110.0f;
++    } else if (held & 0x200) {       /* d-pad left */
++        v = cursor->pos.v.x - 6.0f;
++        cursor->pos.v.x = func_801522D0_ovl4(v) ? v : -110.0f;
++    }
++    if (held & 0x800) {              /* d-pad up */
++        v = cursor->pos.v.z - 6.0f;
++        cursor->pos.v.z = func_80152318_ovl4(v) ? v : -70.0f;
++    } else if (held & 0x400) {       /* d-pad down */
++        v = cursor->pos.v.z + 6.0f;
++        cursor->pos.v.z = func_80152318_ovl4(v) ? v : 90.0f;
++    }
++    sel = func_801524E4_ovl4();
++    D_800E9FE0[omCurrentObj->objId].as_s32 = sel;
++    if ((sel != 0x29A) && (sel != 0)) {
++        D_800D6B9C = sel - 1;
++    }
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl4/ovl4_2/func_801525E8_ovl4.s")
++#endif
+ 
+ void func_80152A48_ovl4(void) {
+     s32 i;
 --- a/src/ovl4/ovl4_3.c
 +++ b/src/ovl4/ovl4_3.c
-@@ -684,7 +684,18 @@
+@@ -486,21 +486,48 @@ void func_80156160_ovl4(GObj *arg0) {
+ }
+ 
+ s32 func_801561DC_ovl4(void) {
++#ifdef PORT
++    /* These regions are N64 pointer words; the PC data generator emits them
++       inside one native void*[] (8-byte slots), so the word-struct copies
++       read pointer halves. Index the live tables instead; the low-memory
++       image keeps every static in 32 bits, so the s32 return round-trips. */
++    void **sp4C = (void **) &D_8015A990_ovl4;
++    void **sp40 = (void **) &D_8015A99C_ovl4;
++    void **sp28 = (void **) &D_8015A9A8_ovl4;
++    void **sp20 = (void **) &D_8015A9C0_ovl4;
++#else
+     Unk3Words sp4C = D_8015A990_ovl4;
+     Unk3Words sp40 = D_8015A99C_ovl4;
+     Unk6Words sp28 = D_8015A9A8_ovl4;
+     Unk2Words sp20 = D_8015A9C0_ovl4;
++#endif
+ 
+     switch (D_8015C6DC_ovl4) {
+         case 0:
+             if (func_801555AC_ovl4(saveCurrentFileNum) != 0) {
++#ifdef PORT
++                return (s32) (uintptr_t) sp40[D_8015C6D4_ovl4];
++#else
+                 return sp40.unk0[D_8015C6D4_ovl4];
++#endif
+             }
++#ifdef PORT
++            return (s32) (uintptr_t) sp4C[saveCurrentFileNum];
++#else
+             return sp4C.unk0[saveCurrentFileNum];
++#endif
+         case 1:
++#ifdef PORT
++            return (s32) (uintptr_t) sp28[D_8015C6E0_ovl4];
++#else
+             return sp28.unk0[D_8015C6E0_ovl4];
++#endif
+         case 2:
++#ifdef PORT
++            return (s32) (uintptr_t) sp20[D_8015C6E4_ovl4];
++#else
+             return sp20.unk0[D_8015C6E4_ovl4];
++#endif
+     }
+ }
+ 
+@@ -591,13 +618,24 @@ void func_8015665C_ovl4(GObj *arg0) {
+     extern Unk3Words D_8015A9C8_ovl4;
+     SPObj *sp4C[3];
+     s32 i;
++#ifdef PORT
++    /* D_8015A9C8 is three N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp3C = (void **) &D_8015A9C8_ovl4;
++#else
+     Unk3Words sp3C = D_8015A9C8_ovl4;
++#endif
+ 
+     D_800DEF90[omCurrentObj->objId] = NULL;
+     setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
+     omLinkGObjDL(arg0, func_800AD1A0, 0xA, 0x80000000, 0xA);
+     for (i = 0; i < 3; i++) {
++#ifdef PORT
++        sp4C[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp3C[i]);
++#else
+         sp4C[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp3C.unk0[i]);
++#endif
+     }
+     while (1) {
+         for (i = 0; i != 3; i++) {
+@@ -629,7 +667,14 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
+     s32 prev;
+     s32 cur;
+     s32 idx;
++#ifdef PORT
++    /* D_8015A9D4 is three N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp54 = (void **) &D_8015A9D4_ovl4;
++#else
+     Unk3Words sp54 = D_8015A9D4_ovl4;
++#endif
+ 
+     prev = func_801555AC_ovl4(arg1) + 1;
+     D_800DEF90[omCurrentObj->objId] = NULL;
+@@ -650,7 +695,11 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
+                     sp->xOffset = D_8015ABD4_ovl4[arg1].unk0;
+                     sp->yOffset = D_8015ABD4_ovl4[arg1].unk4;
+                 } else {
++#ifdef PORT
++                    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp54[arg1]);
++#else
+                     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp54.unk0[arg1]);
++#endif
+                 }
+             }
+             idx = arg1 == saveCurrentFileNum;
+@@ -684,7 +733,18 @@ extern s32 D_8015C6F0_ovl4;
  u32 func_800A9AA8(s32, s32);
  
  void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
@@ -4387,7 +6065,7 @@
      u32 a;
      u32 b;
      u32 c;
-@@ -694,10 +705,17 @@
+@@ -694,10 +754,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
      D_800DEF90[omCurrentObj->objId] = NULL;
      setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
      omLinkGObjDL(arg0, func_800AD1A0, 0x16, 0x80000000, 0x16);
@@ -4405,7 +6083,7 @@
      sp->xOffset = D_8015AB90_ovl4[arg1].unk0;
      sp->yOffset = D_8015AB90_ovl4[arg1].unk4;
      while (1) {
-@@ -712,10 +730,17 @@
+@@ -712,10 +779,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
              } else {
                  v = c;
              }
@@ -4423,6 +6101,212 @@
          } else {
              func_800AFBB4(0, omCurrentObj);
          }
+@@ -759,7 +833,14 @@ extern s32 D_8015C6EC_ovl4;
+ s32 func_80156BAC_ovl4(s32);
+ 
+ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
++#ifdef PORT
++    /* D_8015A9E0 is ten N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp60 = (void **) &D_8015A9E0_ovl4;
++#else
+     Unk10Ws sp60 = D_8015A9E0_ovl4;
++#endif
+     SPObj *sp;
+     Unk2Fs *p;
+     s32 cur;
+@@ -770,7 +851,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
+     D_800DEF90[omCurrentObj->objId] = NULL;
+     setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
+     omLinkGObjDL(arg0, func_800AD1A0, 0x12, 0x80000000, 0x12);
++#ifdef PORT
++    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp60[cur]);
++#else
+     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp60.unk0[cur]);
++#endif
+     p = &D_8015AF28_ovl4[arg1];
+     sp->xOffset = p->unk0;
+     sp->yOffset = p->unk4;
+@@ -782,7 +867,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
+                 if (func_80156BAC_ovl4(arg1) != cur) {
+                     cur = func_80156BAC_ovl4(arg1);
+                     func_800ACBDC(arg0);
++#ifdef PORT
++                    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp60[cur]);
++#else
+                     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp60.unk0[cur]);
++#endif
+                     sp->xOffset = p->unk0;
+                     sp->yOffset = p->unk4;
+                 }
+@@ -807,18 +896,37 @@ typedef struct {
+ extern Unk10Words D_8015AA08_ovl4;
+ 
+ void func_80156EB0_ovl4(GObj *arg0, s32 arg1, f32 arg2, f32 arg3) {
++#ifdef PORT
++    /* D_8015AA08 is ten N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp28 = (void **) &D_8015AA08_ovl4;
++#else
+     Unk10Words sp28 = D_8015AA08_ovl4;
++#endif
+     SPObj *sp;
+ 
++#ifdef PORT
++    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28[arg1 / 100]);
++#else
+     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28.unk0[arg1 / 100]);
++#endif
+     sp->xOffset = arg2;
+     sp->yOffset = arg3;
+     arg2 += sp->width;
++#ifdef PORT
++    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28[(arg1 % 100) / 10]);
++#else
+     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28.unk0[(arg1 % 100) / 10]);
++#endif
+     sp->xOffset = arg2;
+     sp->yOffset = arg3;
+     arg2 += sp->width;
++#ifdef PORT
++    sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28[arg1 % 10]);
++#else
+     sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp28.unk0[arg1 % 10]);
++#endif
+     sp->xOffset = arg2;
+     sp->yOffset = arg3;
+ }
+@@ -931,8 +1039,17 @@ extern Unk2Ss D_8015B46C_ovl4[][3];
+ s32 func_80157258_ovl4(s32, s32);
+ 
+ void func_801572E4_ovl4(GObj *arg0, s32 arg1) {
++#ifdef PORT
++    /* D_8015AA30/D_8015AA48 are six N64 pointer words each; the PC data
++       generator emits the region as part of a native void*[] (8-byte slots),
++       so the word-struct copies read pointer halves. Index the live tables
++       instead. */
++    void **spC0 = (void **) &D_8015AA30_ovl4;
++    void **spA8 = (void **) &D_8015AA48_ovl4;
++#else
+     Unk6Words spC0 = D_8015AA30_ovl4;
+     Unk6Words spA8 = D_8015AA48_ovl4;
++#endif
+     SPObj *sp;
+     s32 i;
+     s32 pad;
+@@ -947,10 +1064,18 @@ void func_801572E4_ovl4(GObj *arg0, s32 arg1) {
+     sp->xOffset = D_8015B074_ovl4[arg1].unk0;
+     sp->yOffset = D_8015B074_ovl4[arg1].unk4;
+     for (i = 0; i < 6; i++) {
++#ifdef PORT
++        dst1[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) spC0[i]);
++#else
+         dst1[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) spC0.unk0[i]);
++#endif
+         dst1[i]->xOffset = D_8015B3DC_ovl4[i][arg1].unk0;
+         dst1[i]->yOffset = D_8015B3DC_ovl4[i][arg1].unk4;
++#ifdef PORT
++        dst2[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) spA8[i]);
++#else
+         dst2[i] = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) spA8.unk0[i]);
++#endif
+         dst2[i]->xOffset = D_8015B46C_ovl4[i][arg1].unk0;
+         dst2[i]->yOffset = D_8015B46C_ovl4[i][arg1].unk4;
+     }
+@@ -1029,10 +1154,20 @@ void func_800B1900(s32);
+ void func_800BB468(s32, s32);
+ 
+ void func_80157840_ovl4(GObj *arg0, s32 arg1) {
++#ifdef PORT
++    /* D_8015AA60 is three N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Walk the live table instead. */
++    void **sp6C = (void **) &D_8015AA60_ovl4;
++    SPObj *sp;
++    void **p;
++    void **end;
++#else
+     Unk3Words sp6C = D_8015AA60_ovl4;
+     SPObj *sp;
+     s32 *p;
+     s32 *end;
++#endif
+     Unk2Ss *q;
+     s32 i;
+ 
+@@ -1040,8 +1175,13 @@ void func_80157840_ovl4(GObj *arg0, s32 arg1) {
+     setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
+     omLinkGObjDL(arg0, func_800AD1A0, 0x12, 0x80000000, 0x12);
+     q = &D_8015B6C4_ovl4[arg1];
++#ifdef PORT
++    p = &sp6C[2];
++    end = &sp6C[0];
++#else
+     p = &sp6C.unk0[2];
+     end = &sp6C.unk0[0];
++#endif
+     do {
+         play_sound(0xD3);
+         sp = (SPObj *) func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) *p);
+--- a/src/ovl4/ovl4_4.c
++++ b/src/ovl4/ovl4_4.c
+@@ -509,8 +509,17 @@ void procMainStub(GObj *);
+ void omLinkGObjDL(GObj *, void (*)(GObj *), u8, s32, s32);
+ 
+ void func_801593A4_ovl4(GObj *arg0) {
++#ifdef PORT
++    /* D_8015BFF0/D_8015C00C are seven N64 pointer words each; the PC data
++       generator emits the region as one native void*[] (8-byte slots), so
++       the word-struct copies read pointer halves. Index the live tables
++       instead. */
++    void **sp64 = (void **) &D_8015BFF0_ovl4;
++    void **sp48 = (void **) &D_8015C00C_ovl4;
++#else
+     Unk7Words sp64 = D_8015BFF0_ovl4;
+     Unk7Words sp48 = D_8015C00C_ovl4;
++#endif
+     SPObj *sp;
+     s32 cur;
+     s32 a;
+@@ -519,10 +528,18 @@ void func_801593A4_ovl4(GObj *arg0) {
+     D_800DEF90[omCurrentObj->objId] = NULL;
+     setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
+     omLinkGObjDL(arg0, func_800AD1A0, 0xA, 0x80000000, 0xA);
++#ifdef PORT
++    func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp64[cur]);
++#else
+     func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp64.unk0[cur]);
++#endif
+     func_8015C740_ovl5(arg0, &D_8015C1E0_ovl4);
+     func_8015C740_ovl5(arg0, &D_8015C200_ovl4);
++#ifdef PORT
++    func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp48[cur]);
++#else
+     func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp48.unk0[cur]);
++#endif
+     if (D_800D6B7C != 0) {
+         for (sp = arg0->unk4C; sp != NULL; sp = (SPObj *) sp->unk8) {
+             sp->primColorAlpha = 0;
+@@ -571,9 +588,17 @@ void func_801593A4_ovl4(GObj *arg0) {
+         }
+         cur = D_800E9E20[D_8015C718_ovl4];
+         func_800ACBDC(arg0);
++#ifdef PORT
++        func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp64[cur])->primColorAlpha = 0;
++#else
+         func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp64.unk0[cur])->primColorAlpha = 0;
++#endif
+         func_8015C740_ovl5(arg0, &D_8015C1E0_ovl4)->primColorAlpha = 0;
++#ifdef PORT
++        func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp48[cur])->primColorAlpha = 0;
++#else
+         func_8015C740_ovl5(arg0, (struct UnkStruct8015C740 *) sp48.unk0[cur])->primColorAlpha = 0;
++#endif
+         func_8015C740_ovl5(arg0, &D_8015C200_ovl4)->primColorAlpha = 0;
+         while (D_800E9C60[D_8015C718_ovl4] != 0) {
+             ohSleep(1);
 --- a/src/ovl5/ovl5_11.c
 +++ b/src/ovl5/ovl5_11.c
 @@ -6,6 +6,18 @@
@@ -4444,9 +6328,127 @@
  #include "ovl1/ovl1_5.h"
  #include "track_arrays.h"
  #include "ovl1/ovl1_7.h"
+@@ -607,10 +619,21 @@ void func_801813FC_ovl5(GObj *arg0) {
+ // struct copy + phantom stack
+ SPObj *func_801815BC_ovl5(GObj *o, s32 arg1, f32 x, f32 y);
+ SPObj *func_801815BC_ovl5(GObj *o, s32 arg1, f32 x, f32 y) {
++#ifdef PORT
++    /* D_80189CE8 is ten N64 pointer words; the PC data generator emits the
++       region as a native void*[] (8-byte slots), so the word-struct copy
++       reads pointer halves. Index the live table instead. */
++    void **sp20 = (void **) &D_80189CE8_ovl5;
++#else
+     Unk28Words sp20 = *(Unk28Words *) &D_80189CE8_ovl5;
++#endif
+     SPObj *spobj;
+ 
++#ifdef PORT
++    spobj = func_8015C740_ovl5(o, sp20[arg1]);
++#else
+     spobj = func_8015C740_ovl5(o, sp20.unk0[arg1]);
++#endif
+     spobj->xOffset = x;
+     spobj->yOffset = y;
+ }
+--- a/src/ovl5/ovl5_2.c
++++ b/src/ovl5/ovl5_2.c
+@@ -1260,10 +1260,21 @@ void func_80164174_ovl5(GObj *arg0) {
+ #endif
+ 
+ void func_801642A4_ovl5(s32 arg0, s32 arg1, s32 arg2, s32 arg3) {
++#ifdef PORT
++    /* D_80185FF8 is ten N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp20 = (void **) &D_80185FF8_ovl5;
++#else
+     Unk28Words sp20 = D_80185FF8_ovl5;
++#endif
+     SPObj *spobj;
+ 
++#ifdef PORT
++    spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20[arg1]);
++#else
+     spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20.unk0[arg1]);
++#endif
+     spobj->xOffset = arg2;
+     spobj->yOffset = arg3;
+ }
+--- a/src/ovl5/ovl5_4.c
++++ b/src/ovl5/ovl5_4.c
+@@ -1056,10 +1056,21 @@ void func_8016CC88_ovl5(GObj *arg0) {
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl5/ovl5_4/func_8016CFB0_ovl5.s")
+ 
+ void func_8016E650_ovl5(s32 arg0, s32 arg1, s32 arg2, s32 arg3) {
++#ifdef PORT
++    /* D_80186A0C is ten N64 pointer words; the PC data generator emits the
++       region as part of a native void*[] (8-byte slots), so the word-struct
++       copy reads pointer halves. Index the live table instead. */
++    void **sp20 = (void **) &D_80186A0C_ovl5;
++#else
+     Unk28Words sp20 = D_80186A0C_ovl5;
++#endif
+     SPObj *spobj;
+ 
++#ifdef PORT
++    spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20[arg1]);
++#else
+     spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20.unk0[arg1]);
++#endif
+     spobj->xOffset = arg2;
+     spobj->yOffset = arg3;
+ }
+--- a/src/ovl5/ovl5_5.c
++++ b/src/ovl5/ovl5_5.c
+@@ -883,10 +883,21 @@ void func_80175A28_ovl5(GObj *arg0) {
+ }
+ 
+ void func_80175AD0_ovl5(s32 arg0, s32 arg1, s32 arg2, s32 arg3) {
++#ifdef PORT
++    /* D_801873A0 is ten N64 pointer words; the PC data generator emits the
++       region as a native void*[] (8-byte slots), so the word-struct copy
++       reads pointer halves. Index the live table instead. */
++    void **sp20 = (void **) &D_801873A0_ovl5;
++#else
+     Unk28Words sp20 = D_801873A0_ovl5;
++#endif
+     SPObj *spobj;
+ 
++#ifdef PORT
++    spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20[arg1]);
++#else
+     spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20.unk0[arg1]);
++#endif
+     spobj->xOffset = arg2;
+     spobj->yOffset = arg3;
+ }
+--- a/src/ovl5/ovl5_6.c
++++ b/src/ovl5/ovl5_6.c
+@@ -409,10 +409,21 @@ void func_80178DB0_ovl5(GObj *arg0) {
+ }
+ 
+ void func_80178E98_ovl5(s32 arg0, s32 arg1, s32 arg2, s32 arg3) {
++#ifdef PORT
++    /* D_801881EC is ten N64 pointer words; the PC data generator emits the
++       region as a native void*[] (8-byte slots), so the word-struct copy
++       reads pointer halves. Index the live table instead. */
++    void **sp20 = (void **) &D_801881EC_ovl5;
++#else
+     Unk28Words sp20 = D_801881EC_ovl5;
++#endif
+     SPObj *spobj;
+ 
++#ifdef PORT
++    spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20[arg1]);
++#else
+     spobj = (SPObj *) func_8015C740_ovl5(arg0, sp20.unk0[arg1]);
++#endif
+     spobj->xOffset = arg2;
+     spobj->yOffset = arg3;
+ }
 --- a/src/ovl6/ovl6.c
 +++ b/src/ovl6/ovl6.c
-@@ -837,6 +837,18 @@
+@@ -837,6 +837,18 @@ void func_801532F4_ovl6(GObj *arg0) {
              }
              i = 0;
              if (var_v0->numMatrices != 0) {
@@ -4465,7 +6467,7 @@
                  walk = (OMMtx **)var_v0;
                  do {
                      mtx = walk[22];
-@@ -846,6 +858,7 @@
+@@ -846,6 +858,7 @@ void func_801532F4_ovl6(GObj *arg0) {
                      }
                      walk++;
                  } while (i < var_v0->numMatrices);
@@ -4473,7 +6475,7 @@
              }
              if (var_v0->firstChild != NULL) {
                  var_v0 = var_v0->firstChild;
-@@ -1102,7 +1115,14 @@
+@@ -1102,7 +1115,14 @@ void func_80153E1C_ovl6(s32 arg0) {
  }
  
  void func_80153F00_ovl6(void) {
@@ -4488,7 +6490,7 @@
  }
  
  SPObj *func_80153F2C_ovl6(void) {
-@@ -1521,9 +1541,87 @@
+@@ -1521,9 +1541,87 @@ void func_80154C08_ovl6(void) {
      func_80153064_ovl6();
      func_800AC610();
  }

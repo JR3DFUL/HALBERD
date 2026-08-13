@@ -154,6 +154,93 @@ def resolve_scalar_pointer(val):
     return name
 
 
+# Tables that game code reads through a 4-byte-per-field overlay struct
+# (struct Ovl1CameraSetup, src/ovl1/ovl1_2.c). The normal pointer-array
+# emission makes every slot 8 bytes, so the overlay shears: the entry's
+# onCreated callback slot lands where the game reads dlLinkBitMask, and the
+# failure is a call through a bit mask (pc=0x400, ovl4 map scene postInit).
+# These blocks render as raw 32-bit words via `.long` instead. `.long symbol`
+# has the linker truncate the address to 32 bits (R_X86_64_32), which the
+# -no-pie low-memory invariant that tools/pc/link.sh documents -- and
+# pc_check_low_memory() enforces -- makes lossless. The sibling tables with
+# no callback (D_800BF948 etc.) already emit as u32[] and need no entry here.
+FORCE_WORD32 = {
+    'D_800BFE50',   # ovl1 camera setups: has &func_800A7394 at entry 2
+    'D_800BFEF8',   # ovl1 camera setups: &func_800A71E0, &func_800A7348
+}
+
+# Camera animation command streams embedded in overlay DATA. Bank-loaded
+# anim blocks are widened at load time by func_800A94F4 -- each N64 word
+# becomes an 8-byte cell (native value, zero high half) -- because LP64's
+# AnimCmd union carries a pointer and is 8 bytes, so `animList++` strides 8.
+# These tables feed the very same reader (func_800B2F54 ->
+# animSetCameraAnimation -> animProcessCameraAnimation) but arrive as dense
+# u32[]; the reader skipped every other word and spun forever (the world-map
+# scene hang). Emitting them as void*[] with each word in a (void *)(u32)
+# slot reproduces the widened-cell shape exactly. Grown per finding: any
+# other overlay-resident table passed to func_800B2F54 /
+# animSetCameraAnimation belongs here.
+FORCE_WIDEN = {
+    'D_8015A0F0_ovl4', 'D_8015A224_ovl4',   # world map, via D_8015A954
+    'D_8015B780_ovl4', 'D_8015BB48_ovl4',   # world map, via D_8015C360
+    'D_80186960_ovl5',                      # ovl5_4 scene camera
+    'D_8018A530_ovl5',                      # ovl5_13 scene camera
+}
+
+
+def render_widened(sym, section, entries):
+    """A FORCE_WIDEN block: one 8-byte (void *)(u32) cell per N64 word."""
+    const = 'const ' if section == '.rodata' else ''
+    body = ',\n    '.join(f'(void *)(u32)({v})' for _k, v in entries)
+    return (f'extern {const}void *{sym}[];\n',
+            f'{const}void *{c_ident(sym)}[] = {{\n    {body}\n}};\n')
+
+
+# BSS blocks whose PC-side definition lives in src/pc/pc_camera_slots.c.
+# These are two N64 pointer arrays (GObj *D_800D79B0[10], camera slots
+# D_800D79D8[10]) that splat split at every interior label. The 2x doubling
+# rule keeps each PIECE big enough, but game code both indexes the BASE with
+# LP64 8-byte slots (D_800D79B0[idx] = obj) and reads the INTERIOR labels as
+# scalars (D_800D79BC is N64 base+12, i.e. index 3) -- and no doubling of the
+# split pieces can satisfy both views at once. func_800A7394 found it: the
+# world-map camera callback read D_800D79BC, which sat 24 bytes past where
+# D_800D79B0[3] was written. The hand-written file defines each array whole
+# and aliases the interior labels at index*8.
+SUPPRESS_BSS = {
+    'D_800D79B0', 'D_800D79B4', 'D_800D79B8', 'D_800D79BC',
+    'D_800D79D8', 'D_800D79DC', 'D_800D79E0',
+}
+
+
+def render_word32_asm(sym, section, entries, refs):
+    """A FORCE_WORD32 block: N64-shaped 4-byte words, pointers included."""
+    # pushsection/popsection, NOT .section/.text: GCC does not parse the asm,
+    # so a bare section switch desyncs its own section tracking and the next
+    # compiler-emitted object lands wherever the asm left the assembler (the
+    # first attempt put D_800C96D8 -- 8 KB of mutable table -- in .text, and
+    # the game faulted writing to it).
+    sect = '.rodata' if section == '.rodata' else '.data'
+    lines = [f'   .pushsection {sect}', '   .balign 8', f'   .globl {sym}',
+             f'{sym}:']
+    for _k, v in entries:
+        if _is_ref(v):
+            m = re.match(r'([A-Za-z_]\w*)', v)
+            refs.add(m.group(1))
+            lines.append(f'   .long {v}')
+        else:
+            name = resolve_scalar_pointer(v)
+            if name:
+                refs.add(name)
+                lines.append(f'   .long {name}')
+            else:
+                lines.append(f'   .long {v}')
+    lines.append('   .popsection')
+    asm = ('__asm__(' + '\n        '.join(f'"{l}\\n"' for l in lines)
+           + ');\n')
+    const = 'const ' if section == '.rodata' else ''
+    return f'extern {const}u32 {sym}[];\n', asm
+
+
 def render(sym, section, entries, refs):
     """(forward_declaration, definition) for one data block.
 
@@ -167,6 +254,12 @@ def render(sym, section, entries, refs):
         return '', ''
 
     kinds = {k for k, _ in entries}
+
+    if sym in FORCE_WORD32 and kinds == {'word'}:
+        return render_word32_asm(sym, section, entries, refs)
+
+    if sym in FORCE_WIDEN and kinds == {'word'}:
+        return render_widened(sym, section, entries)
 
     # .bss -- plain zeroed storage, and it must NOT be const.
     #
@@ -366,10 +459,14 @@ def group_blocks(blocks):
     """[(kind, [block, ...])] -- adjacent pointer blocks collected into runs."""
     groups, i = [], 0
     while i < len(blocks):
-        if is_pointer_block(blocks[i][2]):
+        # FORCE_WORD32 blocks must stay single: merged into a pointer run
+        # they would be re-widened to 8-byte slots, undoing the override.
+        if (is_pointer_block(blocks[i][2])
+                and blocks[i][0] not in FORCE_WORD32):
             j = i + 1
             while (j < len(blocks) and blocks[j][1] == blocks[i][1]
-                   and is_pointer_block(blocks[j][2])):
+                   and is_pointer_block(blocks[j][2])
+                   and blocks[j][0] not in FORCE_WORD32):
                 j += 1
             groups.append(('ptrrun', blocks[i:j]))
             i = j
@@ -444,7 +541,7 @@ def main():
         # around it are no longer known to be adjacent.
         segments, seg = [], []
         for b in parse(path):
-            if b[0] in defined:
+            if b[0] in defined or b[0] in SUPPRESS_BSS:
                 if seg:
                     segments.append(seg)
                 seg = []

@@ -114,6 +114,16 @@ void pc_animload_debug(unsigned int id, unsigned int bytes, unsigned int kind,
             id, bytes, kind, relocs, blk);
 }
 
+/* Level-settings-block load diagnostics (func_800F78E4's PORT arm). */
+void pc_levelload_debug(unsigned int id, unsigned int bytes, unsigned int nodes,
+                        unsigned int ents, const void *base) {
+    if (!pc_sched_debug_enabled()) {
+        return;
+    }
+    fprintf(stderr, "[level] setup=%08x bytes=%06x nodes=%u ents=%u base=%p\n",
+            id, bytes, nodes, ents, base);
+}
+
 void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const void *pal) {
     const unsigned char *r = (const unsigned char *)raw;
     const unsigned char *i = (const unsigned char *)img;

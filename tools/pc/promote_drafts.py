@@ -60,14 +60,14 @@ GUARD = re.compile(
 CC_CHECK = ('gcc -fsyntax-only -fsigned-char -m32 -D_LANGUAGE_C -D_FINALROM '
             '-DTARGET_N64 -DF3DEX_GBI_2 -nostdinc -Iinclude/libc -Iinclude '
             '-Ilibreultra/include/2.0I -Ibuild -Ibuild/include -Ibuild/assets '
-            '-Isrc -Isrc.old -I. -std=gnu90 -w -DNON_MATCHING -DAVOID_UB')
+            '-Isrc -I. -std=gnu90 -w -DNON_MATCHING -DAVOID_UB')
 
 PORT_OWNS = set()
 
 PORT_CC = ('gcc -m64 -fno-pie -std=gnu90 -fsigned-char -O1 -fsyntax-only -w '
            '-D_LANGUAGE_C -DTARGET_N64 -DPORT -DF3DEX_GBI_2 -DAVOID_UB '
            '-DNON_MATCHING -Iinclude -Iinclude/libc -Ilibreultra/include/2.0I '
-           '-Ibuild -Ibuild/include -Ibuild/assets -Isrc -Isrc.old -I.')
+           '-Ibuild -Ibuild/include -Ibuild/assets -Isrc -I.')
 
 
 def compiles(path):
