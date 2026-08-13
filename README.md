@@ -4,23 +4,37 @@
 
 # HALBERD
 
-**HALBERD** is a native PC port of **Kirby 64: The Crystal Shards** (N64) --
-named for Meta Knight's battleship, a tip of the mask to
-[BattleShip](https://github.com/JRickey/BattleShip), the SSB64 port whose
-architecture this project follows. Built on the
+**HALBERD** is a PC port of **Kirby 64: The Crystal Shards** (N64, US release)
+-- built on top of the
 [JR3DFUL/kirby64_decomp](https://github.com/JR3DFUL/kirby64_decomp)
-decompilation, using [libultraship](https://github.com/JRickey/libultraship) (JRickey `ssb64` fork, the one shipping under BattleShip; patched per `patches/`)
-for rendering/window/input and [Torch](https://github.com/JR3DFUL/Torch) for
-build-time asset extraction.
+decompilation, using
+[libultraship](https://github.com/JRickey/libultraship) for PC-native
+rendering / input and [Torch](https://github.com/HarbourMasters/Torch) for
+extracting assets out of the ROM at build time. The name is Meta Knight's
+airship -- and a tip of the mask to
+[BattleShip](https://github.com/JRickey/BattleShip), the SSB64 port whose
+architecture this project follows.
 
-Architecture modeled on [JRickey/BattleShip](https://github.com/JRickey/BattleShip)
-(the SSB64 port with the same decomp + libultraship + Torch pillars).
+Runs natively on Linux (and Windows via WSL2); further platforms planned.
 
-## No copyrighted assets
+**Early development**: the port currently boots through the intro screens and
+into the menu scene. See *Current state* below.
 
-Nothing of Nintendo's ships in this repo. Every byte of game data is extracted
-at build time from a ROM you supply
-(`baserom.us.z64`, sha1 `6cea2d46b929a3bb347b060a77fccc83526fb855`).
+## No copyrighted assets are included in this repository
+
+**None of Nintendo's assets (code, textures, audio, models, text, ROM data)
+are checked into this repo or distributed with builds.** The port is a pure
+C source tree; every byte of Nintendo-owned data is extracted at build time
+from a ROM that *you* supply. If you do not own a legal copy of Kirby 64:
+The Crystal Shards for the Nintendo 64, you cannot build or run this project.
+
+You supply your own ROM. The canonical, supported dump:
+
+| Version | SHA-1 |
+|---------|-------|
+| **US** -- NTSC-U | `6cea2d46b929a3bb347b060a77fccc83526fb855` |
+
+If your dump does not match the hash, it will not build.
 
 ## Layout
 
@@ -35,15 +49,12 @@ at build time from a ROM you supply
 | `patches/libultraship-native-rom.patch` | HISTORICAL: the equivalent patch set against the previous JR3DFUL fork, kept for reference |
 | `docs/` | Port architecture, asset pipeline, LUS integration, surface inventory |
 
-## Current state (honest)
+## Current state
 
-Boots through scene creation, runs an indefinite game loop with zero
-unimplemented symbols on the boot path, executes real F3DEX2/S2DEX display
-lists (textures, palettes, draws all flowing to GL). Frame presentation in the
-headless harness is the active frontier. Four game-side functions carry
-behavioral (non-matching) PORT implementations pending genuine matches:
-`func_80154A40_ovl6`, `func_800A09AC`, `func_8009E8F4`, `func_800A9864`,
-plus `func_800A9250` (bank relocator, big-endian aware).
+Boots and renders the intro screens, then loads the menu scene; menu
+rendering and game audio are in active development. A handful of game-side
+functions carry behavioral (non-matching) PORT implementations pending
+genuine matches -- see commit history for the running list.
 
 ## Relationship to the decomp
 
@@ -60,7 +71,7 @@ libultraship + torch submodules with the patch applied on the fork.
 
 Linux or WSL2. Fetches and builds every dependency (SDL2, the patched
 libultraship fork, the decomp game code, Torch), extracts assets from your
-ROM, and produces `out/kirby64` with a printed run command. Idempotent:
+ROM, and produces `out/halberd` with a printed run command. Idempotent:
 rerun after any failure and it resumes. Beta -- mirrors the development
 container's exact chain.
 
