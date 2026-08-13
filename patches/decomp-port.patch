@@ -497,6 +497,22 @@
  
  DObj* animModelTreeNextNode(DObj*);
  // void anim_func_8000FBC4(GObj* obj, struct UnkE4E4Arg* arg1, DObj** arg2);
+--- a/src/main/audio.c
++++ b/src/main/audio.c
+@@ -589,6 +589,13 @@
+ 
+ // NOTE: this used to store the interrupt mask
+ u32 auPlaySong(s32 playerID, u32 songID) {
++#ifdef PORT
++    /* The audio init path never runs on the PC build yet, so auSeqFile is
++     * NULL; a song request is a safe no-op rather than a crash. */
++    if (auSeqFile == NULL) {
++        return -1;
++    }
++#endif
+     if (songID < (u32)auSeqFile->seqCount) {
+         auBGMPlayerStatus[playerID] = 1;
+         auBGMSongId[playerID] = songID;
 --- a/src/main/dma.c
 +++ b/src/main/dma.c
 @@ -70,6 +70,28 @@
@@ -902,6 +918,29 @@
  
  typedef struct FuncTable {
      /* 0x00 */ u16 flags;
+--- a/src/main/object_manager.c
++++ b/src/main/object_manager.c
+@@ -595,6 +595,20 @@
+     void (*temp_v0_3)(struct ObjStack *);
+ 
+     if ((proc == 0) || (proc == omCurrentProc)) {
++#ifdef PORT
++        /* PORT hardening: proc==NULL means "end the CURRENT process", which
++         * on the N64 is only ever reached from inside a process, so
++         * omCurrentProc is never NULL there. On the PC build a caller can
++         * legitimately hand in a NULL from a slot whose entity was never
++         * created (ovl6's sequencer does omEndProcess(
++         * gEntityGObjProcessArray[track]) for tracks whose setup is still
++         * stubbed), and omCurrentProc can be NULL at that point -- which
++         * dereferenced NULL below. Ending a process that does not exist is
++         * a no-op, not a crash. */
++        if (omCurrentProc == NULL) {
++            return;
++        }
++#endif
+         D_8004A7D4 = 1;
+         temp_v0_4 = omCurrentProc->kind;
+         if (temp_v0_4 == 0 || temp_v0_4 == 2) {
 --- a/src/main/render.c
 +++ b/src/main/render.c
 @@ -41,11 +41,20 @@
@@ -1953,9 +1992,420 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A09AC.s")
  #endif
+@@ -3461,6 +4188,19 @@
+     }
+     return temp_v0;
+ }
++#elif defined(PORT)
++/* PORT: still assembly on the matching build and the m2c sketch above is
++ * not compilable; the particle/emitter object it would build also leans on
++ * script tables whose LP64 layout is still unresolved. Scene setup calls
++ * this per placed emitter (func_800A2550), so a weak abort stub would end
++ * the run on the first scene with emitters; a NULL return is the
++ * documented "emitter did not spawn" result every caller already checks
++ * for. Effects stay absent until this is genuinely ported. */
++void *func_800A19EC(s32 arg0, s32 arg1) {
++    (void)arg0;
++    (void)arg1;
++    return NULL;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A19EC.s")
+ #endif
+@@ -3863,6 +4603,167 @@
+         } while (!(temp_t9 & 0x80000000));
+     }
+ }
++#elif defined(PORT)
++/* PORT: still assembly on the matching build; the m2c sketch above is not
++ * compilable. Behavioral port from
++ * asm/nonmatchings/ovl1/ovl1/func_800A2550.s -- the scene particle-emitter
++ * placer. arg0 is the geo blob's layout section (0x2C-stride nodes). It
++ * walks to the type-0x12 terminator; if the terminator's word +4 is
++ * nonzero, a SECOND 0x2C-stride array follows the terminator: each entry
++ * is { u32 id; pad; f32 pos[3]; f32 rot[3]; f32 scale[3] }, the last entry
++ * flagged by bit 31 of its id (and still processed). Each id spawns
++ * emitter (id>>16)&0xF / (id&0xFFFF) via func_800A19EC and transforms it
++ * by (entry SRT matrix) * (first-node SRT matrix): position from the
++ * translation row, velocity rotated through the 3x3, plus a per-kind
++ * extra (scale for most kinds, a point for kind 1, a 3x3 for kind 5).
++ *
++ * BYTE ORDER: the layout nodes themselves are native (func_800A9250's PORT
++ * normalizer swaps the node array through the terminator's TYPE word for
++ * layoutModes 0x17..0x1E, and this function is only reached for those
++ * modes -- func_800F72B0/func_800F6E30 skip it for 0x11..0x16). But the
++ * terminator's word +4 and the whole second array live PAST what the
++ * normalizer touched and are still raw big-endian, so every read of them
++ * here decodes explicitly (and nothing is swapped in place: the blob is
++ * shared/cached, and this function can run on it more than once).
++ *
++ * The emitter object layout mirrors struct Ovl1PNode's LP64 shape (the
++ * 8-byte `next` shifts the scalar block by +4; the two pointers at N64
++ * +0x48/+0x4C widen, putting the N64 +0x50.. block at +0x60). TODAY
++ * func_800A19EC is still a weak NULL stub on this build, so the transform
++ * body is exercised only once emitters exist; if kind-5 emitters ever
++ * spawn, the free-list node size (0x78 on the N64) must be re-checked
++ * against this widened layout. */
++
++struct Pc2550Obj {                       /* LP64 mirror of struct Ovl1PNode */
++    /* 0x00 */ void *next;
++    /* 0x08 */ u8 pad4[5];
++    /* 0x0D */ u8 unk9;                  /* emitter kind (N64 +0x09) */
++    /* 0x0E */ u8 padA[4];
++    /* 0x12 */ u16 unkE;
++    /* 0x14 */ s32 pad10;
++    /* 0x18 */ f32 unk14, unk18, unk1C;  /* position (N64 +0x14..) */
++    /* 0x24 */ f32 unk20, unk24, unk28;  /* velocity */
++    /* 0x30 */ f32 unk2C, unk30, unk34;
++    /* 0x3C */ f32 unk38, unk3C;         /* unk38 = size (N64 +0x38) */
++    /* 0x44 */ f32 unk40;
++    /* 0x48 */ s32 pad44;
++    /* 0x50 */ struct DObj *unk48;
++    /* 0x58 */ void *unk4C;
++    /* 0x60 */ f32 unk50, unk54, unk58;  /* N64 +0x50.. */
++    /* 0x6C */ f32 unk5C, unk60, unk64;
++    /* 0x78 */ f32 unk68, unk6C, unk70;
++    /* 0x84 */ s32 unk74;
++};
++
++void *func_800A19EC(s32, s32);
++void func_8001C2E4(f32 m[4][4], Vector translate, Vector rotate, Vector scale);
++void guMtxCatF(f32 m[4][4], f32 n[4][4], f32 res[4][4]);
++
++static u32 pc2550_w(const void *p) {
++    return __builtin_bswap32(*(const u32 *)p);
++}
++static f32 pc2550_f(const void *p) {
++    union { u32 w; f32 f; } u;
++    u.w = pc2550_w(p);
++    return u.f;
++}
++static Vector pc2550_vec(const u8 *p) {
++    Vector v;
++    v.x = pc2550_f(p);
++    v.y = pc2550_f(p + 4);
++    v.z = pc2550_f(p + 8);
++    return v;
++}
++/* The layout nodes BEFORE and AT the terminator are native. */
++static Vector pc2550_vec_native(const u8 *p) {
++    Vector v;
++    v.x = ((const f32 *)p)[0];
++    v.y = ((const f32 *)p)[1];
++    v.z = ((const f32 *)p)[2];
++    return v;
++}
++
++void func_800A2550(void *arg0) {
++    u8 *first = arg0;
++    u8 *node = arg0;
++    u8 *ent;
++    f32 m1[4][4];
++    f32 m2[4][4];
++    struct Pc2550Obj *obj;
++    u32 id;
++
++    while (*(s32 *)node != 0x12) { /* native type words */
++        node += 0x2C;
++    }
++    if (pc2550_w(node + 4) == 0) { /* BE: past the normalizer's reach */
++        return;
++    }
++
++    func_8001C2E4(m1, pc2550_vec_native(first + 0x8),
++                  pc2550_vec_native(first + 0x14),
++                  pc2550_vec_native(first + 0x20));
++
++    ent = node + 0x2C;
++    do {
++        id = pc2550_w(ent);
++        obj = func_800A19EC((s32)((id >> 16) & 0xF), (s32)(id & 0xFFFF));
++        if (obj != NULL) {
++            f32 vx, vy, vz;
++
++            func_8001C2E4(m2, pc2550_vec(ent + 0x8), pc2550_vec(ent + 0x14),
++                          pc2550_vec(ent + 0x20));
++            guMtxCatF(m2, m1, m2);
++
++            obj->unk14 = m2[3][0];
++            obj->unk18 = m2[3][1];
++            obj->unk1C = m2[3][2];
++            vx = obj->unk20;
++            vy = obj->unk24;
++            vz = obj->unk28;
++            obj->unk20 = m2[0][0] * vx + m2[1][0] * vy + m2[2][0] * vz;
++            obj->unk24 = m2[0][1] * vx + m2[1][1] * vy + m2[2][1] * vz;
++            obj->unk28 = m2[0][2] * vx + m2[1][2] * vy + m2[2][2] * vz;
++
++            switch (obj->unk9) {
++                case 0:
++                case 2:
++                case 3:
++                case 4:
++                case 6:
++                case 7:
++                case 8:
++                    obj->unk38 *= sqrtf(m2[0][0] * m2[0][0] + m2[1][0] * m2[1][0] +
++                                        m2[2][0] * m2[2][0]);
++                    break;
++                case 1: {
++                    f32 px = obj->unk50;
++                    f32 py = obj->unk54;
++                    f32 pz = obj->unk58;
++                    obj->unk50 = m2[3][0] + (m2[0][0] * px + m2[1][0] * py + m2[2][0] * pz);
++                    obj->unk54 = m2[3][1] + (m2[0][1] * px + m2[1][1] * py + m2[2][1] * pz);
++                    obj->unk58 = m2[3][2] + (m2[0][2] * px + m2[1][2] * py + m2[2][2] * pz);
++                    break;
++                }
++                case 5: {
++                    f32 ax = obj->unk50;
++                    f32 ay = obj->unk60;
++                    f32 az = obj->unk70;
++                    obj->unk50 = m2[0][0] * ax;
++                    obj->unk54 = m2[1][0] * ay;
++                    obj->unk58 = m2[2][0] * az;
++                    obj->unk5C = m2[0][1] * ax;
++                    obj->unk60 = m2[1][1] * ay;
++                    obj->unk64 = m2[2][1] * az;
++                    obj->unk68 = m2[0][2] * ax;
++                    obj->unk6C = m2[1][2] * ay;
++                    obj->unk70 = m2[2][2] * az;
++                    break;
++                }
++            }
++        }
++        ent += 0x2C;
++    } while (!(id & 0x80000000));
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A2550.s")
+ #endif
 --- a/src/ovl1/ovl1_3.c
 +++ b/src/ovl1/ovl1_3.c
-@@ -460,6 +460,45 @@
+@@ -38,12 +38,32 @@
+ extern GObj *D_800DE350[];
+ 
+ // A node in the dynamic-buffer free-list allocator (see func_800A82C0 / func_800A8358).
++#ifdef PORT
++/* The asset cache's 0x10-byte IN-ARENA block header: { prev, next, size,
++ * refcount }. It must stay EXACTLY 16 bytes -- every function here reaches
++ * it as `data - 0x10`, and the allocator carves blocks with raw byte
++ * arithmetic. With native pointer members the LP64 struct grew to 24 bytes
++ * and unk8/unkC landed at +16/+20, i.e. INSIDE the cached data: every
++ * allocation stomped the blob's first 8 bytes and every refcount bump
++ * (func_800A8564) corrupted blob word +4 (measured: geo header texScroll
++ * 0x0156d3bc -> 0x0156d3bd on the ovl6 movie's cached-model rebind). The
++ * links are 32-bit slots holding host pointers -- the whole game arena
++ * lives below 4 GiB -- and CL() widens them back. */
++struct CacheLine {
++    u32 unk0;
++    u32 unk4;
++    u32 unk8;
++    u32 unkC;
++};
++#define CL(x) ((struct CacheLine *)(uintptr_t)(x))
++#else
+ struct CacheLine {
+     struct CacheLine *unk0;
+     struct CacheLine *unk4;
+     u32 unk8;
+     u32 unkC;
+ };
++#endif
+ 
+ extern u32 D_800D7BB0;
+ extern u32 D_800D7BB4;
+@@ -155,9 +175,82 @@
+     var_a1->unkC = 1;
+     return (u8 *)var_a1 + 0x10;
+ }
++#elif defined(PORT)
++/* Same function through the 16-byte PORT header (CL() widens the 32-bit
++ * link slots; pointer stores narrow with a cast). */
++void *func_800A8358(s32 arg0) {
++    s32 temp_v1;
++    struct CacheLine *var_a1;
++    u32 lim;
++    struct CacheLine *found;
++    struct CacheLine *temp_a2;
++
++    temp_v1 = arg0 & 3;
++    arg0 = ((arg0 - temp_v1) + 0xC) & ~0xF;
++    var_a1 = D_800D7BD0[temp_v1];
++    lim = arg0 + 0x10;
++loop_1:
++    if (var_a1->unkC != 0) {
++        goto advance;
++    }
++    if (var_a1->unk8 >= lim) {
++        goto block_found;
++    }
++advance:
++    var_a1 = CL(var_a1->unk4);
++    goto loop_1;
++block_found:
++    found = (struct CacheLine *)((u8 *)var_a1 + arg0);
++    temp_a2 = (struct CacheLine *)((u8 *)found + 0x10);
++    temp_a2->unk0 = (u32)(uintptr_t)var_a1;
++    temp_a2->unk4 = var_a1->unk4;
++    temp_a2->unkC = 0;
++    temp_a2->unk8 = (var_a1->unk8 - arg0) - 0x10;
++    var_a1->unk4 = (u32)(uintptr_t)temp_a2;
++    CL(temp_a2->unk4)->unk0 = (u32)(uintptr_t)temp_a2;
++    D_800D7BD0[temp_v1] = CL(CL(temp_a2->unk4)->unk0);
++    D_800D7BBC = var_a1;
++    var_a1->unk8 = arg0;
++    var_a1->unkC = 1;
++    return (u8 *)var_a1 + 0x10;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A8358.s")
+ #endif
++#ifdef PORT
++/* Region init through the 16-byte PORT header (see struct CacheLine): the
++ * `-= 2` is two 0x10 headers, and the link fields hold 32-bit arena
++ * pointers. */
++struct CacheLine *func_800A840C(u32 arg0, s32 arg1) {
++    struct CacheLine *sp1C;
++    struct CacheLine *temp_a3;
++    struct CacheLine *temp_v0_2;
++
++    if (D_800D7BD0[arg1 & 3] != NULL) {
++        return NULL;
++    }
++    if (arg0 < 0x40) {
++        return NULL;
++    }
++    sp1C = (struct CacheLine *)(uintptr_t)func_800A8310(arg0);
++    if (sp1C == NULL) {
++        return NULL;
++    }
++    D_800D7BD0[arg1] = sp1C;
++    temp_v0_2 = (struct CacheLine *)((u8 *)sp1C + arg0 - 0x20);
++    sp1C->unk0 = (u32)(uintptr_t)temp_v0_2;
++    sp1C->unk4 = (u32)(uintptr_t)temp_v0_2;
++    sp1C->unk8 = arg0 - 0x30;
++    sp1C->unkC = 0;
++    temp_v0_2->unk4 = (u32)(uintptr_t)sp1C;
++    temp_a3 = CL(sp1C->unk4);
++    temp_a3->unk0 = temp_a3->unk4;
++    CL(sp1C->unk4)->unk8 = 0x10;
++    CL(sp1C->unk4)->unkC = 0xFF000000;
++    memcpy((u8 *)CL(sp1C->unk4) + 0x10, D_800C4640, 0x10);
++    return sp1C;
++}
++#else
+ struct CacheLine *func_800A840C(u32 arg0, s32 arg1) {
+     struct CacheLine *sp1C;
+     struct CacheLine *temp_a3;
+@@ -188,6 +281,7 @@
+     memcpy((u8 *)sp1C->unk4 + 0x10, D_800C4640, 0x10);
+     return sp1C;
+ }
++#endif
+ 
+ #ifdef NON_MATCHING
+ // 4/10, one-slot temp rotation (t7/t8/t9 vs t6/t7/t8). Swept: 24 source forms
+@@ -274,6 +368,53 @@
+     }
+     return 0;
+ }
++#elif defined(PORT)
++/* Free/deref through the 16-byte PORT header; arena pointers fit the u32
++ * link slots, so only the derefs widen (CL). Semantics identical to the
++ * NON_MATCHING body above. */
++u32 func_800A8578(arg0)
++s32 arg0;
++{
++    struct CacheLine *temp_v1;
++    struct CacheLine *var_v0;
++    struct CacheLine *prev;
++    struct CacheLine *var_v1;
++    struct CacheLine **slot;
++    u32 temp_a1;
++    u32 temp_v0;
++
++    temp_v1 = (struct CacheLine *)(uintptr_t)(((u32)arg0 - 0x10) & ~3u);
++    temp_a1 = temp_v1->unkC;
++    var_v0 = temp_v1;
++    if ((temp_a1 & 0xFF000000) == 0x99000000) {
++        return 0x99000000;
++    }
++    if (temp_a1 >= 2) {
++        temp_v0 = temp_a1 - 1;
++        temp_v1->unkC = temp_v0;
++        return temp_v0;
++    }
++    prev = CL(temp_v1->unk0);
++    temp_v1->unkC = 0;
++    if (prev->unkC == 0) {
++        var_v0 = prev;
++    }
++    var_v1 = CL(var_v0->unk4);
++    slot = &D_800D7BD0[arg0 & 3];
++    if (var_v1->unkC == 0) {
++        do {
++            if (var_v1 == *slot) {
++                *slot = var_v0;
++                var_v1 = CL(var_v0->unk4);
++            }
++            var_v0->unk8 = var_v0->unk8 + var_v1->unk8 + 0x10;
++            CL(var_v1->unk4)->unk0 = (u32)(uintptr_t)var_v0;
++            var_v1 = CL(CL(var_v0->unk4)->unk4);
++            var_v0->unk4 = (u32)(uintptr_t)var_v1;
++        } while (var_v1->unkC == 0);
++    }
++    return 0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A8578.s")
+ #endif
+@@ -305,7 +446,11 @@
+             count++;
+             total = total + size + 0x10;
+         }
++#ifdef PORT
++        cur = CL(cur->unk4); /* 32-bit link slot, see struct CacheLine */
++#else
+         cur = cur->unk4;
++#endif
+     } while (cur != start);
+     *arg1 = total;
+     *arg2 = count;
+@@ -334,6 +479,32 @@
+     u32 *sizes;
+ 
+     count = 0;
++#ifdef PORT
++    /* One-time repack of bank 3's image block table. The data generator
++     * emitted D_800C96D8 as a POINTER array (its entry 57 got symbolized as
++     * &D_3C3B0), which on LP64 gives it 8-byte slots -- but every reader
++     * (func_800A8B0C/func_800A8934/func_800A89E0) indexes it as dense u32
++     * ROM offsets. Reading half-slots produced a garbage 15 MB size and the
++     * cache allocator's free-list walk span forever (the measured "menu
++     * scene freezes with a black fade overlay" hang: main thread parked in
++     * func_800A8358 under func_80151338_ovl4). Compact the low halves in
++     * place (every table value is below 4 GiB) and restore entry 57 to its
++     * real ROM offset, which the symbolization destroyed. */
++    {
++        static int repacked = 0;
++        extern void *D_800C96D8[];
++        if (!repacked) {
++            u32 *dst = (u32 *)D_800C96D8;
++            u32 n = D_800D0124[3] + 1; /* entries = image count + 1 */
++            u32 t;
++            repacked = 1;
++            for (t = 0; t < n; t++) {
++                dst[t] = (u32)(uintptr_t)D_800C96D8[t];
++            }
++            dst[57] = 0x0003C3B0;
++        }
++    }
++#endif
+     func_800A82C0();
+     for (i = 0; i < 8; i++) {
+         for (j = 0; j < D_800D00E4[i]; j++) {
+@@ -460,6 +631,45 @@
      return (*temp_v1)[idx];
  }
  
@@ -2001,7 +2451,7 @@
  struct BGHeader *func_800A8C40(u32 arg0) {
      struct BGHeader ***temp_a2;
      s32 idx;
-@@ -475,6 +514,7 @@
+@@ -475,6 +685,7 @@
      }
      return (*temp_a2)[idx];
  }
@@ -2009,7 +2459,7 @@
  
  #ifdef NON_MATCHING
  // 2/33 (was 9): reusing `arg0` as the scratch for the masked, doubled index --
-@@ -853,6 +893,1081 @@
+@@ -853,6 +1064,1093 @@
      }
      return temp_v0;
  }
@@ -2927,11 +3377,23 @@
 +    gsw_put(&g, 0, (u32)(uintptr_t)n);
 +
 +    /* +0x18: animation refs pointer -- only when the count at +0x14 and the
-+     * word itself are both nonzero. */
++     * word itself are both nonzero. PORT extra: the section it points at is
++     * an array of numAnimations u32 anim-block ids, and its compiled
++     * consumers read it natively (func_800F6E30 walks all of them,
++     * func_800F72B0 reads [0]/[1] through seg[6]), so byte-swap the ids in
++     * place. gsw_w32 is bitmap-guarded, so nothing that another walk
++     * already made native can be double-swapped. */
 +    if (geo_rd(blob + 0x14) != 0) {
 +        w = geo_rd(blob + 0x18);
 +        if (w != 0) {
-+            gsw_put(&g, 0x18, (u32)(uintptr_t)(blob + (w & 0xFFFFFF)));
++            u32 acnt = geo_rd(blob + 0x14);
++            u32 aoff = w & 0xFFFFFF;
++            gsw_put(&g, 0x18, (u32)(uintptr_t)(blob + aoff));
++            while (acnt != 0 && aoff + 4 <= g.size) {
++                gsw_w32(&g, aoff);
++                aoff += 4;
++                acnt--;
++            }
 +        }
 +    }
 +
@@ -3091,7 +3553,132 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9250.s")
  #endif
-@@ -976,6 +2091,34 @@
+@@ -932,6 +2230,124 @@
+     }
+     return sp24;
+ }
++#elif defined(PORT)
++/* PORT: the ANIM BLOCK loader/relocator, written from
++ * asm/nonmatchings/ovl1/ovl1_3/func_800A94F4.s in the style of
++ * func_800A9250's PORT arm above (be32 reads of the raw ROM bytes, native
++ * pointer writes).
++ *
++ * The N64 function DMAs bank D_800D0184[id>>16]'s anim block (id&0xFFFF)
++ * in -- table at bank +0x10, one u32 ROM offset per entry, [i+1]-[i] is the
++ * size, dma source is entry + bank->animROMOffset -- and then walks the
++ * small relocation table in the header:
++ *   +0x00  offset -> becomes a pointer into the block (unconditionally)
++ *   +0x04  block kind (0 = model anims, 1 = texture anims, 2 = camera)
++ *   +0x08  relocation count N
++ *   +0x0C  N u32 slots; each slot holds an offset X. The slot is rewritten
++ *          to (base + X), and the word AT X is itself an offset that is
++ *          rewritten to a pointer the same way.
++ * Everything the reloc table does not touch is AnimCmd stream data: u32
++ * command words and f32 values, consumed via `union AnimCmd { u32 w; f32 f;
++ * void *ptr; }` -- including the jump/goto targets inside the streams,
++ * which the table DOES touch (raw ROM cannot hold a VA, so every ->ptr a
++ * consumer reads must appear in the table).
++ *
++ * The LP64 wrinkle: every consumer walks this data through AnimCmd (8
++ * bytes on the host: `ptr` is 64-bit and w/f alias its low half) and
++ * through AnimCmd** and AnimCmd*** pointer arrays (8-byte stride). So instead
++ * of relocating in place, this arm WIDENS the block: every 4-byte word of
++ * the original becomes one 8-byte cell (original offset X lives at 2*X),
++ * scalar words byte-swapped into the low half with a zero high half --
++ * which is exactly the u32 w / f32 f view little-endian AnimCmd expects --
++ * and every reloc-table word rewritten as a full native pointer to the
++ * widened offset of its target. All consumers then work unmodified:
++ *   - animSetModelTreeAnimation / func_800B21FC / func_800B2288 /
++ *     animGetTotalDuration walk AnimCmd** and AnimCmd*** arrays with host
++ *     stride, and the cells ARE host-stride;
++ *   - animProcessModelAnimation's `animList->w/.f` reads the low halves,
++ *     `animList->ptr` (ANIM_CMD_SET_ANIMATION/JUMP/13) reads relocated
++ *     cells that hold real host pointers;
++ *   - `*(u32 *)block` / `*(GObj **)block` header reads (func_800AAF34,
++ *     func_800A9DE4 and friends, plylib's DestructAnimBank) both see the
++ *     +0x00 pointer, because the whole game arena sits below 4 GiB;
++ *   - struct AnimBlock->unk4 reads land on byte +8 on LP64, which is where
++ *     the widened kind word lives (func_800A9C78 works unchanged;
++ *     func_800A9B48 indexes with a u32* and gets a one-line PORT fix).
++ * The doubled allocation comes from the same cache the N64 block used. */
++
++/* The in-repo libc shims (include/libc) don't declare these. */
++extern void *malloc(size_t);
++extern void *memset(void *, int, size_t);
++extern void pc_animload_debug(u32 id, u32 bytes, u32 kind, u32 relocs, const void *blk);
++
++u32 *func_800A94F4(s32 arg0) {
++    struct BankHeader *bank;
++    u32 *entry;
++    u32 rom;
++    u32 nbytes; /* packed payload bytes, as the N64 DMA'd them */
++    u32 nwords;
++    u8 *raw;    /* temporary big-endian copy straight off the cartridge */
++    u32 *cells; /* the widened block handed to the game */
++    u32 i;
++    u32 count;
++
++    bank = D_800D0184[(u32)arg0 >> 16];
++    entry = bank->animBlockTable + (arg0 & 0xFFFF);
++    rom = (u32)(uintptr_t)bank->animROMOffset;
++    nbytes = (entry[1] - entry[0]) & 0xFFFFFC;
++    nwords = nbytes >> 2;
++
++    cells = (u32 *)func_800A8358((s32)((nbytes * 2) | 2));
++    raw = malloc(nbytes < 0x10 ? 0x10 : nbytes);
++    if (raw == NULL) {
++        /* Cannot happen in practice; a zeroed header at least makes every
++         * consumer see "no anims" instead of reading junk. */
++        memset(cells, 0, nbytes * 2);
++        return cells;
++    }
++    dma_read(entry[0] + rom, raw, nbytes);
++
++    /* widen: cell i = native value of word i, high half zero */
++    for (i = 0; i < nwords; i++) {
++        cells[i * 2] = geo_rd(raw + i * 4);
++        cells[i * 2 + 1] = 0;
++    }
++
++    /* +0x00: unconditionally an offset -> pointer */
++    if (nwords != 0) {
++        u32 off = geo_rd(raw + 0);
++        if ((off & 3) == 0 && off < nbytes) {
++            *(u64 *)&cells[0] = (u64)(uintptr_t)((u8 *)cells + off * 2);
++        }
++    }
++
++    /* reloc table: N slots at +0x0C; slot -> pointer, *target -> pointer.
++     * Targets decode from the pristine BE copy, so a duplicated table
++     * entry stays idempotent instead of double-relocating. */
++    count = (nwords > 2) ? geo_rd(raw + 8) : 0;
++    for (i = 0; i < count; i++) {
++        u32 slot = 0xC + i * 4;
++        u32 off;
++        u32 tgt;
++        if (slot + 4 > nbytes) {
++            break;
++        }
++        off = geo_rd(raw + slot);
++        if ((off & 3) != 0 || off + 4 > nbytes) {
++            continue;
++        }
++        *(u64 *)&cells[slot / 2] = (u64)(uintptr_t)((u8 *)cells + off * 2);
++        tgt = geo_rd(raw + off);
++        if ((tgt & 3) == 0 && tgt < nbytes) {
++            *(u64 *)&cells[off / 2] = (u64)(uintptr_t)((u8 *)cells + tgt * 2);
++        }
++    }
++
++    pc_animload_debug((u32)arg0, nbytes, nwords > 1 ? cells[2] : 0, count, cells);
++
++    free(raw);
++    return cells;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A94F4.s")
+ #endif
+@@ -976,6 +2392,34 @@
      }
      return arg0;
  }
@@ -3126,7 +3713,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9648.s")
  #endif
-@@ -1050,6 +2193,45 @@
+@@ -1050,6 +2494,45 @@
      func_800A9A2C(omCurrentObj->objId);
      func_800A9648(sp1C);
  }
@@ -3172,6 +3759,64 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9864.s")
  #endif
+@@ -1077,7 +2560,17 @@
+         D_800DFBD0[omCurrentObj->objId] = (struct DObj **)-1;
+         return;
+     }
++#ifdef PORT
++    /* This table is filled as DObj* entries (func_8000F980/func_8000FB10's
++     * `*arg2++ = dobj`), which are 8 bytes on the LP64 host: sizing it at
++     * count*4 made every model bind overflow its cache block by count*4
++     * bytes and shred the neighboring free-list headers (measured: DObj
++     * pointers 0x14a8xxx sitting in a bin-1 CacheLine's size field). */
++    D_800DFBD0[omCurrentObj->objId] =
++        (struct DObj **)func_800A8358((s32)((temp_v1 * sizeof(struct DObj *)) | 1));
++#else
+     D_800DFBD0[omCurrentObj->objId] = (struct DObj **)func_800A8358((temp_v1 * 4) | 1);
++#endif
+ }
+ 
+ // `arg0 &= 0xFFFF;` as the scratch is load-bearing -- see func_800A89E0.
+@@ -1108,7 +2601,14 @@
+     u32 temp_v0_2;
+ 
+     temp_v0 = func_800A94F4(arg0);
++#ifdef PORT
++    /* The PORT loader returns a WIDENED block (8-byte cells, see the
++     * func_800A94F4 PORT arm): the kind word that lived at byte +4 lives at
++     * byte +8 (low half of cell 1). */
++    temp_a2 = temp_v0[2];
++#else
+     temp_a2 = temp_v0[1];
++#endif
+     if (temp_a2 != 0) {
+         temp_v1 = omCurrentObj;
+         var_a0 = &D_800DF850[temp_v1->objId];
+--- a/src/ovl1/ovl1_6.c
++++ b/src/ovl1/ovl1_6.c
+@@ -49,7 +49,22 @@
+     D_800DEF90[track] = NULL;
+     D_800DF150[track] = NULL;
+ 
++#ifdef PORT
++    /* LP64: the N64 line below does 8-byte pointer stores through two arrays
++     * whose entries the rest of the code treats as 4-byte u32 slots.
++     * Through D_800DF850 (u32[]) that clobbers the NEXT track's entry, and
++     * through D_800DF690's union it fills the slot's high half with
++     * 0xFFFFFFFF -- which every later `.as_u32p` deref picks up on top of a
++     * 32-bit block pointer stored via `.as_u32` (measured fault:
++     * as_u32p == 0xffffffff0150a0a8 in func_800A9F98). Store each slot at
++     * its own width; the union's high half stays zero, so 8-byte .as_u32p
++     * reads of a 32-bit game-arena pointer are exact. */
++    gSegment4StartArray[track] = (u32 *) -1;
++    D_800DF690[track].as_u32 = -1;
++    D_800DF850[track] = -1;
++#else
+     gSegment4StartArray[track] = D_800DF690[track].as_u32p = *(u32 **) &D_800DF850[track] = (u32 *) -1;
++#endif
+ 
+     *(u32 *) &D_800E02D0[track] = *(u32 *) &D_800DFF50[track] = *(u32 *) &D_800E0110[track] = -1;
+ 
 --- a/src/ovl1/ovl1_7.c
 +++ b/src/ovl1/ovl1_7.c
 @@ -269,6 +269,23 @@
@@ -3466,6 +4111,167 @@
  
  // The `q` pointer local and the `n ^ 0` are LOAD-BEARING (permuter result,
  // applied verbatim): `q` forks the extra source-level temp IDO needs to keep
+--- a/src/ovl2/ovl2.c
++++ b/src/ovl2/ovl2.c
+@@ -219,6 +219,15 @@
+     utilSetRectColorFullScreen(0, 0, 0);
+     utilSpawnRect(0xFF, -0x10, 0);
+ }
++#elif defined(PORT)
++/* PORT SCAFFOLD, NOT A PORT: this is the in-level/demo scene's postInit.
++ * The real body (m2c sketch above) needs func_800F78E4's level-config
++ * loader first (D_801290D8 stays NULL without it, and the music selection
++ * below dereferences it). Until that lands, a no-op keeps the attract
++ * cycle alive -- the demo scene ticks black instead of aborting the whole
++ * run through the weak stub. */
++void func_800F64B0(void) {
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2/func_800F64B0.s")
+ #endif
+@@ -270,6 +279,17 @@
+     omUpdateAll();
+     func_800F629C();
+ }
++#elif defined(PORT)
++/* PORT SCAFFOLD, NOT A PORT: per-frame update of the in-level/demo scene
++ * (pairs with the func_800F64B0 scaffold above). With the setup scaffolded
++ * out, this scene owns no objects and the track/config globals it would
++ * read are stale from the previous scene (func_800F61A0's track walk
++ * dereferences D_800DE350 entries, and its func_800F7578 branch is still a
++ * weak stub), so the only safe per-frame body is nothing -- the measured
++ * behavior of the weak stub under KIRBY_PC_TRACE, which kept the attract
++ * cycle alive for minutes. */
++void func_800F6830(void) {
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2/func_800F6830.s")
+ #endif
+--- a/src/ovl2/ovl2_2.c
++++ b/src/ovl2/ovl2_2.c
+@@ -148,6 +148,106 @@
+     *(&D_800DF310 + var_v1) = &func_800F6E0C;
+     curObjSleepForever();
+ }
++#elif defined(PORT)
++/* PORT: still assembly on the matching build; the m2c sketch above is not
++ * compilable. Behavioral port from
++ * asm/nonmatchings/ovl2/ovl2_2/func_800F6E30.s -- the menu/level scene
++ * setup process: parks the track's process-5 slot, loads the scene's geo
++ * blob (func_800A9864, already ported), places the scene's particle
++ * emitters from the layout's second node array (func_800A2550, PORT arm in
++ * ovl1.c), then walks the geo header's ANIMATION REFS section (+0x14 count
++ * at seg[5], +0x18 pointer at seg[6] -- both native after func_800A9250's
++ * PORT normalizer) loading every anim block: kind 0 -> model anim bank
++ * (D_800DF690 / overflow bank D_8012E7B0), kind 1 -> texture anim bank
++ * (D_800DF850 / overflow D_8012E7B4), kind 2 -> camera track + camera anim
++ * (func_800AAF34).
++ *
++ * LP64 notes: anim blocks come back WIDENED from func_800A94F4's PORT arm,
++ * so their kind word sits at byte +8 (u32 cell index 2) and their +0x00
++ * pointer is read through the low u32 half (the game arena lives below
++ * 4 GiB). D_8012E7B0/D_8012E7B4 are the two words plylib's
++ * DestructAnimBank reads; on this build they are separate 8-byte-capable
++ * bss slots, written as full host pointers. */
++
++void func_800F7258(s32);
++void func_800AF980(s32);
++void func_800B3070(s32, f32);
++void func_800A9864(u32, s32, s32);
++void func_800A2550(void *, void *);
++u32 *func_800A94F4(s32);
++void func_800AEE20(struct GObj *, f32);
++void func_800AEEB4(struct GObj *, f32);
++void func_800FA414(s32);
++void func_800AAF34(s32, s32, f32);
++void func_801129AC(void);
++void func_801129DC(void);
++extern f32 gameTicksPerDraw;
++extern u32 D_800DFA10[];
++extern s32 D_801290D0;
++extern s32 D_800D6E44;
++extern void *D_8012E7B0[];
++extern void *D_8012E7B4[];
++
++void func_800F6E30(UNUSED s32 arg0) {
++    u32 *seg;
++    u32 i;
++    s32 gotModel = 0;
++    s32 gotTexture = 0;
++
++    setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
++    D_800DEF90[omCurrentObj->objId] = (void (*)(s32))func_800F6E04;
++    func_800AF980(0x18);
++    D_800DF150[omCurrentObj->objId] = (void (*)(struct GObj *))func_800F7258;
++    func_800A9864(((u32 *)D_801290D8)[0], 0x26, 0x10);
++    func_800A2550((void *)(uintptr_t)D_800DFA10[D_801290D0], NULL);
++    func_800B3070(0x10, gameTicksPerDraw);
++
++    seg = gSegment4StartArray[omCurrentObj->objId];
++    for (i = 0; i < seg[5]; i++) {
++        s32 id = ((s32 *)(uintptr_t)seg[6])[i];
++        u32 *blk = func_800A94F4(id);
++
++        switch (blk[2]) { /* widened kind word (byte +8) */
++            case 0:
++                if (gotModel == 0) {
++                    D_800DF690[omCurrentObj->objId] = (u32)(uintptr_t)blk;
++                    D_800DFF50[omCurrentObj->objId] = id;
++                    func_800AEE20((struct GObj *)(uintptr_t)*blk, 0.0f);
++                    D_8012E7B0[0] = NULL;
++                } else {
++                    D_8012E7B0[0] = blk;
++                }
++                gotModel++;
++                break;
++            case 1:
++                if (gotTexture == 0) {
++                    D_800DF850[omCurrentObj->objId] = (u32)(uintptr_t)blk;
++                    D_800E0110[omCurrentObj->objId] = id;
++                    func_800AEEB4((struct GObj *)(uintptr_t)*blk, 0.0f);
++                    D_8012E7B4[0] = NULL;
++                } else {
++                    D_8012E7B4[0] = blk;
++                }
++                gotTexture++;
++                break;
++            case 2:
++                func_800FA414(0x8000000D);
++                func_800AAF34(0x10, id, 0.0f);
++                func_801129AC();
++                func_801129DC();
++                if ((D_800BE500 == 1) && (D_800BE504 == 0)) {
++                    D_800D6E44 = 1;
++                }
++                if ((D_800BE500 == 3) && (D_800BE504 == 0)) {
++                    D_800D6E44 = 2;
++                }
++                break;
++        }
++        seg = gSegment4StartArray[omCurrentObj->objId];
++    }
++    D_800DF310[omCurrentObj->objId] = (void (*)(s32, s32, f32))func_800F6E0C;
++    curObjSleepForever();
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F6E30.s")
+ #endif
+--- a/src/ovl20/tamper_check.c
++++ b/src/ovl20/tamper_check.c
+@@ -35,6 +35,7 @@
+     osWritebackDCache(&D_80300170, 0xC0);
+     osInvalICache(&D_80300170, 0xC0);
+     gGameTampered = 0;
++#ifndef PORT
+     /* PORT: the check decodes and executes MIPS machine code in place,
+      * which cannot run on the host; calling the weak stub instead would
+      * either abort the run or flag the game as tampered. The port is not a
+@@ -42,4 +43,5 @@
+     if ((*func_80300170)() == 0) {
+         gGameTampered = 1;
+     }
++#endif
+ }
 --- a/src/ovl4/ovl4_3.c
 +++ b/src/ovl4/ovl4_3.c
 @@ -684,7 +684,18 @@
@@ -3544,3 +4350,135 @@
  #include "ovl1/ovl1_5.h"
  #include "track_arrays.h"
  #include "ovl1/ovl1_7.h"
+--- a/src/ovl6/ovl6.c
++++ b/src/ovl6/ovl6.c
+@@ -837,6 +837,18 @@
+             }
+             i = 0;
+             if (var_v0->numMatrices != 0) {
++#ifdef PORT
++                /* The matching build reaches the DObj's matrices array as
++                 * raw word 22 off the struct base; LP64 field offsets moved,
++                 * so use the named field (same walk as func_80152D00_ovl6). */
++                do {
++                    mtx = var_v0->matrices[i];
++                    i++;
++                    if (mtx->kind == 0x1C) {
++                        mtx->unk05 = var_v1;
++                    }
++                } while (i < var_v0->numMatrices);
++#else
+                 walk = (OMMtx **)var_v0;
+                 do {
+                     mtx = walk[22];
+@@ -846,6 +858,7 @@
+                     }
+                     walk++;
+                 } while (i < var_v0->numMatrices);
++#endif
+             }
+             if (var_v0->firstChild != NULL) {
+                 var_v0 = var_v0->firstChild;
+@@ -1102,7 +1115,14 @@
+ }
+ 
+ void func_80153F00_ovl6(void) {
++#ifdef PORT
++    /* The script blobs keep their SECOND word as the full N64 u32 value
++     * (see pc_ovl6_fix_scripts), so the N64's low-half ->drawRate read is
++     * unk4 & 0xFFFF here. */
++    gtlSetUpdateDrawRate(1, (u16)D_8015A560_ovl6->unk4);
++#else
+     gtlSetUpdateDrawRate(1, D_8015A560_ovl6->drawRate);
++#endif
+ }
+ 
+ SPObj *func_80153F2C_ovl6(void) {
+@@ -1522,9 +1542,87 @@
+     func_800AC610();
+ }
+ 
++#ifdef PORT
++/* PORT: byte-order fixup for the movie scripts.
++ *
++ * The regenerated PC data (build/pc/data/ovl6_ovl6.data.c) emits the movie
++ * script blobs (D_80154F30_ovl6 & co.) as u32 words holding the N64 word
++ * VALUES. That is correct for every u32 field, but each script entry is
++ * really { u16 unk0; u8 unk2; u8 unk3; u32 unk4; }: on this little-endian
++ * host the struct reads pull unk0 from the LOW half and unk2/unk3 from the
++ * HIGH bytes of the first word, so every timestamp read 0, every opcode
++ * dispatched as byte 2 of the timestamp (usually op 0 -- which is why the
++ * sequencer looped func_80152DB8_ovl6 spawning actor track 0 forever and
++ * then crashed on track -1). This pass repacks each entry's FIRST word once
++ * so the natural little-endian struct reads yield the N64 field values;
++ * the second word stays as-is (it is consumed as a full u32 -- model ids,
++ * colors, frame counts; the ->drawRate half-word read has its own PORT
++ * read-site fix in func_80153F00_ovl6).
++ *
++ * D_80158E30_ovl6/D_80158E60_ovl6 are emitted as POINTER arrays instead
++ * (they embed a &script operand for op 0x21), which on LP64 gives them a
++ * 16-byte entry stride no struct walk here can read; they belong to the
++ * later movie compilations, not the boot intro, and are skipped (running
++ * one of those movies needs its own port pass).
++ *
++ * D_80154E48_ovl6 (the inline 2-entry script func_80153E1C_ovl6 runs) is
++ * emitted as raw N64 BYTES instead: its packed fields are already right on
++ * the host and only its u32 operand words need a swap; that is folded into
++ * the first call here. */
++extern void *D_80158E30_ovl6[];
++extern void *D_80158E60_ovl6[];
++
++static void pc_ovl6_fix_scripts(UnkStruct8015A560_ovl6 **list) {
++    static const void *seen[256];
++    static int nseen;
++    static int e48done;
++
++    if (!e48done) {
++        u32 *e48 = (u32 *)D_80154E48_ovl6;
++        e48done = 1;
++        e48[1] = __builtin_bswap32(e48[1]);
++        e48[3] = __builtin_bswap32(e48[3]);
++    }
++    for (; *list != NULL; list++) {
++        u32 *w = (u32 *)*list;
++        int i;
++        int already = 0;
++
++        if (w == (u32 *)D_80158E30_ovl6 || w == (u32 *)D_80158E60_ovl6) {
++            continue; /* pointer-stride blob, see above */
++        }
++        for (i = 0; i < nseen; i++) {
++            if (seen[i] == (void *)w) {
++                already = 1;
++                break;
++            }
++        }
++        if (already) {
++            continue;
++        }
++        if (nseen < (int)(sizeof(seen) / sizeof(seen[0]))) {
++            seen[nseen++] = (void *)w;
++        }
++        for (i = 0; i < 0x1000; i++, w += 2) {
++            u32 raw = w[0];
++            u32 op = (raw >> 8) & 0xFF;
++            w[0] = (raw >> 16) | ((raw & 0xFF00) << 8) | ((raw & 0xFF) << 24);
++            if (op == 0x22) {
++                break;
++            }
++        }
++    }
++}
++#endif /* PORT */
+ 
+ void func_80154C38_ovl6(s32 arg0) {
+     D_8015A564_ovl6 = D_8015A3B4_ovl6[arg0];
++#ifdef PORT
++    {
++        UnkStruct8015A560_ovl6 **q = D_8015A564_ovl6;
++        pc_ovl6_fix_scripts(q);
++    }
++#endif
+     D_8015A560_ovl6 = *D_8015A564_ovl6;
+ }
+ 

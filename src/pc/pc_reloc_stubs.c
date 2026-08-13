@@ -104,6 +104,16 @@ void pc_geoload_debug(unsigned int id, unsigned int mode, unsigned int size,
             id, mode, size, blob, layoutOff);
 }
 
+/* Anim bank load diagnostics (func_800A94F4's PORT arm). */
+void pc_animload_debug(unsigned int id, unsigned int bytes, unsigned int kind,
+                       unsigned int relocs, const void *blk) {
+    if (!pc_sched_debug_enabled()) {
+        return;
+    }
+    fprintf(stderr, "[anim] id=%08x bytes=%06x kind=%u relocs=%u blk=%p\n",
+            id, bytes, kind, relocs, blk);
+}
+
 void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const void *pal) {
     const unsigned char *r = (const unsigned char *)raw;
     const unsigned char *i = (const unsigned char *)img;
