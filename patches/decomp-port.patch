@@ -339,7 +339,66 @@
  #endif
 --- a/src/main/anim.c
 +++ b/src/main/anim.c
-@@ -1732,11 +1732,20 @@
+@@ -1102,6 +1102,32 @@
+                                 interp = 0x100;
+                             }
+ 
++#ifdef PORT
++                            /* PORT: color tracks smuggle a packed RGBA word
++                             * through the f32 startVal/goalVal (bit-preserving
++                             * f32 copies from AnimCmd->f). The N64 code lerps
++                             * two channels at a time by planting bytes in a
++                             * big-endian ColorPack and letting the u32
++                             * multiply shift them into place; on the LE host
++                             * that arithmetic overflows and, since the anim
++                             * loader byte-swapped the word to native
++                             * 0xRRGGBBAA, the in-memory byte order is
++                             * A,B,G,R -- so index 3-i where the N64 read i,
++                             * and lerp each channel in plain arithmetic
++                             * (lerp256 >> 8 is exactly what the BE trick's
++                             * byte extraction computed). */
++                            {
++                                const u8* sb = (const u8*) &aobj->startVal;
++                                const u8* gb = (const u8*) &aobj->goalVal;
++
++                                color.color.r = (u8) ((((0x100 - interp) * sb[3]) + (interp * gb[3])) >> 8);
++                                color.color.g = (u8) ((((0x100 - interp) * sb[2]) + (interp * gb[2])) >> 8);
++                                color.color.b = (u8) ((((0x100 - interp) * sb[1]) + (interp * gb[1])) >> 8);
++                                color.color.a = (u8) ((((0x100 - interp) * sb[0]) + (interp * gb[0])) >> 8);
++                                (void) sp38;
++                                (void) sp34;
++                            }
++#else
+                             sp34.pack = 0;
+                             sp38.pack = 0;
+ 
+@@ -1128,9 +1154,25 @@
+ 
+                             color.color.b = sp38.color.r;
+                             color.color.a = sp38.color.b;
++#endif
+                             break;
+                         case 1:
++#ifdef PORT
++                            /* PORT: same A,B,G,R in-memory byte order as the
++                             * lerp above -- reverse into the ColorPack's
++                             * r,g,b,a memory layout the render.c byte readers
++                             * expect. */
++                            {
++                                const u8* pb = (const u8*) (aobj->Rduration <= aobj->timer ? &aobj->goalVal : &aobj->startVal);
++
++                                color.color.r = pb[3];
++                                color.color.g = pb[2];
++                                color.color.b = pb[1];
++                                color.color.a = pb[0];
++                            }
++#else
+                             color = (aobj->Rduration <= aobj->timer ? *(ColorPack*) &aobj->goalVal : *(ColorPack*) &aobj->startVal);
++#endif
+                             break;
+                     }
+ 
+@@ -1732,11 +1774,20 @@
  
      while (arg1->unk_00 != ARRAY_COUNT(sp44)) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -360,7 +419,7 @@
          if (arg1->unk_00 & 0xF000) {
              omDObjAppendMtx(dobj, (u32)MTX_TYPE_TRANSLATE, 0);
          }
-@@ -1885,11 +1894,20 @@
+@@ -1885,11 +1936,20 @@
  
      while (arg1->unk_00 != 18) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -381,7 +440,7 @@
  
          if (arg1->unk_00 & 0xF000) {
              func_8000F754(dobj, arg3, arg4, arg5, arg1->unk_00 & 0xF000);
-@@ -1924,11 +1942,20 @@
+@@ -1924,11 +1984,20 @@
  
      while (arg1->unk_00 != 18) {
          trunc = arg1->unk_00 & 0xFFF;
@@ -402,7 +461,7 @@
          if (arg1->unk_00 & 0xF000) {
              func_8000F754(dobj, arg4, arg5, arg6, arg1->unk_00 & 0xF000);
          } else {
-@@ -1939,6 +1966,24 @@
+@@ -1939,6 +2008,24 @@
          dobj->scale.v = arg1->scale;
  
          if (arg2 != NULL) {
@@ -427,7 +486,7 @@
              if (*arg2 != NULL) {
                  csr = *arg2;
                  msub = *csr;
-@@ -1949,6 +1994,7 @@
+@@ -1949,6 +2036,7 @@
                  }
              }
              arg2++;
@@ -435,7 +494,7 @@
          }
          if (arg3 != NULL) {
              *arg3 = dobj;
-@@ -1966,6 +2012,20 @@
+@@ -1966,6 +2054,20 @@
      dobj = arg0->data.dobj;
      while (dobj != NULL) {
          if (arg1 != NULL) {
@@ -456,7 +515,7 @@
              if (*arg1 != NULL) {
                  csr = *arg1;
                  msub = *csr;
-@@ -1976,6 +2036,7 @@
+@@ -1976,6 +2078,7 @@
                  }
              }
              arg1++;
@@ -1221,6 +1280,40 @@
          switch ((s32) (intptr_t) mesg) {
              case 1:
                  scHandleVRetrace();
+--- a/src/main/vi.c
++++ b/src/main/vi.c
+@@ -97,7 +97,31 @@
+ }
+ 
+ void viApplyScreenSettings(ScreenSettings* settings) {
++#ifdef PORT
++    /* PORT: every ScreenSettings the game passes here is a data-blob symbol
++     * the PC data generator emits as a WIDENED pointer array -- one 8-byte
++     * void* slot per N64 word (e.g. build/pc/data/ovl6_ovl6.data.c's
++     * D_80154E80_ovl6). The LP64 struct's pointer fields (cfb1..3, zBuffer,
++     * offsets 0/8/16/24) coincide with slots 0..3, so pointer reads AND the
++     * runtime pointer stores some scenes do first (ovl2's `.zBuffer = ...`)
++     * stay correct -- but screenWidth (offset 32) lands on slot 4's LOW half,
++     * screenHeight (offset 36) on slot 4's HIGH half (always 0), and flags
++     * (offset 40) on slot 5 (the real height). The zero height then poisons
++     * gCurrScreenHeight: renderInitCamera clamps every camera scissor's lry
++     * to gCurrScreenHeight - ... = 0, the scissor goes inverted-empty, and
++     * every 3D triangle in the game is scissored out (2D rect paths don't
++     * use the camera scissor, which is why the logos/title still drew).
++     * Read the widened slots directly instead. */
++    {
++        void** slots = (void**)settings;
++
++        viSetCFB(slots[0], slots[1], slots[2]);
++        gZBuffer = (u16*)slots[3];
++        viSetScreenParams((s32)(uintptr_t)slots[4], (s32)(uintptr_t)slots[5], (u32)(uintptr_t)slots[6]);
++    }
++#else
+     viSetCFB(settings->cfb1, settings->cfb2, settings->cfb3);
+     gZBuffer = settings->zBuffer;
+     viSetScreenParams(settings->screenWidth, settings->screenHeight, settings->flags);
++#endif
+ }
 --- a/src/ovl1/ovl1.c
 +++ b/src/ovl1/ovl1.c
 @@ -147,6 +147,43 @@

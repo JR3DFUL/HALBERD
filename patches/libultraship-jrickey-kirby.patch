@@ -1,8 +1,105 @@
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..8b08f44 100644
+index 6aad126..141f2dd 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
-@@ -2139,6 +2139,32 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
+@@ -1463,6 +1463,32 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
+         rawVMin, rawVMax, normUMin, normUMax, normVMin, normVMax, x0, y0, z0, w0, x1, y1, z1, w1, x2, y2, z2, w2);
+ }
+ 
++
++// KIRBY_PC_DRAWLOG texture-upload census: name, source addr, size, and how
++// much of the decoded RGBA output is non-black / non-transparent.
++static void KirbyDumpUpload(const char* what, const uint8_t* addr, const uint8_t* buf, uint32_t w, uint32_t h) {
++    extern bool gKirbyPcDrawLogActive();
++    static const bool census = getenv("KIRBY_PC_TEXCENSUS") != nullptr;
++    if (!gKirbyPcDrawLogActive() && !census) {
++        return;
++    }
++    uint32_t n = w * h, nz = 0, anz = 0;
++    for (uint32_t i = 0; i < n; i++) {
++        if (buf[4 * i] | buf[4 * i + 1] | buf[4 * i + 2]) {
++            nz++;
++        }
++        if (buf[4 * i + 3]) {
++            anz++;
++        }
++    }
++    fprintf(stderr, "[dlog tex %s] addr=%p %ux%u rgb_nz=%.2f a_nz=%.2f src8=", what, (const void*)addr, w, h,
++            n ? (double)nz / n : 0.0, n ? (double)anz / n : 0.0);
++    for (int i = 0; i < 8; i++) {
++        fprintf(stderr, "%02x", addr[i]);
++    }
++    fprintf(stderr, "\n");
++}
++
+ void Interpreter::ImportTextureRgba16(int tile, bool importReplacement) {
+     const RawTexMetadata* metadata = &mRdp->loaded_texture[mRdp->texture_tile[tile].tmem_index].raw_tex_metadata;
+     const uint8_t* addr =
+@@ -1561,6 +1587,7 @@ void Interpreter::ImportTextureRgba16(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("RGBA16", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1628,6 +1655,7 @@ void Interpreter::ImportTextureRgba32(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("RGBA32", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1696,6 +1724,7 @@ void Interpreter::ImportTextureIA4(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("IA4", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1753,6 +1782,7 @@ void Interpreter::ImportTextureIA8(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("IA8", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1815,6 +1845,7 @@ void Interpreter::ImportTextureIA16(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("IA16", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1882,6 +1913,7 @@ void Interpreter::ImportTextureI4(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("I4", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -1934,6 +1966,7 @@ void Interpreter::ImportTextureI8(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("I8", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -2044,6 +2077,7 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("CI4", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -2139,6 +2173,32 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
          }
      }
  
@@ -35,28 +132,119 @@ index 6aad126..8b08f44 100644
      Ssb64RenderDiagLogUpload("CI8", metadata, addr, tile, mRdp->texture_tile[tile].tmem_index, width, height);
      if (!importReplacement) {
          if (GfxHiResHookFn hook = gHiResHook) {
-@@ -2954,6 +2980,20 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
+@@ -2152,6 +2212,7 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
+             }
+         }
+     }
++    KirbyDumpUpload("CI8", addr, mTexUploadBuffer, width, height);
+     mRapi->UploadTexture(mTexUploadBuffer, width, height);
+ }
+ 
+@@ -2954,6 +3015,59 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
      struct LoadedVertex* v3 = &mRsp->loaded_vertices[vtx3_idx];
      struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
  
++    {
++        extern bool gKirbyPcDrawLogActive();
++        extern int gKirbyPcFrameNo;
++        if (gKirbyPcDrawLogActive()) {
++            static int lastF = -1;
++            static int nF = 0;
++            if (gKirbyPcFrameNo != lastF) {
++                lastF = gKirbyPcFrameNo;
++                nF = 0;
++            }
++            if (nF++ < 1200) {
++                fprintf(stderr,
++                        "[dlog tri%s f%d] ndc=(%.2f,%.2f)(%.2f,%.2f)(%.2f,%.2f) col=(%02x%02x%02x%02x) "
++                        "comb=%016llx oml=%08x omh=%08x prim=(%02x%02x%02x%02x) env=(%02x%02x%02x%02x) fmt=%d\n",
++                        is_rect ? "R" : "", gKirbyPcFrameNo, v1->w != 0 ? v1->x / v1->w : 999,
++                        v1->w != 0 ? v1->y / v1->w : 999, v2->w != 0 ? v2->x / v2->w : 999,
++                        v2->w != 0 ? v2->y / v2->w : 999, v3->w != 0 ? v3->x / v3->w : 999,
++                        v3->w != 0 ? v3->y / v3->w : 999, v1->color.r, v1->color.g, v1->color.b, v1->color.a,
++                        (unsigned long long)mRdp->combine_mode, mRdp->other_mode_l, mRdp->other_mode_h,
++                        mRdp->prim_color.r, mRdp->prim_color.g, mRdp->prim_color.b, mRdp->prim_color.a,
++                        mRdp->env_color.r, mRdp->env_color.g, mRdp->env_color.b, mRdp->env_color.a,
++                        mRdp->texture_tile[mRdp->first_tile_index].fmt);
++            }
++        }
++    }
++
 +    if (!is_rect && getenv("KIRBY_PC_TRIDEBUG") != nullptr) {
-+        static int tn = 0;
-+        if (tn++ < 120) {
++        extern int gKirbyPcFrameNo;
++        static int lastFrame = -1;
++        static int nThisFrame = 0;
++        if (gKirbyPcFrameNo != lastFrame) {
++            lastFrame = gKirbyPcFrameNo;
++            nThisFrame = 0;
++        }
++        // Print a burst of tris every 30 frames so every scene of the run is
++        // sampled (the old one-shot 120-tri cap only ever showed the first
++        // scene that submitted 3D).
++        if ((gKirbyPcFrameNo % 30) == 0 && nThisFrame++ < 16) {
++            const auto& tile = mRdp->texture_tile[mRdp->first_tile_index];
 +            fprintf(stderr,
-+                    "[tri] ndc=(%.2f,%.2f)(%.2f,%.2f)(%.2f,%.2f) w=(%.2f,%.2f,%.2f) col=(%02x%02x%02x%02x) "
-+                    "comb=%016llx oml=%08x tex0=%d\n",
-+                    v1->w != 0 ? v1->x / v1->w : 999, v1->w != 0 ? v1->y / v1->w : 999,
++                    "[tri f%d] ndc=(%.2f,%.2f)(%.2f,%.2f)(%.2f,%.2f) w=(%.2f,%.2f,%.2f) col=(%02x%02x%02x%02x) "
++                    "comb=%016llx oml=%08x tex0=fmt%d/siz%d uls=%.0f/%.0f prim=(%02x%02x%02x%02x) env=(%02x%02x%02x%02x) "
++                    "gm=%08x\n",
++                    gKirbyPcFrameNo, v1->w != 0 ? v1->x / v1->w : 999, v1->w != 0 ? v1->y / v1->w : 999,
 +                    v2->w != 0 ? v2->x / v2->w : 999, v2->w != 0 ? v2->y / v2->w : 999,
 +                    v3->w != 0 ? v3->x / v3->w : 999, v3->w != 0 ? v3->y / v3->w : 999, v1->w, v2->w, v3->w,
 +                    v1->color.r, v1->color.g, v1->color.b, v1->color.a, (unsigned long long)mRdp->combine_mode,
-+                    mRdp->other_mode_l, mRdp->texture_tile[mRdp->first_tile_index].fmt);
++                    mRdp->other_mode_l, tile.fmt, tile.siz, tile.lrs, tile.lrt, mRdp->prim_color.r,
++                    mRdp->prim_color.g, mRdp->prim_color.b, mRdp->prim_color.a, mRdp->env_color.r, mRdp->env_color.g,
++                    mRdp->env_color.b, mRdp->env_color.a, mRsp->geometry_mode);
 +        }
 +    }
 +
      // if (rand()%2) return;
  
      if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-@@ -3895,11 +3935,30 @@ void Interpreter::GfxSpTexture(uint16_t sc, uint16_t tc, uint8_t level, uint8_t
+@@ -3053,6 +3167,15 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
+     }
+ 
+     if (mRdp->viewport_or_scissor_changed) {
++        {
++            extern bool gKirbyPcDrawLogActive();
++            if (gKirbyPcDrawLogActive()) {
++                fprintf(stderr, "[dlog vp] tri path: vp=(%d,%d %ux%u) sc=(%d,%d %ux%u)\n", (int)mRdp->viewport.x,
++                        (int)mRdp->viewport.y, (unsigned)mRdp->viewport.width, (unsigned)mRdp->viewport.height,
++                        (int)mRdp->scissor.x, (int)mRdp->scissor.y, (unsigned)mRdp->scissor.width,
++                        (unsigned)mRdp->scissor.height);
++            }
++        }
+         if (memcmp(&mRdp->viewport, &mRenderingState.viewport, sizeof(mRdp->viewport)) != 0) {
+             Flush();
+             mRapi->SetViewport(mRdp->viewport.x, mRdp->viewport.y, mRdp->viewport.width, mRdp->viewport.height);
+@@ -3672,6 +3795,9 @@ void Interpreter::AdjustVIewportOrScissor(XYWidthHeight* area) {
+ }
+ 
+ void Interpreter::CalcAndSetViewport(const F3DVp_t* viewport) {
++    extern bool gKirbyPcDrawLogActive();
++    const bool kdlog = gKirbyPcDrawLogActive();
++
+     // 2 bits fraction
+     float width = 2.0f * viewport->vscale[0] / 4.0f;
+     float height = 2.0f * viewport->vscale[1] / 4.0f;
+@@ -3683,7 +3809,17 @@ void Interpreter::CalcAndSetViewport(const F3DVp_t* viewport) {
+     mRdp->viewport.width = width;
+     mRdp->viewport.height = height;
+ 
++    if (kdlog) {
++        fprintf(stderr, "[dlog calcvp] vscale=(%d,%d) vtrans=(%d,%d) pre=(%.1f,%.1f %.1fx%.1f)", viewport->vscale[0],
++                viewport->vscale[1], viewport->vtrans[0], viewport->vtrans[1], x, y, width, height);
++    }
+     AdjustVIewportOrScissor(&mRdp->viewport);
++    if (kdlog) {
++        fprintf(stderr, " post=(%d,%d %ux%u) fbActive=%d cur=%ux%u native=%ux%u win=%ux%u\n", (int)mRdp->viewport.x,
++                (int)mRdp->viewport.y, (unsigned)mRdp->viewport.width, (unsigned)mRdp->viewport.height, (int)mFbActive,
++                mCurDimensions.width, mCurDimensions.height, mNativeDimensions.width, mNativeDimensions.height,
++                mGfxCurrentWindowDimensions.width, mGfxCurrentWindowDimensions.height);
++    }
+ 
+     mRdp->viewport_or_scissor_changed = true;
+ }
+@@ -3895,11 +4031,30 @@ void Interpreter::GfxSpTexture(uint16_t sc, uint16_t tc, uint8_t level, uint8_t
  }
  
  void Interpreter::GfxDpSetScissor(uint32_t mode, uint32_t ulx, uint32_t uly, uint32_t lrx, uint32_t lry) {
@@ -87,7 +275,7 @@ index 6aad126..8b08f44 100644
      mRdp->scissor.x = x;
      mRdp->scissor.y = y;
      mRdp->scissor.width = width;
-@@ -4458,6 +4517,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+@@ -4458,6 +4613,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
  
      AdjustVIewportOrScissor(&default_viewport);
  
@@ -108,10 +296,19 @@ index 6aad126..8b08f44 100644
      mRdp->viewport = default_viewport;
      mRdp->viewport_or_scissor_changed = true;
      mRsp->geometry_mode = 0;
-@@ -4487,6 +4560,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+@@ -4487,6 +4656,29 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
  
  void Interpreter::GfxDpTextureRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry, uint8_t tile, int16_t uls,
                                          int16_t ult, int16_t dsdx, int16_t dtdy, bool flip) {
++    {
++        extern bool gKirbyPcDrawLogActive();
++        if (gKirbyPcDrawLogActive()) {
++            fprintf(stderr, "[dlog texrect] ul=(%d,%d) lr=(%d,%d) fmt=%d comb=%016llx oml=%08x prim=(%02x%02x%02x%02x) env=(%02x%02x%02x%02x)\n",
++                    ulx, uly, lrx, lry, mRdp->texture_tile[tile].fmt, (unsigned long long)mRdp->combine_mode,
++                    mRdp->other_mode_l, mRdp->prim_color.r, mRdp->prim_color.g, mRdp->prim_color.b,
++                    mRdp->prim_color.a, mRdp->env_color.r, mRdp->env_color.g, mRdp->env_color.b, mRdp->env_color.a);
++        }
++    }
 +    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
 +        static int rn = 0;
 +        if (rn++ < 80) {
@@ -129,10 +326,19 @@ index 6aad126..8b08f44 100644
      // Skip draws targeting the Z buffer.  N64 game code sometimes flips the
      // color image to the Z buffer address, draws a texture or fill to it to
      // manipulate depth values (e.g. for an alpha-based stencil that a
-@@ -4615,6 +4702,19 @@ void Interpreter::GfxDpImageRectangle(int32_t tile, int32_t w, int32_t h, int32_
+@@ -4615,6 +4807,28 @@ void Interpreter::GfxDpImageRectangle(int32_t tile, int32_t w, int32_t h, int32_
  }
  
  void Interpreter::GfxDpFillRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
++    {
++        extern bool gKirbyPcDrawLogActive();
++        if (gKirbyPcDrawLogActive()) {
++            fprintf(stderr, "[dlog fill] ul=(%d,%d) lr=(%d,%d) fill=(%02x%02x%02x%02x) prim=(%02x%02x%02x%02x) comb=%016llx oml=%08x omh=%08x zbuf=%d\n", ulx, uly,
++                    lrx, lry, mRdp->fill_color.r, mRdp->fill_color.g, mRdp->fill_color.b, mRdp->fill_color.a,
++                    mRdp->prim_color.r, mRdp->prim_color.g, mRdp->prim_color.b, mRdp->prim_color.a,
++                    (unsigned long long)mRdp->combine_mode, mRdp->other_mode_l, mRdp->other_mode_h, (int)RdpColorImageIsZBuffer());
++        }
++    }
 +    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
 +        static int fn = 0;
 +        if (fn++ < 40) {
@@ -149,7 +355,7 @@ index 6aad126..8b08f44 100644
      if (RdpColorImageIsZBuffer()) {
          // PORT: color-image-redirect fill — the game is writing a constant
          // 16-bit value into the Z buffer through the color path (per-camera
-@@ -4756,11 +4856,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -4756,11 +4970,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
          uls = (bg->b.imageW - bg->b.imageX) << 3;
      }
  
@@ -183,7 +389,7 @@ index 6aad126..8b08f44 100644
      GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, bg->b.imageW, bg->b.imageH);
      GfxDpTextureRectangle(bg->b.frameX, bg->b.frameY, bg->b.frameX + bg->b.imageW - 4, bg->b.frameY + bg->b.imageH - 4,
                            G_TX_RENDERTILE, uls, bg->b.imageY << 3, dsdx, 1 << 10, false);
-@@ -4768,6 +4886,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -4768,6 +5000,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
  
  void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
      uintptr_t data = (uintptr_t)bg->b.imagePtr;
@@ -197,7 +403,24 @@ index 6aad126..8b08f44 100644
  
      uint32_t texFlags = 0;
      RawTexMetadata rawTexMetadata = {};
-@@ -6320,6 +6445,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -5102,6 +5341,16 @@ bool gfx_movemem_handler_f3dex2(F3DGfx** cmd0) {
+     Interpreter* gfx = mInstance.lock().get();
+     F3DGfx* cmd = *cmd0;
+ 
++    {
++        extern bool gKirbyPcDrawLogActive();
++        if (gKirbyPcDrawLogActive()) {
++            const int16_t* d = (const int16_t*)gfx->SegAddr(cmd->words.w1);
++            fprintf(stderr, "[dlog movemem] idx=%02x ofs=%02x w1=%llx -> %p data=%d %d %d %d / %d %d %d %d\n",
++                    (unsigned)C0(0, 8), (unsigned)(C0(8, 8) * 8), (unsigned long long)cmd->words.w1, (const void*)d,
++                    d ? d[0] : -1, d ? d[1] : -1, d ? d[2] : -1, d ? d[3] : -1, d ? d[4] : -1, d ? d[5] : -1,
++                    d ? d[6] : -1, d ? d[7] : -1);
++        }
++    }
+     gfx->GfxSpMovememF3dex2(C0(0, 8), C0(8, 8) * 8, gfx->SegAddr(cmd->words.w1));
+ 
+     return false;
+@@ -6320,6 +6569,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -260,7 +483,7 @@ index 6aad126..8b08f44 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6517,8 +6698,18 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6517,8 +6822,18 @@ static constexpr UcodeHandler s2dexHandlers = {
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
@@ -279,6 +502,59 @@ index 6aad126..8b08f44 100644
  };
  
  static constexpr std::array ucode_handlers = {
+@@ -6846,6 +7161,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
+     if (mForceRenderToFb) {
+         return false;
+     }
++    // PORT (kirby64): render the game into mGameFb by default instead of
++    // straight to the swap-chain back buffer. Kirby 64 submits MORE THAN ONE
++    // RSP graphics task per displayed frame (3D world in one task, 2D
++    // overlays in a second); each task arrives as its own Interpreter::Run,
++    // and Run clears the back buffer on entry, so direct-to-backbuffer mode
++    // erased the 3D task and presented only the last (2D) task -- every 3D
++    // scene rendered black. mGameFb's COLOR is never cleared between Runs
++    // (only depth is), which restores the N64 semantics of a persistent
++    // color framebuffer that consecutive tasks composite into; the game's
++    // own fill rects do the per-frame clearing, exactly as on hardware.
++    // KIRBY_PC_DIRECT_FB=1 restores the old direct mode for comparison.
++    {
++        static const bool sDirectFb = getenv("KIRBY_PC_DIRECT_FB") != nullptr;
++        if (!sDirectFb) {
++            return false;
++        }
++    }
+     if (mCurDimensions.width == mGameWindowViewport.width && mCurDimensions.height == mGameWindowViewport.height) {
+         return true;
+     }
+@@ -7003,7 +7335,28 @@ void Interpreter::RunGuiOnly() {
+     }
+ }
+ 
++int gKirbyPcFrameNo; // KIRBY_PC_TRIDEBUG frame stamp (see GfxSpTri1)
++
++// KIRBY_PC_DRAWLOG=<lo>:<hi> logs EVERY draw (tris, texrects, fillrects) for
++// task-frames lo..hi, so the exact draw order of a black frame can be read.
++bool gKirbyPcDrawLogActive() {
++    static int lo = -1, hi = -1, init = 0;
++    if (!init) {
++        init = 1;
++        const char* e = getenv("KIRBY_PC_DRAWLOG");
++        if (e != nullptr) {
++            sscanf(e, "%d:%d", &lo, &hi);
++        }
++    }
++    return lo >= 0 && gKirbyPcFrameNo >= lo && gKirbyPcFrameNo <= hi;
++}
++
+ void Interpreter::Run(Gfx* commands, const std::unordered_map<Mtx*, MtxF>& mtx_replacements) {
++    gKirbyPcFrameNo++;
++    if (gKirbyPcDrawLogActive()) {
++        fprintf(stderr, "[dlog] ===== task-frame %d begins (ucode=%d) =====\n", gKirbyPcFrameNo,
++                (int)ucode_handler_index);
++    }
+     SpReset();
+     mFrameTriAreaPx = 0.0f;
+ 
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
 index f73ed3a..0b54e55 100644
 --- a/src/ship/window/gui/Gui.cpp
