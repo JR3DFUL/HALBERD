@@ -94,6 +94,16 @@ void pc_sched_debug_print(int msg, int n) {
     fprintf(stderr, "[sched] #%d msg=%d\n", n, msg);
 }
 
+/* Geo/model bank load diagnostics (func_800A9250's PORT arm). */
+void pc_geoload_debug(unsigned int id, unsigned int mode, unsigned int size,
+                      const void *blob, unsigned int layoutOff) {
+    if (!pc_sched_debug_enabled()) {
+        return;
+    }
+    fprintf(stderr, "[geo] id=%08x mode=%02x size=%06x blob=%p layout=+%05x\n",
+            id, mode, size, blob, layoutOff);
+}
+
 void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const void *pal) {
     const unsigned char *r = (const unsigned char *)raw;
     const unsigned char *i = (const unsigned char *)img;
