@@ -158,13 +158,22 @@ void osSpTaskStartGo(OSTask *task) {
 
 /* Deliver deferred completions. Called from pc_pump_events(). */
 void pc_sp_tick(void) {
+    /* STICKY DELIVERY. pc_event_fire posts NOBLOCK and returns -1 when the
+     * target queue is full -- which happens for real: a multi-second
+     * software-GL draw lets VI retraces fill scTaskMQ (depth 8), and the
+     * task completion that follows would be silently dropped. sched.c then
+     * waits forever for a completion that already "fired" and the boot
+     * stalls at exactly 8 tasks. Keep the pending flag until the send is
+     * actually accepted; the next pump retries. */
     if (sSpDonePending) {
-        sSpDonePending = 0;
-        pc_event_fire(OS_EVENT_SP);
+        if (pc_event_fire(OS_EVENT_SP) == 0) {
+            sSpDonePending = 0;
+        }
     }
     if (sDpDonePending) {
-        sDpDonePending = 0;
-        pc_event_fire(OS_EVENT_DP);
+        if (pc_event_fire(OS_EVENT_DP) == 0) {
+            sDpDonePending = 0;
+        }
     }
 }
 

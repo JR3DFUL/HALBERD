@@ -79,7 +79,7 @@ void pc_pump_events(void);
 /* -------------------------------------------------------------------------
  * Event table (osSetEventMesg)
  * ------------------------------------------------------------------------- */
-void pc_event_fire(OSEvent e);
+int pc_event_fire(OSEvent e); /* returns osSendMesg rc: -1 = queue full, event DROPPED */
 
 /* -------------------------------------------------------------------------
  * Subsystem init, called in order from osInitialize().

@@ -386,9 +386,25 @@ void pc_pump_events(void) {
      * audio library relies on it to keep its player list consistent. */
     if (!pc_ints_enabled()) {
         pc_dbg_pump_intsoff++;
+        if (getenv("KIRBY_PC_PUMPDEBUG") != NULL && (pc_dbg_pump_intsoff % 2000) == 1) {
+            fprintf(stderr, "[pump] INTS-OFF streak: intsoff=%d body=%d vi=%d\n",
+                    pc_dbg_pump_intsoff, pc_dbg_pump_body, pc_dbg_vi_retrace);
+        }
         return;
     }
     pc_dbg_pump_body++;
+    if (getenv("KIRBY_PC_PUMPDEBUG") != NULL && (pc_dbg_pump_body % 5000) == 1) {
+        struct timespec rawts;
+        clock_gettime(CLOCK_MONOTONIC, &rawts);
+        fprintf(stderr, "[clk] mono=%ld.%03ld count64=%llu\n", (long)rawts.tv_sec,
+                rawts.tv_nsec / 1000000, (unsigned long long)pc_count64());
+        fprintf(stderr,
+                "[pump] alive: body=%lu intsoff=%lu vi=%lu vicall=%lu nostart=%lu viloop=%lu now=%lu next=%lu\n",
+                (unsigned long)pc_dbg_pump_body, (unsigned long)pc_dbg_pump_intsoff,
+                (unsigned long)pc_dbg_vi_retrace, (unsigned long)pc_dbg_vi_call,
+                (unsigned long)pc_dbg_vi_nostart, (unsigned long)pc_dbg_vi_loop,
+                (unsigned long)pc_dbg_now_lo, (unsigned long)pc_dbg_next_lo);
+    }
     /* Checked here as well as in pc_idle because pc_idle is only reached when
      * NOTHING is runnable, and under a renderer the process can spend most of
      * its time inside pcb_gfx_run with the game's scheduler stopped behind it.

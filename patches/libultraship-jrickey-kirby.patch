@@ -132,3 +132,38 @@ index 6aad126..f57a75e 100644
  };
  
  static constexpr std::array ucode_handlers = {
+diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
+index f73ed3a..0b54e55 100644
+--- a/src/ship/window/gui/Gui.cpp
++++ b/src/ship/window/gui/Gui.cpp
+@@ -602,6 +602,15 @@ void Gui::StartFrame() {
+ void Gui::EndFrame() {
+     // Draw the ImGui "viewports" which are the floating windows.
+     ImGui::Render();
++    if (getenv("KIRBY_PC_GUIDEBUG") != NULL) {
++        ImDrawData* dd = ImGui::GetDrawData();
++        static int n = 0;
++        if (n++ < 5) {
++            fprintf(stderr, "[gui] EndFrame backend=%d drawlists=%d vtx=%d\n",
++                    (int)Context::GetInstance()->GetWindow()->GetWindowBackend(),
++                    dd ? dd->CmdListsCount : -1, dd ? dd->TotalVtxCount : -1);
++        }
++    }
+     ImGuiRenderDrawData(ImGui::GetDrawData());
+     ImGui::EndFrame();
+ }
+@@ -797,10 +806,14 @@ void Gui::StartDraw() {
+ }
+ 
+ void Gui::EndDraw() {
++    const int guiDbg = getenv("KIRBY_PC_GUIDEBUG") != NULL;
++    if (guiDbg) fprintf(stderr, "[gui] EndDraw enter\n");
+     // Draw the game framebuffer into ImGui
+     DrawGame();
++    if (guiDbg) fprintf(stderr, "[gui] DrawGame done\n");
+     // End the frame
+     EndFrame();
++    if (guiDbg) fprintf(stderr, "[gui] EndFrame done\n");
+     // Draw the ImGui floating windows.
+     DrawFloatingWindows();
+     // Check if the CVars need to be saved, and do it if so.

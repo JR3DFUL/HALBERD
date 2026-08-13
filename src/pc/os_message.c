@@ -155,14 +155,25 @@ void osSetEventMesg(OSEvent e, OSMesgQueue *mq, OSMesg msg) {
  * interrupt handler cannot block. Dropping the message when the queue is full
  * is exactly what the hardware path does, and the game is written to tolerate
  * it -- a missed retrace message costs a frame, it does not deadlock. */
-void pc_event_fire(OSEvent e) {
+int pc_event_fire(OSEvent e) {
     int saved;
+    int rc;
 
     if ((u32)e >= OS_NUM_EVENTS || sEvents[e].mq == NULL) {
-        return;
+        return 0;
     }
     saved = pc_in_event_delivery;
     pc_in_event_delivery = 1;
-    osSendMesg(sEvents[e].mq, sEvents[e].msg, OS_MESG_NOBLOCK);
+    rc = osSendMesg(sEvents[e].mq, sEvents[e].msg, OS_MESG_NOBLOCK);
     pc_in_event_delivery = saved;
+    /* -1 = the target queue was FULL and the message was DROPPED. On
+     * hardware an interrupt cannot be lost this way -- the handler runs when
+     * the mask allows and the event is level-ish from the game's view. A
+     * dropped SP/DP completion is fatal: sched.c waits for it forever while
+     * VI retraces pile into (and overflow) the same queue. Measured: the
+     * boot stalls at exactly scTaskMQ's depth of 8 tasks when a completion
+     * lands during a multi-second software-GL draw. Callers with must-arrive
+     * semantics keep their pending flag set when this returns nonzero and
+     * retry on the next pump. */
+    return rc;
 }

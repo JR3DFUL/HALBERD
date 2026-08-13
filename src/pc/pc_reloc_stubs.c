@@ -79,3 +79,30 @@ unsigned int WindowFocusEventID = (unsigned int)-1;
 void gbi_trace_note_flush(int num_tris) {
     (void)num_tris;
 }
+
+/* Boot-stall diagnostics for the scheduler loop (sched.c PORT block). */
+#include <stdio.h>
+#include <stdlib.h>
+int pc_sched_debug_enabled(void) {
+    static int on = -1;
+    if (on < 0) {
+        on = getenv("KIRBY_PC_SCHEDDEBUG") != 0;
+    }
+    return on;
+}
+void pc_sched_debug_print(int msg, int n) {
+    fprintf(stderr, "[sched] #%d msg=%d\n", n, msg);
+}
+
+void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const void *pal) {
+    const unsigned char *r = (const unsigned char *)raw;
+    const unsigned char *i = (const unsigned char *)img;
+    if (!pc_sched_debug_enabled()) {
+        return;
+    }
+    fprintf(stderr,
+            "[bgload] id=%08x raw=%p fmt=%u siz=%u w=%u h=%u img=%p pal=%p "
+            "imgbytes=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+            id, raw, r[0], r[1], *(const unsigned short *)(r + 4), *(const unsigned short *)(r + 6),
+            img, pal, i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7]);
+}

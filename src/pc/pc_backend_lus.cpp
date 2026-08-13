@@ -593,7 +593,15 @@ void pcb_gfx_run(const void* displayList) {
      * EndDraw, Interpreter::EndFrame (which swaps buffers). Returns false when
      * LUS decided to drop the frame for pacing, which is not an error. */
     static const std::unordered_map<Mtx*, MtxF> kNoMtxReplacements;
-    if (sWindow->DrawAndRunGraphicsCommands((Gfx*)displayList, kNoMtxReplacements)) {
+    bool drew = sWindow->DrawAndRunGraphicsCommands((Gfx*)displayList, kNoMtxReplacements);
+    if (getenv("KIRBY_PC_GUIDEBUG") != nullptr) {
+        static int dbgN = 0;
+        if (dbgN++ < 12) {
+            fprintf(stderr, "[frame] drew=%d heldFb=%p\n", (int)drew,
+                    (void*)sWindow->GetGfxFrameBuffer());
+        }
+    }
+    if (drew) {
         sFramesDrawn++;
         pc_trace(PC_TR_GFX, "[lus] frame %d drawn from dl %p\n", sFramesDrawn,
                  displayList);
@@ -605,11 +613,27 @@ void pcb_frame_end(void) {
         return;
     }
     /* A retrace with no display list behind it. The game is alive but has not
-     * produced a frame. Running the GUI alone keeps the window drawn and
-     * responsive instead of looking hung, and it is also what LUS does for
-     * its own pause/loading states. */
+     * produced a frame. RE-PRESENT THE HELD GAME FRAME rather than running
+     * the GUI alone: RunGuiOnly clears the backbuffer every retrace, and at
+     * ~120 retraces/s against a game that (under llvmpipe) lands a real frame
+     * every couple of seconds, the window is black for 99% of wall time --
+     * every capture caught a cleared frame. PresentCurrentFramebuffer is the
+     * fork's held-VI-frame path (BattleShip uses it for the same purpose);
+     * it re-draws the cached game FB through the normal composite. It
+     * returns false until the first game frame exists -- fall back to
+     * RunGuiOnly only then, so the window still repaints before boot. */
     if (sTasksThisFrame == 0) {
-        sWindow->RunGuiOnly();
+        /* Measured on this stack: the game renders DIRECT to the backbuffer
+         * (mRendersToFb false, GetGfxFrameBuffer()==0), so the held-frame
+         * re-present has nothing to re-present and the RunGuiOnly fallback
+         * CLEARS the freshly swapped game frame within one retrace -- the
+         * game was visible for 1/120th of a second per real frame. Once the
+         * first game frame has been drawn, do nothing on empty retraces: the
+         * window simply keeps its last presented contents. Before the first
+         * frame, keep repainting so the window doesn't look hung at boot. */
+        if (!sWindow->PresentCurrentFramebuffer() && sFramesDrawn == 0) {
+            sWindow->RunGuiOnly();
+        }
     }
     sTasksThisFrame = 0;
 }
