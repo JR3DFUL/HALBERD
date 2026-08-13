@@ -44,8 +44,7 @@ If your dump does not match the hash, it will not build.
 | `tools/pc/` | Stub/data generators, linker driver (`link.sh`), Torch yaml generator, asset staging |
 | `port/yamls/` | Torch extraction manifests (10,583 resources) |
 | `port/assets/` | Fast3D shader staged for the ResourceManager FolderArchive |
-| `patches/libultraship-jrickey-kirby.patch` | Kirby additions to the JRickey (BattleShip) libultraship fork, the adopted renderer: `G_OBJ_LOADTXTR` handler (TLUT/block/tile), format-general `BgCopy` (CI8), shared state ops under the S2DEX table |
-| `patches/libultraship-native-rom.patch` | HISTORICAL: the equivalent patch set against the previous JR3DFUL fork, kept for reference |
+| `patches/libultraship-jrickey-kirby.patch` | Kirby additions to the libultraship fork this port builds against |
 | `docs/` | Port architecture, asset pipeline, LUS integration, surface inventory |
 
 ## Current state
