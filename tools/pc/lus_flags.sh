@@ -22,7 +22,7 @@ set -e
 
 LUS_ROOT=${LUS_ROOT:-/workspace/jrickey/libultraship}
 LUS_BUILD=${LUS_BUILD:-/workspace/lus2-build}
-SDL2_CONFIG=${SDL2_CONFIG:-/workspace/sdl2-install/bin/sdl2-config}
+SDL2_CONFIG=${SDL2_CONFIG:-${SDL2_PREFIX:-/workspace/sdl2-install}/bin/sdl2-config}
 DEPS="$LUS_BUILD/_deps"
 
 case "$1" in
