@@ -56,7 +56,7 @@ fi
 
 msg "4/7 decomp sources (game code)"
 if [ ! -d "$WORK/kirby64_decomp" ]; then
-    git clone --depth 1 -b claude/kirbyy64-decomp-eval-plan-4gxjjk \
+    git clone --depth 1 -b decomp-clean \
         https://github.com/JR3DFUL/kirby64_decomp "$WORK/kirby64_decomp"
 fi
 # Overlay the port files onto the decomp checkout (they are gitignored there).
@@ -65,6 +65,9 @@ mkdir -p "$WORK/kirby64_decomp/tools"
 cp -r "$ROOT/tools/pc"  "$WORK/kirby64_decomp/tools/"
 cp    "$ROOT/Makefile.pc" "$WORK/kirby64_decomp/"
 cp -r "$ROOT/port"      "$WORK/kirby64_decomp/"
+git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" 2>/dev/null || \
+    git -C "$WORK/kirby64_decomp" apply --reverse --check "$ROOT/patches/decomp-port.patch" 2>/dev/null || \
+    { echo "decomp-port.patch failed to apply"; exit 1; }
 cp "$ROM" "$WORK/kirby64_decomp/baserom.us.z64"
 
 msg "5/7 game build + link"

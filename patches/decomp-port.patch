@@ -1,0 +1,3546 @@
+--- a/include/DObj.h
++++ b/include/DObj.h
+@@ -35,6 +35,29 @@
+     OMMtxInt3 i;
+ }; // size == 0x10
+ 
++#ifdef PORT
++/* PORT: these payload arrays are laid directly over 4-byte-slot data --
++ * either geo blob sections (func_800A9250's PORT arm byte-swaps the scalars
++ * in place and stores widened-DL pointers in the dlist slots) or N64-image
++ * static data -- so a real pointer member would double the stride on the
++ * LP64 host and shear every `payload++` walk in render.c. The dlist slots
++ * are u32s holding native pointers (all game-visible memory is below
++ * 4 GiB, see src/pc/pc_mmio.c). */
++typedef struct DObjPayloadTypeC {
++    /* 0x00 */ s32 dlistID;
++    /* 0x04 */ u32 dlist;
++} DObjPayloadTypeC; // size = 0x08 on the host as well
++
++typedef struct DObjPayloadTypeE {
++    /* 0x00 */ f32 drawDistance;
++    /* 0x04 */ u32 dlist;
++} DObjPayloadTypeE; // size = 0x08
++
++typedef struct DObjPayloadTypeG {
++    /* 0x00 */ f32 drawDistance;
++    /* 0x04 */ u32 typeC;
++} DObjPayloadTypeG; // size = 0x08
++#else
+ // Some sort of payload to copy to the main glist
+ typedef struct DObjPayloadTypeC {
+     /* 0x00 */ s32 dlistID;
+@@ -52,6 +75,7 @@
+     /* 0x00 */ f32 drawDistance;
+     /* 0x04 */ DObjPayloadTypeC* typeC;
+ } DObjPayloadTypeG; // size = 0x08
++#endif
+ 
+ typedef struct DObj {
+     /* 0x00 */ struct DObj* nextFree;
+@@ -69,8 +93,15 @@
+         /* 0x50 */ Gfx *glist;
+         /* 0x50 */ DObjPayloadTypeC *typeC;
+         /* 0x50 */ DObjPayloadTypeE *typeE;
++#ifdef PORT
++        /* PORT: lod/typeH point at 4-byte-slot pointer tables (blob / N64
++         * image data); a pointer-to-pointer would index at stride 8. */
++        /* 0x50 */ u32 *lod;
++        /* 0x50 */ u32 *typeH;
++#else
+         /* 0x50 */ Gfx **lod;
+         /* 0x50 */ DObjPayloadTypeC **typeH;
++#endif
+     } data;
+     u8 flags;
+     u8 animCBReceiver;
+--- a/include/PR/os_convert.h
++++ b/include/PR/os_convert.h
+@@ -102,8 +102,13 @@
+    agree only while uintptr_t is u32, which stops being true once PORT widens
+    it for LP64 -- so under PORT these have to be stated in the same terms. On
+    N64 uintptr_t IS u32, so nothing about the matching build changes. */
++#ifdef PORT
++extern uintptr_t osVirtualToPhysical(void *);
++extern void *    osPhysicalToVirtual(uintptr_t);
++#else
+ extern u32       osVirtualToPhysical(void *);
+ extern void *        osPhysicalToVirtual(u32);
++#endif
+ 
+ 
+ #endif  /* defined(_LANGUAGE_C) || defined(_LANGUAGE_C_PLUS_PLUS) */
+--- a/include/PR/ultratypes.h
++++ b/include/PR/ultratypes.h
+@@ -32,11 +32,53 @@
+ typedef double f64;
+ 
+ #ifdef TARGET_N64
++#ifdef PORT
++/* Same argument as uintptr_t below, and for the same reason: src/pc/ is the
++   one part of this tree that includes the HOST's <stddef.h> and <stdio.h>,
++   and glibc typedefs size_t/ssize_t itself. u32 there is a hard "conflicting
++   types for size_t" at -m64. On MIPS32 these ARE 32-bit, so the matching
++   build is unaffected -- PORT is defined only by Makefile.pc. */
++#ifdef __SIZE_TYPE__
++typedef __SIZE_TYPE__ size_t;
++#else
++typedef unsigned long size_t;
++#endif
++typedef long ssize_t;
++#else
+ typedef u32 size_t;
+ typedef s32 ssize_t;
++#endif
++#ifdef PORT
++/* The whole LP64 problem for this port was this one typedef.
++ *
++ * gbi.h is already 64-bit aware -- Gwords holds two uintptr_t, so a display
++ * list can carry a real pointer -- but with uintptr_t hardwired to u32 the
++ * static display lists in rdp_reset.c and ovl4_1.c stopped compiling at -m64
++ * with "initializer element is not constant": casting a 64-bit pointer to a
++ * 32-bit integer is not something the linker can resolve, so it is not a
++ * constant expression.
++ *
++ * Widening it here fixes those files with no change to their source, and the
++ * N64 build never sees it: PORT is defined only by Makefile.pc, and on MIPS32
++ * a pointer is 4 bytes so u32 was right there anyway.
++ *
++ * __UINTPTR_TYPE__ is provided by GCC and Clang; the fallback covers LP64
++ * Unix, which is what this port targets.
++ */
++#ifdef __UINTPTR_TYPE__
++typedef __UINTPTR_TYPE__ uintptr_t;
++typedef __INTPTR_TYPE__ intptr_t;
++typedef __PTRDIFF_TYPE__ ptrdiff_t;
++#else
++typedef unsigned long uintptr_t;
++typedef long intptr_t;
++typedef long ptrdiff_t;
++#endif
++#else
+ typedef u32 uintptr_t;
+ typedef s32 intptr_t;
+ typedef s32 ptrdiff_t;
++#endif
+ #else
+ #include <stddef.h>
+ #endif
+--- a/include/SPObj.h
++++ b/include/SPObj.h
+@@ -30,6 +30,95 @@
+     u32 _000[0x60];
+ };
+ 
++#ifdef PORT
++/* PORT (LP64) shape of the SPObj.
++ *
++ * On the N64 the struct embeds one 0x60-byte RSP command block twice, at
++ * 0x40 and 0xA0 (unk12 selects which copy the CPU rewrites while the RSP
++ * reads the other), and the named fields unk40..unkBA are aliased views
++ * into those blocks (`&sprite->unk40` IS the block base). Under LP64 the
++ * pointer-typed alias fields inflate and 8-align, shearing every alias off
++ * the bytes the readers (SPOBJ_GFX in src/ovl1/sprite.c) actually read.
++ *
++ * So under PORT the two blocks are embedded directly, with their real GBI
++ * types (SPObjGfx below), and the alias fields are gone: all block access
++ * goes through ->gfx[i]. The only aliases other files use, unk5A/unkBA
++ * ("flag1"/"flag2" = block+0x1A = uObjBg imageFlip of buffer 0/1), are kept
++ * as anonymous-union overlays pinned to the LP64 position of imageFlip so
++ * the ovl4/ovl5 writers keep compiling and land on the right bytes.
++ *
++ * N64 block map (block+off)          typed member (per kind)
++ *   +0x00 uObjBg        (kind 0/1)   gfx[i].b.bg
++ *   +0x00 uObjTxtr txtr (kind 2/3/4) gfx[i].t.ts.txtr
++ *   +0x18 uObjSprite    (kind 2/3/4) gfx[i].t.ts.sprite
++ *   +0x28 uObjTxtr tlut (kind 0/1)   gfx[i].b.tlut
++ *   +0x30 uObjTxtr tlut (kind 2/3/4) gfx[i].t.tlut
++ *   +0x48 uObjMtx       (kind 3/4)   gfx[i].t.mtx
++ */
++/* With gs2dex.h's native pointer fields (the JRickey-fork convention), the
++ * GBI structs are LP64-widened; every offset below is the LP64 one. The
++ * renderer reads the same LP64 layout, so writer and reader agree. */
++typedef union SPObjGfx {
++    struct {
++        uObjBg bg;        /* N64 +0x00, LP64 +0x00 */
++        uObjTxtr tlut;    /* N64 +0x28, LP64 +0x30 */
++    } b;
++    struct {
++        uObjTxSprite ts;  /* txtr +0x00, sprite N64 +0x18 / LP64 +0x20 */
++        uObjTxtr tlut;    /* N64 +0x30, LP64 +0x38 */
++        uObjMtx mtx;      /* N64 +0x48, LP64 +0x58 */
++    } t;
++} SPObjGfx;
++
++typedef struct SPObj {
++    struct SPObj *next;
++    u32 unk4;   /* owning GObj, stored 32-bit (the port keeps game RAM low) */
++    u32 unk8;
++    u32 unkC;
++    u8 unk10;   /* kind */
++    u8 unk11;
++    u8 unk12;   /* which gfx[] copy the CPU currently rewrites */
++    u8 renderFlags;
++    u8 primColorRed;
++    u8 primColorGreen;
++    u8 primColorBlue;
++    u8 primColorAlpha;
++    u8 envColorRed;
++    u8 envColorGreen;
++    u8 envColorBlue;
++    u8 envColorAlpha;
++    u16 width;
++    u16 height;
++    f32 xOffset;
++    f32 yOffset;
++    f32 xScale;
++    f32 yScale;
++    f32 unk30;
++    f32 unk34;
++    f32 unk38;
++    u32 unk3C;
++    union {
++        SPObjGfx gfx[2]; /* double-buffered RSP command blocks */
++        struct {
++            u8 pad5A_[__builtin_offsetof(uObjBg, s.imageFlip)];
++            u16 unk5A; /* flag1: gfx[0] bg imageFlip (block+0x1A on N64) */
++            u8 padBA_[sizeof(SPObjGfx) - sizeof(u16)];
++            u16 unkBA; /* flag2: gfx[1] bg imageFlip */
++        };
++    };
++} SPObj;
++
++/* Writers and readers must agree on the block layout, and the aliases must
++ * land on the bytes the block writers write. */
++_Static_assert(sizeof(SPObjGfx) == 0x70, "SPObjGfx LP64 size");
++_Static_assert(__builtin_offsetof(SPObj, gfx) == 0x48, "gfx[0] offset");
++_Static_assert(__builtin_offsetof(SPObj, unk5A) ==
++               __builtin_offsetof(SPObj, gfx[0].b.bg.s.imageFlip), "unk5A alias");
++_Static_assert(__builtin_offsetof(SPObj, unkBA) ==
++               __builtin_offsetof(SPObj, gfx[1].b.bg.s.imageFlip), "unkBA alias");
++_Static_assert(sizeof(SPObj) % 8 == 0, "SPObj pool stride alignment");
++
++#else
+ 
+ // spobj? according to debug string
+ typedef struct SPObj {
+@@ -94,5 +183,6 @@
+     u16 unkBA; // flag2
+ } SPObj;
+ 
++#endif /* PORT */
+ 
+ #endif // SPOBJ_H
+--- a/include/geo_block_header.h
++++ b/include/geo_block_header.h
+@@ -41,6 +41,63 @@
+ };
+ 
+ 
++#ifdef PORT
++/* PORT: this struct is laid directly over the geo blob's texture scroll
++ * nodes (func_800A9250's PORT relocator byte-swaps their scalar fields in
++ * place, and omDObjAddMObj copies them wholesale into MObj.texture), so it
++ * must keep the N64's 0x78-byte ILP32 layout on the LP64 host. The two
++ * pointer slots (textures/palettes) are therefore u32s holding native host
++ * pointers -- everything the game can see lives below 4 GiB (pc_mmio.c).
++ * The two index sites in render.c cast through uintptr_t. The five
++ * ColorPacks keep MEMORY byte order r,g,b,a (byte readers in render.c and
++ * ovl6 depend on it); the two .pack readers in renderLoadTextures re-pack
++ * with a bswap under PORT. */
++typedef struct TextureScroll {
++    /* 0x08 */ u16 h_8;
++    /* 0x0A */ s8 fmt1;
++    /* 0x0B */ s8 siz1;
++    /* 0x0C */ u32 textures;
++    /* 0x10 */ u16 stretch;
++    /* 0x12 */ u16 sharedOffset;
++    /* 0x14 */ u16 t0w;
++    /* 0x16 */ u16 t0h;
++    /* 0x18 */ s32 halve;
++    /* 0x1C */ f32 xFrac0;
++    /* 0x20 */ f32 yFrac0;
++    /* 0x24 */ f32 xScale;
++    /* 0x28 */ f32 yScale;
++    /* 0x2C */ f32 field_0x2c;
++    /* 0x30 */ f32 field_0x30;
++    /* 0x34 */ u32 palettes;
++    /* 0x38 */ u16 flags;
++    /* 0x3A */ s8 fmt2;
++    /* 0x3B */ s8 siz2;
++    /* 0x3C */ u16 w2;
++    /* 0x3E */ u16 h2;
++    /* 0x40 */ u16 t1w;
++    /* 0x42 */ u16 t1h;
++    /* 0x44 */ f32 xFrac1;
++    /* 0x48 */ f32 yFrac1;
++    /* 0x4C */ f32 unk_4C;
++    /* 0x50 */ s32 unk_50;
++    /* 0x54 */ s32 unk_54;
++    /* 0x58 */ ColorPack primColor;
++
++    /* 0x5C */ u8 unk_5C;
++    /* 0x5D */ s8 minLOD;
++    /* 0x5E */ u8 unk_5E;
++    /* 0x5F */ u8 unk_5F;
++
++    /* 0x60 */ ColorPack envColor;
++    /* 0x64 */ ColorPack blendColor;
++    /* 0x68 */ ColorPack lightColor1;
++    /* 0x6C */ ColorPack lightColor2;
++    /* 0x70 */ u32 unk70;
++    /* 0x74 */ u32 unk74;
++    /* 0x78 */ u32 unk78;
++    /* 0x7C */ u32 unk7C;
++} TextureScroll;
++#else
+ typedef struct TextureScroll {
+     // start of a texture scroll struct?
+     /* 0x08 */ u16 h_8;
+@@ -87,3 +144,4 @@
+     /* 0x78 */ u32 unk78;
+     /* 0x7C */ u32 unk7C;
+ } TextureScroll;
++#endif /* PORT */
+--- a/include/macros.h
++++ b/include/macros.h
+@@ -106,7 +106,13 @@
+  * which a busy-wait is, by construction. Do not scatter it into loops that do
+  * real work.
+  */
++#ifdef PORT
++void pc_pump_events(void);
++void osYieldThread(void);
++#define PC_SPIN_YIELD() (pc_pump_events(), osYieldThread())
++#else
+ #define PC_SPIN_YIELD()
++#endif
+ 
+ /* OS_RECV_INDEX -- osRecvMesg into a 4-byte local, safely at LP64.
+  *
+@@ -127,6 +133,18 @@
+  * i in 0..3. For a queue that carries POINTERS -- scTaskMQ, for one -- do not
+  * use this; widen the local to OSMesg instead, as scThreadMain does.
+  */
++#ifdef PORT
++#define OS_RECV_INDEX(mq, var, blk)                                            \
++    ({                                                                         \
++        OSMesg _osri_m;                                                        \
++        s32 _osri_r = osRecvMesg((mq), &_osri_m, (blk));                       \
++        if (_osri_r != -1) {                                                   \
++            (var) = (s32) (intptr_t) _osri_m;                                  \
++        }                                                                      \
++        _osri_r;                                                               \
++    })
++#else
+ #define OS_RECV_INDEX(mq, var, blk) osRecvMesg((mq), (OSMesg*) &(var), (blk))
++#endif
+ 
+ #endif
+--- a/src/main/anim.c
++++ b/src/main/anim.c
+@@ -1732,11 +1732,20 @@
+ 
+     while (arg1->unk_00 != ARRAY_COUNT(sp44)) {
+         trunc = arg1->unk_00 & 0xFFF;
++#ifdef PORT
++        /* unk04 is a u32-held native pointer on the host (anim.h). */
++        if (trunc != 0) {
++            dobj = sp44[trunc] = omDObjAddChild(sp44[trunc - 1], (void *)(uintptr_t)arg1->unk04);
++        } else {
++            dobj = sp44[0] = omGObjAddDObj(obj, (void *)(uintptr_t)arg1->unk04);
++        }
++#else
+         if (trunc != 0) {
+             dobj = sp44[trunc] = omDObjAddChild(sp44[trunc - 1], arg1->unk04);
+         } else {
+             dobj = sp44[0] = omGObjAddDObj(obj, arg1->unk04);
+         }
++#endif
+         if (arg1->unk_00 & 0xF000) {
+             omDObjAppendMtx(dobj, (u32)MTX_TYPE_TRANSLATE, 0);
+         }
+@@ -1885,11 +1894,20 @@
+ 
+     while (arg1->unk_00 != 18) {
+         trunc = arg1->unk_00 & 0xFFF;
++#ifdef PORT
++        /* unk04 is a u32-held native pointer on the host (anim.h). */
++        if (trunc) {
++            dobj = sp54[trunc] = omDObjAddChild(sp54[trunc - 1], (void *)(uintptr_t)arg1->unk04);
++        } else {
++            dobj = sp54[0] = omGObjAddDObj(obj, (void *)(uintptr_t)arg1->unk04);
++        }
++#else
+         if (trunc) {
+             dobj = sp54[trunc] = omDObjAddChild(sp54[trunc - 1], arg1->unk04);
+         } else {
+             dobj = sp54[0] = omGObjAddDObj(obj, arg1->unk04);
+         }
++#endif
+ 
+         if (arg1->unk_00 & 0xF000) {
+             func_8000F754(dobj, arg3, arg4, arg5, arg1->unk_00 & 0xF000);
+@@ -1924,11 +1942,20 @@
+ 
+     while (arg1->unk_00 != 18) {
+         trunc = arg1->unk_00 & 0xFFF;
++#ifdef PORT
++        /* unk04 is a u32-held native pointer on the host (anim.h). */
++        if (trunc) {
++            dobj = sp5C[trunc] = omDObjAddChild(sp5C[trunc - 1], (void *)(uintptr_t)arg1->unk04);
++        } else {
++            dobj = sp5C[0] = omGObjAddDObj(gobj, (void *)(uintptr_t)arg1->unk04);
++        }
++#else
+         if (trunc) {
+             dobj = sp5C[trunc] = omDObjAddChild(sp5C[trunc - 1], arg1->unk04);
+         } else {
+             dobj = sp5C[0] = omGObjAddDObj(gobj, arg1->unk04);
+         }
++#endif
+         if (arg1->unk_00 & 0xF000) {
+             func_8000F754(dobj, arg4, arg5, arg6, arg1->unk_00 & 0xF000);
+         } else {
+@@ -1939,6 +1966,24 @@
+         dobj->scale.v = arg1->scale;
+ 
+         if (arg2 != NULL) {
++#ifdef PORT
++            /* The geo blob's texScroll lists are 4-byte u32 slots holding
++             * native pointers (func_800A9250's PORT relocator); a
++             * TextureScroll ** walk would stride 8 on the LP64 host. The
++             * 0x99999999 guard is the relocator's list terminator -- the
++             * N64 walk relies on a 0 slot always preceding it. */
++            {
++                u32 *outer = (u32 *)arg2;
++                if (*outer != 0) {
++                    u32 *mids = (u32 *)(uintptr_t)*outer;
++                    while (*mids != 0 && *mids != 0x99999999U) {
++                        omDObjAddMObj(dobj, (TextureScroll *)(uintptr_t)*mids);
++                        mids++;
++                    }
++                }
++                arg2 = (TextureScroll ***)(outer + 1);
++            }
++#else
+             if (*arg2 != NULL) {
+                 csr = *arg2;
+                 msub = *csr;
+@@ -1949,6 +1994,7 @@
+                 }
+             }
+             arg2++;
++#endif
+         }
+         if (arg3 != NULL) {
+             *arg3 = dobj;
+@@ -1966,6 +2012,20 @@
+     dobj = arg0->data.dobj;
+     while (dobj != NULL) {
+         if (arg1 != NULL) {
++#ifdef PORT
++            /* Same u32-slot walk as func_8000FB10's PORT arm above. */
++            {
++                u32 *outer = (u32 *)arg1;
++                if (*outer != 0) {
++                    u32 *mids = (u32 *)(uintptr_t)*outer;
++                    while (*mids != 0 && *mids != 0x99999999U) {
++                        omDObjAddMObj(dobj, (TextureScroll *)(uintptr_t)*mids);
++                        mids++;
++                    }
++                }
++                arg1 = (TextureScroll ***)(outer + 1);
++            }
++#else
+             if (*arg1 != NULL) {
+                 csr = *arg1;
+                 msub = *csr;
+@@ -1976,6 +2036,7 @@
+                 }
+             }
+             arg1++;
++#endif
+         }
+         dobj = animModelTreeNextNode(dobj);
+     }
+--- a/src/main/anim.h
++++ b/src/main/anim.h
+@@ -110,6 +110,22 @@
+     /* 0x10 */ s32* ids;
+ } AnimationHeader;
+ 
++#ifdef PORT
++/* PORT: these nodes are the geo blob's 0x2C-stride layout array, walked in
++ * place (func_8000F980/func_8000FB10/func_8000F054/... all do `arg++`). A
++ * void * member would make the struct 0x38 bytes on the LP64 host and shear
++ * every walk, so the pointer slot is held as u32 -- func_800A9250's PORT
++ * relocator stores a real native pointer there (everything the game can see
++ * lives below 4 GiB, see src/pc/pc_mmio.c), or a raw segment-4 display list
++ * word for layoutModes 0x17/0x19. Deref sites cast through uintptr_t. */
++typedef struct UnkE4E4Arg {
++    /* 0x00 */ s32 unk_00;
++    /* 0x04 */ u32 unk04;
++    /* 0x08 */ Vector position;
++    /* 0x14 */ Vector rotation;
++    /* 0x20 */ Vector scale;
++} UnkE4E4Arg; // size == 0x2C on the host as well
++#else
+ typedef struct UnkE4E4Arg {
+     /* 0x00 */ s32 unk_00;
+     /* 0x04 */ void* unk04;
+@@ -117,6 +133,7 @@
+     /* 0x14 */ Vector rotation;
+     /* 0x20 */ Vector scale;
+ } UnkE4E4Arg; // size == 0x2C
++#endif
+ 
+ DObj* animModelTreeNextNode(DObj*);
+ // void anim_func_8000FBC4(GObj* obj, struct UnkE4E4Arg* arg1, DObj** arg2);
+--- a/src/main/dma.c
++++ b/src/main/dma.c
+@@ -70,6 +70,28 @@
+ }
+ 
+ void dma_overlay_load(struct Overlay *ovl) {
++#ifdef PORT
++    /* THE PORT NEVER PERFORMS AN OVERLAY LOAD, and the interception has to be
++     * here rather than inside osEPiStartDma, because the DMA is only three of
++     * this function's four steps. The fourth is `bzero(bssStart, bssEnd -
++     * bssStart)`, which is a direct write and never reaches the PI at all.
++     *
++     * gOverlayTable[1] is what proved it: its descriptor comes out of the
++     * converted data with bssStart = &D_801290D0 (a real port .bss address)
++     * and bssEnd = 0x8012eaf0 (an N64 VRAM address nothing relocated), so the
++     * bzero is a 2 GB memset from the middle of .bss and the port died in
++     * __memset_evex_unaligned_erms with dma.c:85 as the only clue.
++     *
++     * Zeroing that range would be wrong even if the bounds were consistent:
++     * every overlay is statically linked into this binary, and an overlay's
++     * "bss" here holds converted data the native build already owns. See the
++     * header of src/pc/pc_overlay.c. Expands to nothing outside the port. */
++    extern int pc_overlay_intercept_load(struct Overlay *ovl);
++
++    if (pc_overlay_intercept_load(ovl)) {
++        return;
++    }
++#endif
+     if ((s32) ovl->textEnd - (s32) ovl->textStart != 0) {
+         osInvalICache((void*)(s32) ovl->textStart, (s32) ovl->textEnd - (s32) ovl->textStart);
+         osInvalDCache((void*)(s32) ovl->textStart, (s32) ovl->textEnd - (s32) ovl->textStart);
+--- a/src/main/fault.c
++++ b/src/main/fault.c
+@@ -388,7 +388,15 @@
+ 
+     
+ 
++#ifdef PORT
++/* ALIGN4 on a va_list is an N64 idiom: there va_list is a char*, so the
++   varargs pointer can be rounded. On x86-64 va_list is an ARRAY type and
++   cannot be cast to at all, and there is nothing to round -- the host ABI
++   already aligns arguments. Pass it through unchanged under PORT. */
++    size = _Printf(write_to_buf, (char *)buf, fmt, args);
++#else
+     size = _Printf(write_to_buf, (char *)buf, fmt, (va_list)ALIGN4((u32)args));
++#endif
+ 
+     if (size > 0) {
+         ptr = buf;
+@@ -673,7 +681,11 @@
+     va_list args;
+     va_start(args, fmt);
+ 
++#ifdef PORT
++    crash_screen_vprint(fmt, args);
++#else
+     crash_screen_vprint(fmt, (va_list)ALIGN4((u32)args));
++#endif
+ 
+     va_end(args);
+ }
+@@ -812,7 +824,9 @@
+     s32 pri;
+     va_list args;
+     va_start(args, fmt);
++#ifndef PORT
+     args = (va_list)SOME_ALIGNMENT(args);
++#endif
+ 
+     D_8003F688 = 1;
+     pri = osGetThreadPri(NULL);
+--- a/src/main/gtl.c
++++ b/src/main/gtl.c
+@@ -115,6 +115,39 @@
+ }
+ 
+ void gtlSetupHeap(void *start, u32 size) {
++#ifdef PORT
++    /* THE PORT CANNOT USE THE GAME'S OWN HEAP ADDRESS. Both call sites route
++     * through here, so this is the only place that needs to know.
++     *
++     * On N64 the caller computes heapBase = &D_8018EE60 and heapSize =
++     * (u8 *) gFrameBuffer - heapBase, which is about 2.5 MB of RDRAM lying on
++     * top of the VRAM of overlays that are not resident. That is deliberate
++     * and it is safe there because an unloaded overlay's RAM is free.
++     *
++     * Here it is neither. D_8018EE60 resolves to D_8018EE58_ovl5 + 8, a live
++     * object in this binary's .bss, every overlay is permanently resident, and
++     * the arithmetic yields 0x0D3A28 rather than 2.5 MB. The first
++     * gtlCreateScene therefore ran `bzero(0x65d958, 866856)` straight across
++     * 823 KB of translated data -- among other things contEventMQ, whose
++     * msgCount and msg went to garbage, so the next contSendEvent stored
++     * through a NULL msg[] and the port died in osSendMesg with a backtrace
++     * that pointed at the controller code and nothing at the heap.
++     *
++     * A dedicated arena fixes both halves at once: it is memory that belongs
++     * to us, and it is bigger than the N64's, so nothing that fits on hardware
++     * can overflow it here (mlAlloc's overflow path is fatal_printf followed
++     * by `while (1);`, which in a cooperative scheduler is a hang, not a
++     * message).
++     *
++     * The audio heap at audio.c:465 is the same shape of problem and is NOT
++     * fixed: auCreatePlayers is still a #pragma, so auHeap is never set up and
++     * nothing allocates from it. It has to be dealt with when audio lands.
++     *
++     * Nothing below this #endif changes, so the ROM build is byte-identical. */
++    extern void pc_gtl_arena(void **startInOut, u32 *sizeInOut);
++
++    pc_gtl_arena(&start, &size);
++#endif
+     mlSetup(&gDynamicBuffer2, 0x10000, start, size);
+ }
+ 
+@@ -425,21 +458,80 @@
+     }
+ }
+ 
++#ifdef PORT
++/* A REAL gsSPLoadUcodeL IS MEANINGLESS TO FAST3D, AND WORSE THAN MEANINGLESS.
++ *
++ * On hardware the command hands the RSP two DRAM addresses (text and data) and
++ * a size. Fast3D has no RSP to load anything into; instead it reuses the same
++ * opcode as a *selector*, and reads the low 24 bits of w0 as a UcodeHandlers
++ * enum:
++ *
++ *     if (opcode == F3DEX2_G_LOAD_UCODE)
++ *         gfx_set_ucode_handler((UcodeHandlers)(cmd->words.w0 & 0xFFFFFF));
++ *
++ * Feed it the hardware form and those low bits are gsSPLoadUcodeL's size
++ * field, SP_UCODE_DATA_SIZE - 1 == 0x7FF == 2047. That is past the end of the
++ * handler table, so from the next command onwards EVERY opcode falls into the
++ * "invalid ucode: 2047" arm and nothing is drawn -- which is exactly what this
++ * port printed thousands of times per frame before this branch existed.
++ *
++ * The enum values are duplicated rather than included: fast/ucodehandlers.h is
++ * a C++-side header of an out-of-tree dependency, and game code including it
++ * would tie the ROM sources to the renderer's checkout. They are part of the
++ * display-list wire format, so they are as stable as the opcode itself.
++ *
++ * L3DEX2 collapses onto F3DEX2 on purpose. L3DEX2 is F3DEX2 plus the line
++ * primitives, and Fast3D's f3dex2 handler table already contains G_LINE3D --
++ * there is no separate table to select. */
++#define PC_UCODE_F3DEX2 4 /* ucode_f3dex2 */
++#define PC_UCODE_S2DEX  5 /* ucode_s2dex  */
++
++static void pc_emit_load_ucode(Gfx **dlist, u32 sel) {
++    Gfx *g = (*dlist)++;
++
++    /* 0xDD is F3DEX2's G_LOAD_UCODE. Written as a literal because the value
++     * Fast3D compares against is F3DEX2_G_LOAD_UCODE regardless of which ucode
++     * is currently selected -- the switch command is outside the tables.
++     *
++     * In NATIVE mode the interpreter resolves the switch by matching w1
++     * against the ucode text pointers the host registered (the enum in w0 is
++     * ignored there; it is kept for the non-native OTR path). w1 == 0 matches
++     * nothing and the switch is silently dropped -- which left every S2DEX
++     * sprite list of a frame running under the F3DEX2 table, where 0x06/0x07
++     * opcodes read as G_TRI2/G_QUAD with pointer operands. Measured: 3795
++     * dropped switches in 30 seconds. */
++    g->words.w0 = 0xDD000000u | sel;
++    g->words.w1 = (u32)(uintptr_t)(sel == PC_UCODE_S2DEX ? (void *)gspS2DEX2_fifoTextStart
++                                                         : (void *)gspF3DEX2_fifoTextStart);
++}
++#endif
+ 
+ void gtlLoadUcode(Gfx **dlist, u32 kind) {
+     s32 loadedSpriteUcode = 0;
+     switch (kind) {
+         case 0:
+             // F3DEX2
++#ifdef PORT
++            pc_emit_load_ucode(dlist, PC_UCODE_F3DEX2);
++#else
+             gSPLoadUcodeL((*dlist)++, gspF3DEX2_fifo);
++#endif
+             break;
+         case 1: case 2: case 3: case 4: case 5: case 6: case 7: case 8:
+             // L3DEX2
++#ifdef PORT
++            pc_emit_load_ucode(dlist, PC_UCODE_F3DEX2);
++#else
+             gSPLoadUcodeL((*dlist)++, gspL3DEX2_fifo);
++#endif
+             break;
+         case 9: case 10:
+             // S2DEX2
++#ifdef PORT
++            pc_emit_load_ucode(dlist, PC_UCODE_S2DEX);
++#else
+             gSPLoadUcodeL((*dlist)++, gspS2DEX2_fifo);
++#endif
+             loadedSpriteUcode = 1;
+             break;
+         case 11: case 12: case 13: case 14: case 15: default:
+@@ -848,7 +940,12 @@
+     struct DLBuffer dlBuffers[2][4];
+ 
+     gtlNumContexts = setup->numContexts;
++#ifdef PORT
++    /* The generated word holds the u16 in its high half (big-endian source). */
++    gtlMainFuncTable.flags = GTL_FLAGS(setup->flags);
++#else
+     gtlMainFuncTable.flags = setup->flags;
++#endif
+     gtlMainFuncTable.onPrivUpdate = setup->onUpdate;
+     gtlMainFuncTable.onPrivDraw = setup->onDraw;
+ 
+@@ -901,6 +998,34 @@
+     gtlStart(arg, NULL);
+ }
+ 
++#ifdef PORT
++/* LP64 OBJECT STRIDES. The scene descriptors in the ROM carry the N64's
++ * sizeof for every pooled object, and object_manager.c builds its free lists
++ * by striding raw bytes: `gobj->next = (GObj *)((uintptr_t)gobj + objectSize)`.
++ * Under LP64 the native structs are LARGER (GObj 80 -> 136, DObj 136 -> 232,
++ * Camera 144 -> 200, MObj 168 -> 200), so consecutive nodes OVERLAP: each
++ * `next` write lands inside the previous node and the list truncates.
++ *
++ * Measured symptom before this fix: the GObj free pool was TWO entries long.
++ * HS64_GObjPop was entered four times and succeeded twice, and the third
++ * ohCreateCamera returned NULL, so request_job dereferenced a NULL gobj in
++ * HS64_GObjProcessLink. The crash pointed at object_manager.c:143 and the
++ * cause was in a scene table three call levels away.
++ *
++ * MAX, not sizeof. SObj is SMALLER natively than on the N64 (8 vs 88) because
++ * the port's struct is only partially declared, so a bare sizeof would
++ * UNDER-allocate and re-introduce the same overlap in the other direction.
++ * Taking the larger of the two is correct for both cases: it is always at
++ * least the native size, so nodes never overlap, and always at least the
++ * ROM's, so nothing that fits on hardware fails here.
++ *
++ * Both halves matter -- the malloc size AND the stride recorded in
++ * gtlCurrentScene -- because HS64_omInit reads the latter to walk the former.
++ *
++ * Nothing outside these #ifdefs changes, so the ROM build is byte-identical.
++ */
++#define PC_OM_SIZE(nat, rom) ((u32) ((sizeof(nat) > (u32) (rom)) ? sizeof(nat) : (u32) (rom)))
++#endif
+ 
+ void gtlCreateScene(SceneSetup *scene) {
+     gtlSetupHeap(scene->gtlSetup.heapBase, scene->gtlSetup.heapSize);
+@@ -916,26 +1041,62 @@
+     gtlCurrentScene.unk_14 = scene->unk4C;
+     gtlCurrentScene.processes = gtlMalloc(scene->procCount * 0x24, 4);
+     gtlCurrentScene.numProcesses = (s32) scene->procCount;
++#ifdef PORT
++    gtlCurrentScene.objects = gtlMalloc(PC_OM_SIZE(GObj, scene->objectSize) * scene->objCount, 8);
++#else
+     gtlCurrentScene.objects = gtlMalloc(scene->objectSize * scene->objCount, 8);
++#endif
+     gtlCurrentScene.numObjects = (s32) scene->objCount;
++#ifdef PORT
++    gtlCurrentScene.objectSize = (s32) PC_OM_SIZE(GObj, scene->objectSize);
++#else
+     gtlCurrentScene.objectSize = (s32) scene->objectSize;
++#endif
+     gtlCurrentScene.matrices = gtlMalloc(scene->mtxCount * 0x48, 8);
+     gtlCurrentScene.numMatrices = (s32) scene->mtxCount;
+     renderSetMatrixHandler(scene->mtxHandler);
+     gtlCurrentScene.cleanupFn = scene->unk64;
+     gtlCurrentScene.aobjs = gtlMalloc(scene->AObjCount * 0x24, 4);
+     gtlCurrentScene.numAObjs = (s32) scene->AObjCount;
++#ifdef PORT
++    gtlCurrentScene.mobjs = gtlMalloc(scene->MObjCount * PC_OM_SIZE(MObj, 0xA8), 4);
++#else
+     gtlCurrentScene.mobjs = gtlMalloc(scene->MObjCount * 0xA8, 4);
++#endif
+     gtlCurrentScene.numMObjs = (s32) scene->MObjCount;
++#ifdef PORT
++    gtlCurrentScene.dobjs = gtlMalloc(PC_OM_SIZE(DObj, scene->omDobjSize) * scene->DObjCount, 8);
++#else
+     gtlCurrentScene.dobjs = gtlMalloc(scene->omDobjSize * scene->DObjCount, 8);
++#endif
+     gtlCurrentScene.numDObjs = (s32) scene->DObjCount;
++#ifdef PORT
++    gtlCurrentScene.dobjSize = (s32) PC_OM_SIZE(DObj, scene->omDobjSize);
++#else
+     gtlCurrentScene.dobjSize = (s32) scene->omDobjSize;
++#endif
++#ifdef PORT
++    gtlCurrentScene.sobjs = gtlMalloc(PC_OM_SIZE(struct SObj, scene->omSobjSize) * scene->SobjCount, 8);
++#else
+     gtlCurrentScene.sobjs = gtlMalloc(scene->omSobjSize * scene->SobjCount, 8);
++#endif
+     gtlCurrentScene.numSObjs = (s32) scene->SobjCount;
++#ifdef PORT
++    gtlCurrentScene.sobjSize = (s32) PC_OM_SIZE(struct SObj, scene->omSobjSize);
++#else
+     gtlCurrentScene.sobjSize = (s32) scene->omSobjSize;
++#endif
++#ifdef PORT
++    gtlCurrentScene.cameras = gtlMalloc(PC_OM_SIZE(Camera, scene->omCameraSize) * scene->CameraCount, 8);
++#else
+     gtlCurrentScene.cameras = gtlMalloc(scene->omCameraSize * scene->CameraCount, 8);
++#endif
+     gtlCurrentScene.numCameras = (s32) scene->CameraCount;
++#ifdef PORT
++    gtlCurrentScene.cameraSize = (s32) PC_OM_SIZE(Camera, scene->omCameraSize);
++#else
+     gtlCurrentScene.cameraSize = (s32) scene->omCameraSize;
++#endif
+     HS64_omInit(&gtlCurrentScene);
+     gtlMainFuncTable.onUpdate = gtlUpdate;
+     gtlMainFuncTable.onDraw = gtlDraw;
+--- a/src/main/gtl.h
++++ b/src/main/gtl.h
+@@ -26,6 +26,51 @@
+     UCODE_12_NON_XBUS = 15
+ };
+ 
++#ifdef PORT
++/* PORT: ONE FIELD PER GENERATED WORD.
++ *
++ * tools/pc/gen_data.py emits every N64 32-bit data word as a `void *`, which
++ * is 8 bytes under -m64, and advances its interior-symbol offsets by 8 to
++ * match. So a generated table is a UNIFORM array of pointer-sized words.
++ *
++ * The N64 struct below is a MIXED layout -- u16/u32/s32 fields at 4-byte
++ * offsets, pointers at 4 bytes too. Under LP64 the compiler lays those out
++ * with 4-byte scalars and 8-byte pointers, and the two layouts stop agreeing:
++ * `setup->postInitFunc` at N64 offset 0x88 (word 34) resolved to a completely
++ * different word, which is how gtlStart came to jump to 0x30 and segfault.
++ *
++ * Making every field pointer-width restores the invariant the data has:
++ * field N lives at byte N*8, exactly where gen_data.py put word N.
++ *
++ * The two sub-word fields need care. N64 is BIG-ENDIAN, so a u16 declared at a
++ * word's base occupies that word's HIGH half; the generator preserved the
++ * whole word, so those are read with a shift. */
++typedef uintptr_t GtlWord;
++typedef struct {
++    /* word  0 */ GtlWord flags;
++    /* word  1 */ void (*onUpdate)(void);
++    /* word  2 */ void (*onDraw)(void);
++    /* word  3 */ void* heapBase;
++    /* word  4 */ GtlWord heapSize;
++    /* word  5 */ GtlWord unk14;
++    /* word  6 */ GtlWord numContexts;
++    /* word  7 */ GtlWord dlBufferSize0;
++    /* word  8 */ GtlWord dlBufferSize1;
++    /* word  9 */ GtlWord dlBufferSize2;
++    /* word 10 */ GtlWord dlBufferSize3;
++    /* word 11 */ GtlWord gfxHeapSize;
++    /* word 12 */ GtlWord unk30;
++    /* word 13 */ GtlWord rdpOutputBufferSize;
++    /* word 14 */ void (*beforeRender)(Gfx**);
++    /* word 15 */ void (*contpadPoll)(void);
++} BufferSetup;
++/* A u16 declared at a word base is that word's HIGH half on big-endian, so a
++ * read of the generated word needs a shift. Applied at the use site rather
++ * than via a macro -- a `#define flags ...` here renamed the field in
++ * OSTask_t, Camera and GObj as well, which is exactly the sort of collision a
++ * header-wide macro invites. */
++#define GTL_FLAGS(w) ((u16)((w) >> 16))
++#else
+ typedef struct {
+     /* 0x00 */ u16 flags;
+     /* 0x04 */ void (*onUpdate)(void);
+@@ -44,12 +89,37 @@
+     /* 0x38 */ void (*beforeRender)(Gfx**);
+     /* 0x3C */ void (*contpadPoll)(void); // controller read callback?
+ } BufferSetup;                              // size == 0x40
++#endif
+ 
+ typedef struct MatrixFuncTable {
+     /* 0x00 */ s32 (*unk_00)(Mtx*, void*, Gfx**);
+     /* 0x04 */ s32 (*unk_04)(Mtx*, void*, Gfx**);
+ } MatrixFuncTable; // size = 0x08
+ 
++#ifdef PORT
++typedef struct {
++    /* word  0..15 */ BufferSetup gtlSetup;
++    /* word 16 */ GtlWord threadCount;
++    /* word 17 */ GtlWord threadStackCount;
++    /* word 18 */ GtlWord stackCount;
++    /* word 19 */ GtlWord unk4C;
++    /* word 20 */ GtlWord procCount;
++    /* word 21 */ GtlWord objCount;
++    /* word 22 */ GtlWord objectSize;
++    /* word 23 */ GtlWord mtxCount;
++    /* word 24 */ MatrixHandler *mtxHandler;
++    /* word 25 */ void* unk64;
++    /* word 26 */ GtlWord AObjCount;
++    /* word 27 */ GtlWord MObjCount;
++    /* word 28 */ GtlWord DObjCount;
++    /* word 29 */ GtlWord omDobjSize;
++    /* word 30 */ GtlWord SobjCount;
++    /* word 31 */ GtlWord omSobjSize;
++    /* word 32 */ GtlWord CameraCount;
++    /* word 33 */ GtlWord omCameraSize;
++    /* word 34 */ void (*postInitFunc)(void);
++} SceneSetup;
++#else
+ typedef struct {
+     /* 0x00 */ BufferSetup gtlSetup;
+     /* 0x40 */ u32 threadCount;
+@@ -72,6 +142,7 @@
+     /* 0x84 */ u32 omCameraSize;
+     /* 0x88 */ void (*postInitFunc)(void);
+ } SceneSetup; // size = 0x70
++#endif
+ 
+ typedef struct FuncTable {
+     /* 0x00 */ u16 flags;
+--- a/src/main/render.c
++++ b/src/main/render.c
+@@ -41,11 +41,20 @@
+ void guMtxCatF(f32 m[4][4], f32 n[4][4], f32 r[4][4]);
+ 
+ // like DObjPayloadTypeC, but with a second display list drawn in front
++#ifdef PORT
++/* PORT: 4-byte-slot data walked in place; see DObjPayloadTypeC in DObj.h. */
++typedef struct {
++    /* 0x00 */ s32 dlistID;
++    /* 0x04 */ u32 dlistBefore;
++    /* 0x08 */ u32 dlistAfter;
++} DObjPayloadTypeI; // size = 0x0C on the host as well
++#else
+ typedef struct {
+     /* 0x00 */ s32 dlistID;
+     /* 0x04 */ Gfx* dlistBefore;
+     /* 0x08 */ Gfx* dlistAfter;
+ } DObjPayloadTypeI; // size = 0x0C
++#endif
+ 
+ void renderSetCameraScissors(s32 top, s32 bottom, s32 left, s32 right) {
+     renderCameraScissorTop = top;
+@@ -2056,7 +2065,14 @@
+ 
+         if (flags & 0x4)
+         {
++#ifdef PORT
++            /* texture.palettes is a u32-held native pointer on the host
++             * (see the PORT TextureScroll in include/geo_block_header.h). */
++            gDPSetTextureImage(branch_dl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 1,
++                               ((u32 *)(uintptr_t)mobj->texture.palettes)[(s32)mobj->palIndex]);
++#else
+             gDPSetTextureImage(branch_dl++, G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, mobj->texture.palettes[(s32)mobj->palIndex]);
++#endif
+ 
+             if (flags & (0x2 | 0x1))
+             {
+@@ -2084,11 +2100,22 @@
+         }
+         if (flags & 0x1000)
+         {
++#ifdef PORT
++            /* ColorPacks keep memory byte order r,g,b,a on the host (byte
++             * readers here and in ovl6 rely on it); .pack must still carry
++             * the N64 numeric r<<24|g<<16|b<<8|a, so re-pack. */
++            gSPLightColor(branch_dl++, LIGHT_1, __builtin_bswap32(mobj->texture.lightColor1.pack));
++#else
+             gSPLightColor(branch_dl++, LIGHT_1, mobj->texture.lightColor1.pack);
++#endif
+         }
+         if (flags & 0x2000)
+         {
++#ifdef PORT
++            gSPLightColor(branch_dl++, LIGHT_2, __builtin_bswap32(mobj->texture.lightColor2.pack));
++#else
+             gSPLightColor(branch_dl++, LIGHT_2, mobj->texture.lightColor2.pack);
++#endif
+         }
+         if (flags & (0x200 | 0x10 | 0x8))
+         {
+@@ -2149,6 +2176,17 @@
+         {
+             s32 block_siz = ((u8)mobj->texture.siz2 == G_IM_SIZ_32b) ? G_IM_SIZ_32b : G_IM_SIZ_16b;
+ 
++#ifdef PORT
++            /* texture.textures is a u32-held native pointer on the host. */
++            gDPSetTextureImage
++            (
++                branch_dl++,
++                (u8)mobj->texture.fmt2,
++                block_siz,
++                1,
++                ((u32 *)(uintptr_t)mobj->texture.textures)[mobj->texIndex2]
++            );
++#else
+             gDPSetTextureImage
+             (
+                 branch_dl++,
+@@ -2157,6 +2195,7 @@
+                 1,
+                 mobj->texture.textures[mobj->texIndex2]
+             );
++#endif
+             if (flags & (0x10 | 0x1))
+             {
+                 gDPLoadSync(branch_dl++);
+@@ -2216,6 +2255,16 @@
+         }
+         if (flags & (0x10 | 0x1))
+         {
++#ifdef PORT
++            gDPSetTextureImage
++            (
++                branch_dl++,
++                (u8)mobj->texture.fmt1,
++                (u8)mobj->texture.siz1,
++                1,
++                ((u32 *)(uintptr_t)mobj->texture.textures)[mobj->texIndex1]
++            );
++#else
+             gDPSetTextureImage
+             (
+                 branch_dl++,
+@@ -2224,6 +2273,7 @@
+                 1,
+                 mobj->texture.textures[mobj->texIndex1]
+             );
++#endif
+         }
+         if (flags & 0x20)
+         {
+@@ -2574,7 +2624,12 @@
+ 
+ void renderDrawDObj_LevelOfDetail(DObj* dobj) {
+     s32 ret;
++#ifdef PORT
++    /* 4-byte-slot pointer table; see the DObj.h PORT union comment. */
++    u32* lodList = dobj->data.lod;
++#else
+     Gfx** lodList = dobj->data.lod;
++#endif
+     UNUSED s32 temp;
+ 
+     if (!(dobj->flags & 2)) {
+@@ -2672,7 +2727,12 @@
+                 payload++;
+             }
+ 
++#ifdef PORT
++            /* typeC is a u32-held native pointer on the host (DObj.h). */
++            renderDrawDObj_TypeC(dobj, (DObjPayloadTypeC *)(uintptr_t)payload->typeC);
++#else
+             renderDrawDObj_TypeC(dobj, payload->typeC);
++#endif
+         }
+     }
+ }
+@@ -2680,7 +2740,12 @@
+ void func_8001503C(DObj* dobj) {
+     void* segaddr = NULL;
+     s32 ret;
++#ifdef PORT
++    /* 4-byte-slot pointer table; see the DObj.h PORT union comment. */
++    u32* payload;
++#else
+     DObjPayloadTypeC** payload;
++#endif
+     DObjPayloadTypeC* curPayload;
+     Gfx* sp3C;
+     s32 i;
+@@ -2690,7 +2755,11 @@
+         f32 sp30 = renderObjectScale;
+         payload = dobj->data.typeH;
+         if (payload != NULL) {
++#ifdef PORT
++            curPayload = (DObjPayloadTypeC *)(uintptr_t)payload[renderLevelOfDetail];
++#else
+             curPayload = payload[renderLevelOfDetail];
++#endif
+         }
+ 
+         sp3C = D_8004ABA0;
+@@ -2769,7 +2838,12 @@
+                 renderLevelOfDetail++;
+             }
+ 
++#ifdef PORT
++            /* typeC is a u32-held native pointer on the host (DObj.h). */
++            curPayload = (DObjPayloadTypeC *)(uintptr_t)payload->typeC;
++#else
+             curPayload = payload->typeC;
++#endif
+             sp30 = D_8004ABA0;
+             ret = renderPrepareModelMatrix(&D_8004ABA0, dobj);
+ 
+@@ -2826,7 +2900,13 @@
+     UNUSED s32 pad;
+     f32 sp24;
+     UNUSED s32 pad2;
++#ifdef PORT
++    /* Gfx *[2] payload stored as two u32 slots in the blob (see the
++     * DObjPayloadTypeC PORT comment in DObj.h). */
++    u32* payload;
++#else
+     Gfx** payload;
++#endif
+ 
+     payload = dobj->data.data;
+ 
+@@ -2946,8 +3026,14 @@
+     s32 ret;
+     UNUSED s32 pad;
+     f32 sp24;
++#ifdef PORT
++    /* Two levels of 4-byte-slot tables (see DObj.h PORT union comment). */
++    u32* payload;
++    u32* lodList;
++#else
+     Gfx** payload;
+     Gfx*** lodList;
++#endif
+ 
+     lodList = dobj->data.data;
+ 
+@@ -2955,7 +3041,11 @@
+         sp24 = renderObjectScale;
+ 
+         if (lodList != NULL) {
++#ifdef PORT
++            payload = (u32 *)(uintptr_t)lodList[renderLevelOfDetail];
++#else
+             payload = lodList[renderLevelOfDetail];
++#endif
+         }
+ 
+         if (lodList != NULL && payload[0] != NULL && !(dobj->flags & 1)) {
+@@ -3043,14 +3133,23 @@
+     DObjPayloadTypeI* payload;
+     Gfx* sp3C;
+     s32 i;
++#ifdef PORT
++    /* 4-byte-slot pointer table (see DObj.h PORT union comment). */
++    u32* lodLists;
++#else
+     DObjPayloadTypeI** lodLists;
++#endif
+ 
+     if (!(dobj->flags & 2)) {
+         f32 sp30 = renderObjectScale;
+ 
+         lodLists = dobj->data.data;
+         if (lodLists != NULL) {
++#ifdef PORT
++            payload = (DObjPayloadTypeI *)(uintptr_t)lodLists[renderLevelOfDetail];
++#else
+             payload = lodLists[renderLevelOfDetail];
++#endif
+         }
+ 
+         sp3C = D_8004ABA0;
+@@ -3131,7 +3230,12 @@
+                 renderLevelOfDetail++;
+             }
+ 
++#ifdef PORT
++            /* typeC is a u32-held native pointer on the host (DObj.h). */
++            curPayload = (DObjPayloadTypeC *)(uintptr_t)payload->typeC;
++#else
+             curPayload = payload->typeC;
++#endif
+             sp30 = D_8004ABA0;
+             ret = renderPrepareModelMatrix(&D_8004ABA0, dobj);
+ 
+@@ -3895,4 +3999,4 @@
+ }
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/main/render/func_800183BC.s")
+-#endif
++#endif
+\ No newline at end of file
+--- a/src/main/sched.c
++++ b/src/main/sched.c
+@@ -1337,6 +1337,16 @@
+     while (1) {
+         osRecvMesg(&scTaskMQ, &mesg, OS_MESG_BLOCK);
+ 
++#ifdef PORT
++        {
++            extern int pc_sched_debug_enabled(void);
++            static int schedDbgN = 0;
++            if (pc_sched_debug_enabled() && schedDbgN < 60) {
++                void pc_sched_debug_print(int msg, int n);
++                pc_sched_debug_print((s32)(intptr_t)mesg, schedDbgN++);
++            }
++        }
++#endif
+         switch ((s32) (intptr_t) mesg) {
+             case 1:
+                 scHandleVRetrace();
+--- a/src/ovl1/ovl1.c
++++ b/src/ovl1/ovl1.c
+@@ -147,6 +147,43 @@
+     u8 bytecode[1];
+ } UnkScript;
+ 
++#ifdef PORT
++/* PORT overlays for RAW ROM BANK DATA.
++ *
++ * These structs are laid over bytes DMA'd straight out of the cartridge, so
++ * every slot is a 32-BIT BIG-ENDIAN word. The N64 reads them natively; this
++ * host is little-endian LP64, so (a) every multi-byte field needs a swap and
++ * (b) a pointer member would be 8 bytes and walk the data at the wrong
++ * stride. Pointer slots are therefore declared u32 -- after relocation they
++ * hold NATIVE host addresses truncated to 32 bits, which is lossless because
++ * the whole image and arena live below 4 GB (pc_check_low_memory aborts at
++ * startup otherwise; see src/pc/pc_mmio.c). */
++typedef struct UnkScriptDesc {
++    s32 scripts_num;
++    u32 scripts[1];
++} UnkScriptDesc;
++
++typedef struct UnkTexture {
++    u32 count;
++    s32 fmt;
++    s32 siz;
++    s32 width;
++    s32 height;
++    u16 palettes_num;
++    u16 flags;
++    u32 data[1];
++} UnkTexture;
++
++typedef struct UnkTextureDesc {
++    s32 textures_num;
++    u32 textures[1];
++} UnkTextureDesc;
++
++static inline u32 pc_be32(u32 v) { return __builtin_bswap32(v); }
++static inline u16 pc_be16(u16 v) { return (u16)__builtin_bswap16(v); }
++/* Bank slots hold host addresses as u32 after relocation. */
++#define PC_BANKPTR(x) ((void *)(uintptr_t)(x))
++#else
+ typedef struct UnkScriptDesc {
+     s32 scripts_num;
+     UnkScript *scripts[1];
+@@ -167,6 +204,7 @@
+     s32 textures_num;
+     UnkTexture *textures[1];
+ } UnkTextureDesc;
++#endif
+ 
+ void *gtlMalloc(u32 size, u32 alignment);
+ void func_8009E834(GObj *arg0);
+@@ -259,6 +297,72 @@
+     *(UnkEmitter **)((u8 *)arg0 + 0x4C) = func_8009B5E8(arg1, *(u16 *)((u8 *)arg0 + 4));
+ }
+ 
++#ifdef PORT
++/* Bank relocation for the host. The N64 body below does this in place with
++ * native reads; here every header word is big-endian and every slot is 4
++ * bytes, so counts and offsets are swapped explicitly and the public tables
++ * D_800D6A78/D_800D6A98 are rebuilt as NATIVE pointer arrays in the gtl
++ * arena. Consumers of those tables then work unchanged. UnkTexture header
++ * fields are normalised to native IN PLACE (this function is their only
++ * producer); texel data itself stays N64 byte order, which is what Fast3D
++ * expects. UnkScript interiors are NOT touched here -- their consumers are
++ * the script interpreter's problem and will be converted at their own read
++ * sites. */
++void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *texture_desc) {
++    s32 i, j;
++    UnkScript **stbl;
++    UnkTexture **ttbl;
++    UnkTexture *tex;
++
++    if (bank_id >= 8) {
++        return;
++    }
++    script_desc->scripts_num = pc_be32(script_desc->scripts_num);
++    texture_desc->textures_num = pc_be32(texture_desc->textures_num);
++    D_800D6A38[bank_id] = script_desc->scripts_num;
++    D_800D6A58[bank_id] = texture_desc->textures_num;
++
++    stbl = gtlMalloc(D_800D6A38[bank_id] * sizeof(UnkScript *), 8);
++    for (i = 0; i < D_800D6A38[bank_id]; i++) {
++        stbl[i] = (UnkScript *)((u8 *)script_desc + pc_be32(script_desc->scripts[i]));
++    }
++    D_800D6A78[bank_id] = stbl;
++
++    ttbl = gtlMalloc(D_800D6A58[bank_id] * sizeof(UnkTexture *), 8);
++    for (i = 0; i < D_800D6A58[bank_id]; i++) {
++        ttbl[i] = (UnkTexture *)((u8 *)texture_desc + pc_be32(texture_desc->textures[i]));
++    }
++    D_800D6A98[bank_id] = ttbl;
++
++    for (i = 0; i < D_800D6A58[bank_id]; i++) {
++        tex = ttbl[i];
++        tex->count = pc_be32(tex->count);
++        tex->fmt = pc_be32(tex->fmt);
++        tex->siz = pc_be32(tex->siz);
++        tex->width = pc_be32(tex->width);
++        tex->height = pc_be32(tex->height);
++        tex->palettes_num = pc_be16(tex->palettes_num);
++        tex->flags = pc_be16(tex->flags);
++        for (j = 0; j < tex->count; j++) {
++            tex->data[j] = (u32)(uintptr_t)((u8 *)texture_desc + pc_be32(tex->data[j]));
++        }
++        if (tex->fmt == 2) {
++            if (tex->flags & 1) {
++                j = tex->count;
++                tex->data[j] = (u32)(uintptr_t)((u8 *)texture_desc + pc_be32(tex->data[j]));
++            } else if (tex->palettes_num != 0) {
++                for (j = tex->count; j < tex->count + tex->palettes_num; j++) {
++                    tex->data[j] = (u32)(uintptr_t)((u8 *)texture_desc + pc_be32(tex->data[j]));
++                }
++            } else {
++                for (j = tex->count; j < tex->count * 2; j++) {
++                    tex->data[j] = (u32)(uintptr_t)((u8 *)texture_desc + pc_be32(tex->data[j]));
++                }
++            }
++        }
++    }
++}
++#else
+ void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *texture_desc) {
+     s32 i, j;
+ 
+@@ -297,6 +401,7 @@
+         }
+     }
+ }
++#endif /* PORT */
+ 
+ GObj *func_8009B99C(s32 num) {
+     s32 i;
+@@ -2663,6 +2768,618 @@
+     temp_s1_39->unk4 = 0;
+     *arg2 = temp_s1_39 + 8;
+ }
++#elif defined(PORT)
++/* PORT: hand-port of the ROM's 2D particle renderer (the m2c sketch above is
++ * the semantic reference; asm/nonmatchings/ovl1/ovl1/func_8009E8F4.s is the
++ * ground truth). For every live particle in the D_800D69C8 lists whose bank
++ * bit is set in the GObj's dlLinkBitMask, this projects the particle position
++ * through the camera (or through its emitter's cached matrix), culls against
++ * NDC, loads the frame's texture -- and CI palette -- out of the banks
++ * relocated by the PORT func_8009B768 (header fields and data[] slots are
++ * already native there; data[] holds host addresses as u32), and emits a raw
++ * RDP TEXRECT with prim-color / combiner / render-mode state tracking.
++ * Behavioural port, not codegen-matching. */
++
++void guOrthoF(f32 mf[4][4], f32 l, f32 r, f32 b, f32 t, f32 n, f32 f, f32 scale);
++void guLookAtF(f32 mf[4][4], f32 xEye, f32 yEye, f32 zEye, f32 xAt, f32 yAt, f32 zAt,
++               f32 xUp, f32 yUp, f32 zUp);
++void guLookAtF_2(f32 mf[4][4], f32 xEye, f32 yEye, f32 zEye, f32 xAt, f32 yAt, f32 zAt,
++                 f32 roll, f32 xUp, f32 yUp, f32 zUp);
++void guMtxCatF(f32 m[4][4], f32 n[4][4], f32 res[4][4]);
++void HS64_PerspectiveF(f32 mf[4][4], u16 *perspNorm, f32 fovy, f32 aspect, f32 n, f32 f,
++                       f32 scale);
++void func_8001B28C(f32 mf[4][4], u16 *perspNorm, f32 fovy, f32 aspect, f32 n, f32 f,
++                   f32 scale);
++void func_8001C2E4(f32 m[4][4], Vector translate, Vector rotate, Vector scale);
++
++/* Per-bank prim/env color modulation table. On the PC bss it is a native
++ * pointer array (8 slots); a NULL slot means "no modulation". */
++extern void *D_800D6AB8[];
++
++/* UnkEmitter (top of this file) hides its two matrices and the two cached
++ * axis norms behind pad2C[0x88]. This mirror names those fields; it is
++ * layout-identical to UnkEmitter under LP64 (checked right below). N64
++ * offsets in comments. */
++typedef struct PortXfEmitter {
++    struct UnkEmitter *next;
++    f32 tx, ty, tz;       /* 0x04 translate */
++    f32 rx, ry, rz;       /* 0x10 rotate */
++    f32 sclX, sclY, sclZ; /* 0x1C scale */
++    u8 mtxState;          /* 0x28: !=2 rebuild each frame; 1 -> build once then 2 */
++    u8 frameStamp;        /* 0x29 compared against D_800BE3EC */
++    u16 refCount;         /* 0x2A */
++    f32 mtx[4][4];        /* 0x2C local transform */
++    f32 mtx2[4][4];       /* 0x6C local * (view*proj) */
++    f32 normX;            /* 0xAC column-0 norm of mtx2 */
++    f32 normY;            /* 0xB0 column-1 norm of mtx2 */
++    void (*unkB4)();      /* 0xB4 */
++    u16 unkB8;            /* 0xB8 */
++    u8 billboard;         /* 0xBA */
++} PortXfEmitter;
++typedef char port_xf_emitter_size_check[(sizeof(PortXfEmitter) == sizeof(UnkEmitter)) ? 1 : -1];
++typedef char port_xf_emitter_tail_check[
++    (__builtin_offsetof(PortXfEmitter, unkB4) == __builtin_offsetof(UnkEmitter, unkB4)) ? 1 : -1];
++
++/* Shape of the D_800D6AB8 entries: three u16 color multipliers (16.16-ish,
++ * 0x10000 = 1.0 after the >>16). */
++typedef struct PortColorMod {
++    u16 r, g, b;
++} PortColorMod;
++
++/* The ROM's power-of-two mask tables (jtbl_800D58B4/jtbl_800D5930): only
++ * exact powers of two in [2,256] get a mask, everything else gets 0. */
++static s32 port_dim_mask(s32 d) {
++    switch (d) {
++        case 0x002: return 1;
++        case 0x004: return 2;
++        case 0x008: return 3;
++        case 0x010: return 4;
++        case 0x020: return 5;
++        case 0x040: return 6;
++        case 0x080: return 7;
++        case 0x100: return 8;
++        default:    return 0;
++    }
++}
++
++void func_8009E8F4(void *arg0, s32 arg1, void **arg2) {
++    GObj *gobj = arg0;
++    Camera *cam = omCurrentCamera->data.cam;
++    Gfx *g = (Gfx *) *arg2;
++    f32 projF[4][4]; /* sp278: projection (or screen-inverse copy) */
++    f32 viewF[4][4]; /* sp2F8: view */
++    f32 vpF[4][4];   /* sp2B8: view * proj (or screen-inverse) */
++    f32 vsX, vsY, vsZ, vtX, vtY, vtZ;
++    f32 colNormX, colNormY; /* sp250 / sp24C */
++    s32 lastRenderMode = -1; /* sp340 */
++    s32 lastBlendAlpha = -1; /* sp33C */
++    s32 lastTlutMode = -1;   /* sp338 */
++    u32 lastImg = 0;         /* sp348 */
++    u32 lastPal = 0;         /* sp344 */
++    s32 i;
++
++    /* The N64 leaves whichever of proj/view no camera matrix writes as stack
++     * garbage; identity is the safe host equivalent. */
++    guMtxIdentF(projF);
++    guMtxIdentF(viewF);
++
++    for (i = 0; i < (s32) cam->mtxCount; i++) {
++        switch (cam->matrices[i]->kind) {
++            case 3:
++                HS64_PerspectiveF(projF, NULL, cam->perspMtx.persp.fovy,
++                                  cam->perspMtx.persp.aspect, cam->perspMtx.persp.near,
++                                  cam->perspMtx.persp.far, cam->perspMtx.persp.scale);
++                break;
++            case 4:
++                func_8001B28C(projF, NULL, cam->perspMtx.persp.fovy,
++                              cam->perspMtx.persp.aspect, cam->perspMtx.persp.near,
++                              cam->perspMtx.persp.far, cam->perspMtx.persp.scale);
++                break;
++            case 5:
++                guOrthoF(projF, cam->perspMtx.ortho.left, cam->perspMtx.ortho.right,
++                         cam->perspMtx.ortho.bottom, cam->perspMtx.ortho.top,
++                         cam->perspMtx.ortho.near, cam->perspMtx.ortho.far,
++                         cam->perspMtx.ortho.scale);
++                break;
++            case 6:
++            case 7:
++            case 12:
++            case 13:
++                guLookAtF(viewF, cam->viewMtx.lookAt.eye.x, cam->viewMtx.lookAt.eye.y,
++                          cam->viewMtx.lookAt.eye.z, cam->viewMtx.lookAt.at.x,
++                          cam->viewMtx.lookAt.at.y, cam->viewMtx.lookAt.at.z,
++                          cam->viewMtx.lookAt.up.x, cam->viewMtx.lookAt.up.y,
++                          cam->viewMtx.lookAt.up.z);
++                break;
++            case 8:
++            case 9:
++            case 14:
++            case 15:
++                guLookAtF_2(viewF, cam->viewMtx.lookAtRoll.xEye, cam->viewMtx.lookAtRoll.yEye,
++                            cam->viewMtx.lookAtRoll.zEye, cam->viewMtx.lookAtRoll.xAt,
++                            cam->viewMtx.lookAtRoll.yAt, cam->viewMtx.lookAtRoll.zAt,
++                            cam->viewMtx.lookAtRoll.roll, 0.0f, 1.0f, 0.0f);
++                break;
++            case 10:
++            case 11:
++            case 16:
++            case 17:
++                guLookAtF_2(viewF, cam->viewMtx.lookAtRoll.xEye, cam->viewMtx.lookAtRoll.yEye,
++                            cam->viewMtx.lookAtRoll.zEye, cam->viewMtx.lookAtRoll.xAt,
++                            cam->viewMtx.lookAtRoll.yAt, cam->viewMtx.lookAtRoll.zAt,
++                            cam->viewMtx.lookAtRoll.roll, 0.0f, 0.0f, 1.0f);
++                break;
++            default:
++                HS64_PerspectiveF(projF, NULL, cam->perspMtx.persp.fovy,
++                                  cam->perspMtx.persp.aspect, cam->perspMtx.persp.near,
++                                  cam->perspMtx.persp.far, cam->perspMtx.persp.scale);
++                guLookAtF(viewF, cam->viewMtx.lookAt.eye.x, cam->viewMtx.lookAt.eye.y,
++                          cam->viewMtx.lookAt.eye.z, cam->viewMtx.lookAt.at.x,
++                          cam->viewMtx.lookAt.at.y, cam->viewMtx.lookAt.at.z,
++                          cam->viewMtx.lookAt.up.x, cam->viewMtx.lookAt.up.y,
++                          cam->viewMtx.lookAt.up.z);
++                break;
++        }
++    }
++
++    vsX = cam->viewport.vp.vscale[0];
++    vsY = -cam->viewport.vp.vscale[1];
++    vsZ = cam->viewport.vp.vscale[2];
++    vtX = cam->viewport.vp.vtrans[0];
++    vtY = cam->viewport.vp.vtrans[1];
++    vtZ = cam->viewport.vp.vtrans[2];
++
++    if (cam->mtxCount != 0) {
++        guMtxCatF(viewF, projF, vpF);
++    } else {
++        s32 r, c;
++
++        /* No camera matrices: build the inverse of the viewport mapping so
++         * "world" coordinates are effectively screen coordinates. */
++        guMtxIdentF(vpF);
++        vpF[0][0] = 1.0f / vsX;
++        vpF[1][1] = 1.0f / vsY;
++        vpF[2][2] = -1.0f / vsZ;
++        vpF[3][0] = -vtX / vsX;
++        vpF[3][1] = -vtY / vsY;
++        vpF[3][2] = vtZ / vsZ;
++        for (r = 0; r < 4; r++) {
++            for (c = 0; c < 4; c++) {
++                projF[r][c] = vpF[r][c];
++            }
++        }
++    }
++
++    colNormX = sqrtf(vpF[0][0] * vpF[0][0] + vpF[1][0] * vpF[1][0] + vpF[2][0] * vpF[2][0]);
++    colNormY = sqrtf(vpF[0][1] * vpF[0][1] + vpF[1][1] * vpF[1][1] + vpF[2][1] * vpF[2][1]);
++
++    /* Header: pipe sync, point sampling, RDP state defaults. */
++    g->words.w0 = 0xE7000000; g->words.w1 = 0; g++;
++    g->words.w0 = 0xE3000C00; g->words.w1 = 0; g++;
++    g->words.w0 = 0xE2001D00; g->words.w1 = 4; g++;
++    g->words.w0 = 0xE3001801; g->words.w1 = (u8) D_800BE3E0; g++;
++    g->words.w0 = 0xE3001A01; g->words.w1 = (u8) D_800BE3E4; g++;
++
++    D_800BE3EC += 1;
++
++    for (i = 0; i < 16; i++) {
++        UnkParticle *p;
++
++        if (!(gobj->dlLinkBitMask & (1u << i))) {
++            continue;
++        }
++        for (p = D_800D69C8[i]; p != NULL; p = p->next) {
++            u32 flags;
++            f32 px, py, pz;
++            f32 normX, normY;
++            f32 cx, cy, cz, cw;
++            f32 invW, sprScale;
++            f32 scX, seX, scY, seY;
++            f32 xlF, xrF, ytF, ybF, zScr;
++            PortXfEmitter *em;
++            UnkTexture *tex;
++            s32 fmt, siz, tw, th;
++            u32 img, pal;
++            s32 dsdx, dtdy;
++            s32 cmS, maskS, cmT, maskT;
++
++            flags = p->unk6;
++            if (flags & 8) {
++                if (!(arg1 & 1)) {
++                    continue;
++                }
++            } else if (!(arg1 & 2)) {
++                continue;
++            }
++            if (p->unk44 == 0.0f) {
++                continue;
++            }
++
++            px = p->unk24;
++            py = p->unk28;
++            pz = p->unk2C;
++            em = (PortXfEmitter *) p->unk60;
++
++            if (em != NULL) {
++                if (D_800BE3EC != em->frameStamp) {
++                    if (em->mtxState != 2) {
++                        Vector tv, rv, sv;
++
++                        tv.x = em->tx; tv.y = em->ty; tv.z = em->tz;
++                        rv.x = em->rx; rv.y = em->ry; rv.z = em->rz;
++                        sv.x = em->sclX; sv.y = em->sclY; sv.z = em->sclZ;
++                        func_8001C2E4(em->mtx, tv, rv, sv);
++                    }
++                    if (em->mtxState == 1) {
++                        em->mtxState = 2;
++                    }
++                    guMtxCatF(em->mtx, vpF, em->mtx2);
++                    em->normX = sqrtf(em->mtx2[0][0] * em->mtx2[0][0] +
++                                      em->mtx2[1][0] * em->mtx2[1][0] +
++                                      em->mtx2[2][0] * em->mtx2[2][0]);
++                    em->normY = sqrtf(em->mtx2[0][1] * em->mtx2[0][1] +
++                                      em->mtx2[1][1] * em->mtx2[1][1] +
++                                      em->mtx2[2][1] * em->mtx2[2][1]);
++                    if (em->billboard != 0) {
++                        f32 lsx = sqrtf(em->mtx[0][0] * em->mtx[0][0] +
++                                        em->mtx[1][0] * em->mtx[1][0] +
++                                        em->mtx[2][0] * em->mtx[2][0]);
++                        f32 lsy = sqrtf(em->mtx[0][1] * em->mtx[0][1] +
++                                        em->mtx[1][1] * em->mtx[1][1] +
++                                        em->mtx[2][1] * em->mtx[2][1]);
++                        f32 lsz = sqrtf(em->mtx[0][2] * em->mtx[0][2] +
++                                        em->mtx[1][2] * em->mtx[1][2] +
++                                        em->mtx[2][2] * em->mtx[2][2]);
++
++                        em->mtx2[0][0] = projF[0][0] * lsx;
++                        em->mtx2[0][1] = 0.0f;
++                        em->mtx2[0][2] = 0.0f;
++                        em->mtx2[0][3] = 0.0f;
++                        em->mtx2[1][0] = 0.0f;
++                        em->mtx2[1][1] = projF[1][1] * lsy;
++                        em->mtx2[1][2] = 0.0f;
++                        em->mtx2[1][3] = 0.0f;
++                        em->mtx2[2][0] = 0.0f;
++                        em->mtx2[2][1] = 0.0f;
++                        em->mtx2[2][2] = projF[2][2] * lsz;
++                        em->mtx2[2][3] = projF[2][3] * lsz;
++                    }
++                    em->frameStamp = D_800BE3EC;
++                }
++                normX = em->normX;
++                normY = em->normY;
++                cx = em->mtx2[3][0] + (em->mtx2[0][0] * px + em->mtx2[1][0] * py + em->mtx2[2][0] * pz);
++                cy = em->mtx2[3][1] + (em->mtx2[0][1] * px + em->mtx2[1][1] * py + em->mtx2[2][1] * pz);
++                cz = em->mtx2[3][2] + (em->mtx2[0][2] * px + em->mtx2[1][2] * py + em->mtx2[2][2] * pz);
++                cw = em->mtx2[3][3] + (em->mtx2[0][3] * px + em->mtx2[1][3] * py + em->mtx2[2][3] * pz);
++            } else {
++                normX = colNormX;
++                normY = colNormY;
++                cx = vpF[3][0] + (vpF[0][0] * px + vpF[1][0] * py + vpF[2][0] * pz);
++                cy = vpF[3][1] + (vpF[0][1] * px + vpF[1][1] * py + vpF[2][1] * pz);
++                cz = vpF[3][2] + (vpF[0][2] * px + vpF[1][2] * py + vpF[2][2] * pz);
++                cw = vpF[3][3] + (vpF[0][3] * px + vpF[1][3] * py + vpF[2][3] * pz);
++            }
++
++            if (cw == 0.0f) {
++                continue;
++            }
++            invW = 1.0f / cw;
++            cx *= invW;
++            cy *= invW;
++            cz *= invW;
++            if (cx < -1.0f || cx > 1.0f || cy < -1.0f || cy > 1.0f || cz < -1.0f || cz > 1.0f) {
++                continue;
++            }
++
++            sprScale = invW * p->unk44;
++
++            /* Screen-space extents: center, center+half-extent, mirror. */
++            scX = cx * vsX + vtX;
++            seX = ((sprScale * normX) + cx) * vsX + vtX;
++            if (scX < seX) {
++                xlF = scX - (seX - scX);
++                xrF = seX;
++            } else {
++                xlF = seX;
++                xrF = scX - (seX - scX);
++            }
++            scY = cy * vsY + vtY;
++            seY = ((sprScale * normY) + cy) * vsY + vtY;
++            if (scY < seY) {
++                ytF = scY - (seY - scY);
++                ybF = seY;
++            } else {
++                ytF = seY;
++                ybF = scY - (seY - scY);
++            }
++            zScr = cz * vsZ + vtZ;
++
++            /* Texture bank lookup (tables normalised by PORT func_8009B768:
++             * header native, data[] slots are u32 host addresses). */
++            {
++                s32 bank = p->unk8 & 7;
++
++                tex = D_800D6A98[bank][p->unkA];
++                fmt = tex->fmt;
++                siz = tex->siz;
++                tw = tex->width;
++                th = tex->height;
++                img = tex->data[p->unkB];
++                pal = 0;
++                if (fmt == 2) {
++                    u32 cnt = tex->count;
++
++                    if (p->unkC != 0xFF) {
++                        pal = tex->data[cnt + p->unkC];
++                    } else if (flags & 0x10) {
++                        pal = tex->data[cnt];
++                    } else {
++                        pal = tex->data[cnt + p->unkB];
++                    }
++                }
++
++                dsdx = (s32) ((tw * 4096.0f) / (xrF - xlF));
++                dtdy = (s32) ((th * 4096.0f) / (ybF - ytF));
++
++                cmS = 2; /* G_TX_CLAMP */
++                maskS = 0;
++                if (flags & 0x20) {
++                    dsdx *= 2;
++                    cmS = 1; /* G_TX_MIRROR */
++                    maskS = port_dim_mask(tw);
++                }
++                cmT = 2;
++                maskT = 0;
++                if (flags & 0x40) {
++                    dtdy *= 2;
++                    cmT = 1;
++                    maskT = port_dim_mask(th);
++                }
++
++                /* CI: load the TLUT (tile 7, TMEM 0x100) when it changed, and
++                 * make sure the RGBA16 TLUT mode is on; off otherwise. */
++                if (fmt == 2) {
++                    if (pal != lastPal) {
++                        g->words.w0 = 0xFD100000; g->words.w1 = pal; g++;
++                        g->words.w0 = 0xE8000000; g->words.w1 = 0; g++;
++                        g->words.w0 = 0xF5000100; g->words.w1 = 0x07000000; g++;
++                        g->words.w0 = 0xE6000000; g->words.w1 = 0; g++;
++                        g->words.w0 = 0xF0000000; g->words.w1 = 0x073FC000; g++;
++                        g->words.w0 = 0xE7000000; g->words.w1 = 0; g++;
++                        lastPal = pal;
++                    }
++                    if (lastTlutMode != 1) {
++                        g->words.w0 = 0xE3001001; g->words.w1 = 0x8000; g++;
++                        lastTlutMode = 1;
++                    }
++                } else if (lastTlutMode != 0) {
++                    g->words.w0 = 0xE3001001; g->words.w1 = 0; g++;
++                    lastTlutMode = 0;
++                }
++
++                /* Texture load via LOADBLOCK through tile 7, render tile 0. */
++                if (img != lastImg) {
++                    if (siz >= 0 && siz <= 3) {
++                        u32 fmtBits = ((u32) fmt & 7) << 21;
++                        u32 tileBits = ((u32) (cmT & 3) << 18) | ((u32) (maskT & 0xF) << 14) |
++                                       ((u32) (cmS & 3) << 8) | ((u32) (maskS & 0xF) << 4);
++                        s32 texels = tw * th;
++                        u32 ldSiz, rdSiz;
++                        s32 lrs, wpr, line, evictThresh;
++
++                        switch (siz) {
++                            case 0: /* 4b, loaded as 16b */
++                                ldSiz = 0x100000;
++                                rdSiz = 0;
++                                lrs = ((texels + 3) >> 2) - 1;
++                                wpr = tw / 16;
++                                line = ((tw >> 1) + 7) >> 3;
++                                evictThresh = 0x1000;
++                                break;
++                            case 1: /* 8b, loaded as 16b */
++                                ldSiz = 0x100000;
++                                rdSiz = 0x80000;
++                                lrs = ((texels + 1) >> 1) - 1;
++                                wpr = tw / 8;
++                                line = (tw + 7) >> 3;
++                                evictThresh = 0x800;
++                                break;
++                            case 2: /* 16b */
++                                ldSiz = 0x100000;
++                                rdSiz = 0x100000;
++                                lrs = texels - 1;
++                                wpr = (tw * 2) / 8;
++                                line = ((tw * 2) + 7) >> 3;
++                                evictThresh = 0x400;
++                                break;
++                            default: /* 3: 32b */
++                                ldSiz = 0x180000;
++                                rdSiz = 0x180000;
++                                lrs = texels - 1;
++                                wpr = (tw * 4) / 8;
++                                line = ((tw * 2) + 7) >> 3;
++                                evictThresh = 0x200;
++                                break;
++                        }
++                        if (lrs >= 0x7FF) {
++                            lrs = 0x7FF;
++                        }
++                        if (wpr <= 0) {
++                            wpr = 1;
++                        }
++
++                        g->words.w0 = 0xFD000000 | fmtBits | ldSiz;
++                        g->words.w1 = img;
++                        g++;
++                        g->words.w0 = 0xF5000000 | fmtBits | ldSiz;
++                        g->words.w1 = 0x07000000 | tileBits;
++                        g++;
++                        g->words.w0 = 0xE6000000; g->words.w1 = 0; g++;
++                        g->words.w0 = 0xF3000000;
++                        g->words.w1 = 0x07000000 | ((u32) (lrs & 0xFFF) << 12) |
++                                      ((u32) ((wpr + 0x7FF) / wpr) & 0xFFF);
++                        g++;
++                        g->words.w0 = 0xE7000000; g->words.w1 = 0; g++;
++                        g->words.w0 = 0xF5000000 | fmtBits | rdSiz | ((u32) (line & 0x1FF) << 9);
++                        g->words.w1 = tileBits;
++                        g++;
++                        g->words.w0 = 0xF2000000;
++                        g->words.w1 = ((u32) (((tw - 1) * 4) & 0xFFF) << 12) |
++                                      (u32) (((th - 1) * 4) & 0xFFF);
++                        g++;
++
++                        /* Big loads spill into the TLUT half of TMEM. */
++                        if (texels >= evictThresh) {
++                            lastPal = 0;
++                        }
++                    }
++                    lastImg = img;
++                }
++
++                /* Prim color, optionally modulated per bank. */
++                {
++                    PortColorMod *cm = (PortColorMod *) D_800D6AB8[bank];
++
++                    if (cm != NULL) {
++                        s32 cr = (cm->r * p->unk4C) >> 16;
++                        s32 cg = (cm->g * p->unk4D) >> 16;
++                        s32 cb = (cm->b * p->unk4E) >> 16;
++
++                        if (cr >= 0x100) cr = 0xFF;
++                        if (cg >= 0x100) cg = 0xFF;
++                        if (cb >= 0x100) cb = 0xFF;
++                        g->words.w0 = 0xFA000000;
++                        g->words.w1 = ((u32) cr << 24) | ((u32) (cg & 0xFF) << 16) |
++                                      ((u32) (cb & 0xFF) << 8) | p->unk4F;
++                        g++;
++                    } else {
++                        g->words.w0 = 0xFA000000;
++                        g->words.w1 = ((u32) p->unk4C << 24) | ((u32) p->unk4D << 16) |
++                                      ((u32) p->unk4E << 8) | p->unk4F;
++                        g++;
++                    }
++
++                    /* Env color + combiner. */
++                    if (flags & 0x80) {
++                        if (cm != NULL) {
++                            s32 er = (cm->r * p->unk54) >> 16;
++                            s32 eg = (cm->g * p->unk55) >> 16;
++                            s32 eb = (cm->b * p->unk56) >> 16;
++
++                            if (er >= 0x100) er = 0xFF;
++                            if (eg >= 0x100) eg = 0xFF;
++                            if (eb >= 0x100) eb = 0xFF;
++                            g->words.w0 = 0xFB000000;
++                            g->words.w1 = ((u32) er << 24) | ((u32) (eg & 0xFF) << 16) |
++                                          ((u32) (eb & 0xFF) << 8) | p->unk57;
++                            g++;
++                        } else {
++                            g->words.w0 = 0xFB000000;
++                            g->words.w1 = ((u32) p->unk54 << 24) | ((u32) p->unk55 << 16) |
++                                          ((u32) p->unk56 << 8) | p->unk57;
++                            g++;
++                        }
++                        g->words.w0 = 0xFC30B261; g->words.w1 = 0x5566DB6D; g++;
++                    } else if (flags & 0x100) {
++                        g->words.w0 = 0xFC7096E1; g->words.w1 = 0xFF2FFFFF; g++;
++                    } else {
++                        g->words.w0 = 0xFC119623; g->words.w1 = 0xFF2FFFFF; g++;
++                    }
++                }
++
++                /* Blend color / render mode selector. */
++                {
++                    s32 mode;
++
++                    if (flags & 0x400) {
++                        mode = 3;
++                    } else {
++                        s32 bl = (flags & 0x200) ? p->unk57 : 8;
++
++                        mode = 1;
++                        if (lastBlendAlpha != bl) {
++                            g->words.w0 = 0xF9000000;
++                            g->words.w1 = (u32) bl & 0xFF;
++                            g++;
++                            lastBlendAlpha = bl;
++                        }
++                    }
++                    if (lastRenderMode != mode) {
++                        g->words.w0 = 0xE2001E01;
++                        g->words.w1 = (u32) mode;
++                        g++;
++                        lastRenderMode = mode;
++                    }
++                }
++
++                /* Prim depth + the 128-bit TEXRECT (E4 / E1 / F1). */
++                {
++                    s32 xrRaw = (s32) xrF;
++                    s32 ybRaw = (s32) ybF;
++                    s32 xlRaw = (s32) xlF;
++                    s32 ytRaw = (s32) ytF;
++                    s16 xrI = (s16) xrRaw;
++                    s16 ybI = (s16) ybRaw;
++                    s16 xlI = (s16) xlRaw;
++                    s16 ytI = (s16) ytRaw;
++                    s32 xrC = (xrI > 0) ? xrI : 0;
++                    s32 ybC = (ybI > 0) ? ybI : 0;
++                    s32 xlC = (xlI > 0) ? xlI : 0;
++                    s32 ytC = (ytI > 0) ? ytI : 0;
++                    s32 sOfs = 0;
++                    s32 tOfs = 0;
++
++                    g->words.w0 = 0xEE000000;
++                    g->words.w1 = (u32) (s32) (zScr * 32.0f) << 16;
++                    g++;
++
++                    /* Off-screen-left/top: advance S/T into the image. */
++                    if (xlI < 0) {
++                        s16 d = (s16) dsdx;
++                        s32 v = (xlI * d) >> 7;
++
++                        if (d < 0) {
++                            sOfs = (v > 0) ? v : 0;
++                        } else {
++                            sOfs = (v < 0) ? v : 0;
++                        }
++                    }
++                    if (ytRaw < 0) {
++                        s16 d = (s16) dtdy;
++                        s32 v = (ytI * d) >> 7;
++
++                        if (d < 0) {
++                            tOfs = (v > 0) ? v : 0;
++                        } else {
++                            tOfs = (v < 0) ? v : 0;
++                        }
++                    }
++
++                    g->words.w0 = 0xE4000000 | ((u32) (xrC & 0xFFF) << 12) | (u32) (ybC & 0xFFF);
++                    g->words.w1 = ((u32) (xlC & 0xFFF) << 12) | (u32) (ytC & 0xFFF);
++                    g++;
++                    g->words.w0 = 0xE1000000;
++                    g->words.w1 = ((u32) (-sOfs) << 16) | ((u32) (-tOfs) & 0xFFFF);
++                    g++;
++                    g->words.w0 = 0xF1000000;
++                    g->words.w1 = ((u32) dsdx << 16) | ((u32) dtdy & 0xFFFF);
++                    g++;
++                }
++            }
++        }
++    }
++
++    /* Footer: TLUT off, restore filter/state. */
++    if (lastTlutMode != 0) {
++        g->words.w0 = 0xE3001001; g->words.w1 = 0; g++;
++    }
++    g->words.w0 = 0xE3000C00; g->words.w1 = 0x80000; g++;
++    g->words.w0 = 0xE2001D00; g->words.w1 = 0; g++;
++    g->words.w0 = 0xE2001E01; g->words.w1 = 0; g++;
++
++    *arg2 = g;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_8009E8F4.s")
+ #endif
+@@ -3275,6 +3992,16 @@
+         } while (var_s0 != NULL);
+     }
+ }
++#elif defined(PORT)
++/* PORT: still assembly on the matching build, and the m2c sketch above is not
++ * compilable. This is the per-frame particle-list updater (walks D_800D6AF0,
++ * recycles nodes onto D_800D6A08); the game registers it as a GObj process at
++ * scene start, so the weak abort stub fires on the first frame. A no-op keeps
++ * the boot alive at the cost of frozen/absent particles until the function is
++ * genuinely matched. */
++void func_800A09AC(void *arg0) {
++    (void)arg0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A09AC.s")
+ #endif
+--- a/src/ovl1/ovl1_3.c
++++ b/src/ovl1/ovl1_3.c
+@@ -460,6 +460,45 @@
+     return (*temp_v1)[idx];
+ }
+ 
++#ifdef PORT
++/* The dma'd image blob is raw big-endian ROM data on the host. The N64 body
++ * relocates imgOffset/palOffset with native word reads, which on the host adds
++ * the base to a byte-swapped offset and hands the S2DEX bg path a wild image
++ * pointer (measured: strncmp fault inside the renderer's signature probe).
++ * Decode the multi-byte header fields once at load; the u8 fields (fmt, siz,
++ * unk2) are single bytes and already correct. Texel/palette payload stays raw
++ * -- N64 texture formats are byte streams and the renderer expects them. */
++struct BGHeader *func_800A8C40(u32 arg0) {
++    struct BGHeader ***temp_a2;
++    s32 idx;
++    u8 *raw;
++    struct BGHeader *h;
++
++    temp_a2 = &D_800D0104[arg0 >> 16];
++    idx = arg0 & 0xFFFF;
++    if ((*temp_a2)[idx] == NULL) {
++        (*temp_a2)[idx] = (struct BGHeader *)func_800A8B0C(arg0, 3);
++        h = (*temp_a2)[idx];
++        raw = (u8 *)h;
++        /* BGHeader (ovl1_3.h) is opaque in this TU; the layout is
++         * fmt/siz/unk2 u8 at 0..2, width u16 at 4, height u16 at 6,
++         * imgOffset u32 at 8, palOffset u32 at 12. */
++        (void)h;
++        *(u16 *)(raw + 4) = (u16)((raw[4] << 8) | raw[5]);
++        *(u16 *)(raw + 6) = (u16)((raw[6] << 8) | raw[7]);
++        *(u32 *)(raw + 8) = (((u32)raw[8] << 24) | ((u32)raw[9] << 16) | ((u32)raw[10] << 8) | raw[11])
++                            + (u32)(uintptr_t)raw;
++        *(u32 *)(raw + 12) = (((u32)raw[12] << 24) | ((u32)raw[13] << 16) | ((u32)raw[14] << 8) | raw[15])
++                             + (u32)(uintptr_t)raw;
++        {
++            extern void pc_bgload_debug(u32 id, const void *raw, const void *img, const void *pal);
++            pc_bgload_debug(arg0, raw, (void *)(uintptr_t)*(u32 *)(raw + 8),
++                            (void *)(uintptr_t)*(u32 *)(raw + 12));
++        }
++    }
++    return (*temp_a2)[idx];
++}
++#else
+ struct BGHeader *func_800A8C40(u32 arg0) {
+     struct BGHeader ***temp_a2;
+     s32 idx;
+@@ -475,6 +514,7 @@
+     }
+     return (*temp_a2)[idx];
+ }
++#endif /* PORT */
+ 
+ #ifdef NON_MATCHING
+ // 2/33 (was 9): reusing `arg0` as the scratch for the masked, doubled index --
+@@ -853,6 +893,1081 @@
+     }
+     return temp_v0;
+ }
++#elif defined(PORT)
++/* PORT: the geo/model bank entry loader + relocator, rewritten for the host
++ * from asm/nonmatchings/ovl1/ovl1_3/func_800A9250.s in the style of
++ * func_8009B768's PORT arm (ovl1.c).
++ *
++ * D_800D0184[bank] and its geoBlockTable are native host data on the PC
++ * build (regenerated as C initializers), so the table reads at the top are
++ * plain loads, exactly like the compiled func_800A8B0C. The blob dma_read()
++ * pulls in, however, is raw BIG-ENDIAN ROM data. Beyond the N64 asm's
++ * pointer relocation, this arm makes the blob FULLY consumable by native
++ * game code and by the Fast3D interpreter:
++ *
++ * Native after this returns:
++ *   - header +0x00 (layout ptr), +0x04 (texScroll ptr), +0x0C (imgRefs ptr,
++ *     when nonzero), +0x18 (anim refs ptr, when +0x14 and the word are both
++ *     nonzero): native host pointers, exactly like the N64 asm's relocation
++ *     (all game-visible allocations sit below 4 GiB, see pc_mmio.c, so a
++ *     u32 slot holds one);
++ *   - header +0x08 (layoutMode), +0x14 (numAnimations), +0x1C (lenLayout):
++ *     byte-swapped scalars, so the many compiled read sites
++ *     (func_800A9648/func_800A9864/func_800A9A2C below, func_800AB0F4,
++ *     func_800AF7A0, func_800F716C, ...) read them natively;
++ *   - for layoutModes 0x17..0x1E, the whole 0x2C-stride layout node array
++ *     through its 0x12-type terminator (struct UnkE4E4Arg, see
++ *     src/main/anim.h: s32 type/flags, u32 data ptr, 9 f32s), consumed
++ *     natively by anim.c's func_8000F980/func_8000FB10 walkers;
++ *   - every TextureScroll node the texScroll graph reaches (field-wise:
++ *     u16s/u32s/f32s swapped; ColorPacks and other byte fields untouched --
++ *     canonical byte order for colors is memory order r,g,b,a, and the two
++ *     .pack readers in render.c re-pack under PORT);
++ *   - the display lists (and the Vtx runs and G_MTX matrices they
++ *     reference) reachable from the per-mode payloads, walked conservatively
++ *     (validated first, one-shot via a visited bitmap, bounded, seg-4
++ *     references only). Gfx words become native u32 pairs, which is what
++ *     the Fast3D fork consumes; texel data referenced by G_SETTIMG stays in
++ *     N64 byte order, which is also what Fast3D expects.
++ *
++ * Still big-endian: header +0x10 (vtxRefs, no compiled consumer yet), the
++ * anim payload sections (+0x18's targets; the anim BLOCK loader
++ * func_800A94F4 and its consumers are a separate task), layout data of
++ * modes 0x11/0x12/0x16 (no compiled consumer / CPU-pointer-bearing TypeG
++ * data that cannot exist in raw ROM), and anything a validation pass
++ * rejected.
++ *
++ * Payload-per-mode map (derived from gDrawFuncList[mode] defaults plus
++ * func_800BB6B0's mode switch in ovl1_11.c, which agree):
++ *   0x13/0x15      display list directly at the layout pointer
++ *   0x14/0x16      DObjPayloadTypeC {s32 dlistID; Gfx *dl;} pairs at the
++ *                  layout pointer, terminated by dlistID == 4
++ *   0x17/0x19      per layout node: word +4 IS a segment-4 DL address
++ *                  (this is why the N64 asm does not relocate +4 for them)
++ *   0x18/0x1A      per layout node: word +4 -> TypeC pair array
++ *   0x1B/0x1D      per layout node: word +4 -> Gfx *[2] (before/after DLs)
++ *   0x1C/0x1E      per layout node: word +4 -> DObjPayloadTypeI
++ *                  {s32 dlistID; Gfx *before; Gfx *after;} triples,
++ *                  terminated by dlistID == 4
++ * Mode 0x15 is validated as a DL first and as a TypeE
++ * {f32 dist; Gfx *dl;} array second (the two dispatch tables disagree for
++ * it); whichever validates is swapped.
++ *
++ * Return type is u32 * rather than void *: the block-scope declarations the
++ * callers in this file compile (func_800A8EC0/func_800A9760/func_800A9864/
++ * func_800AA608) all say u32 *, and a void * definition is a conflicting
++ * type to GCC. */
++
++#include <stdlib.h>
++
++static inline u32 pc_be32(u32 v) { return __builtin_bswap32(v); }
++
++/* Decoded read of the big-endian blob word at p. */
++static inline u32 geo_rd(const void *p) { return pc_be32(*(const u32 *)p); }
++/* In-place rewrite of a blob word with a native value/pointer. */
++static inline void geo_wr(void *p, u32 v) { *(u32 *)p = v; }
++
++/* ---- swap-once machinery -------------------------------------------------
++ * One bit per 4-byte blob word: "this word already holds a native value".
++ * Set by the pointer-relocation writes and by every swap helper, so shared
++ * subtrees (a DL called from two nodes, a payload shared by two modes, the
++ * G_SETTIMG words the imgRefs pass already turned into BGHeader pointers)
++ * are never swapped twice and never mistaken for raw segment addresses.
++ * If the bitmap allocation ever failed, the helpers report everything as
++ * already-native and swap nothing: the blob stays BE (a deterministic wrong
++ * draw instead of silent corruption). */
++#define GSW_MAX_ENT 1024
++
++struct GeoSwap {
++    u8 *blob;
++    u32 size; /* usable payload bytes */
++    u8 *bm;
++    u8 *bmh;  /* second bitmap: "this word holds a rewritten HOST pointer" */
++    /* display-list entry points collected by the payload pass: the blob
++     * offset of the u32 slot the game reads (node word +4, payload dlist
++     * word, or header +0) and the blob offset of the packed DL it refers
++     * to. The widening pass rewrites each slot with a native widened-DL
++     * pointer. */
++    u32 ent_slot[GSW_MAX_ENT];
++    u32 ent_dl[GSW_MAX_ENT];
++    int ent_n;
++    int ent_overflow;
++};
++
++static int gsw_marked(struct GeoSwap *g, u32 off) {
++    if (g->bm == NULL) {
++        return 1;
++    }
++    return (g->bm[off >> 5] >> ((off >> 2) & 7)) & 1;
++}
++static void gsw_mark(struct GeoSwap *g, u32 off) {
++    if (g->bm != NULL) {
++        g->bm[off >> 5] |= (u8)(1u << ((off >> 2) & 7));
++    }
++}
++/* Native value of the word at off, whichever state it is in. */
++static u32 gsw_rd(struct GeoSwap *g, u32 off) {
++    u32 w = *(u32 *)(g->blob + off);
++    return gsw_marked(g, off) ? w : pc_be32(w);
++}
++/* Store a native value (the pointer-relocation writes). */
++static void gsw_put(struct GeoSwap *g, u32 off, u32 v) {
++    geo_wr(g->blob + off, v);
++    gsw_mark(g, off);
++    if (g->bmh != NULL) {
++        g->bmh[off >> 5] |= (u8)(1u << ((off >> 2) & 7));
++    }
++}
++/* Was this word rewritten to a host pointer (vs raw/byte-swapped data)? */
++static int gsw_hostptr(struct GeoSwap *g, u32 off) {
++    if (g->bmh == NULL) {
++        return 0;
++    }
++    return (g->bmh[off >> 5] >> ((off >> 2) & 7)) & 1;
++}
++/* Record a DL entry point for the widening pass. */
++static void gsw_entry(struct GeoSwap *g, u32 slot_off, u32 dl_off) {
++    if (g->ent_n >= GSW_MAX_ENT) {
++        g->ent_overflow = 1;
++        return;
++    }
++    g->ent_slot[g->ent_n] = slot_off;
++    g->ent_dl[g->ent_n] = dl_off;
++    g->ent_n++;
++}
++/* Byte-swap the whole word once; returns 1 when this call did the swap
++ * (i.e. the word really was raw big-endian data until now). */
++static int gsw_w32(struct GeoSwap *g, u32 off) {
++    if (gsw_marked(g, off)) {
++        return 0;
++    }
++    geo_wr(g->blob + off, pc_be32(*(u32 *)(g->blob + off)));
++    gsw_mark(g, off);
++    return 1;
++}
++/* Swap the two u16 halves of the word independently. */
++static int gsw_w16p(struct GeoSwap *g, u32 off) {
++    u8 *p;
++    u8 t;
++    if (gsw_marked(g, off)) {
++        return 0;
++    }
++    p = g->blob + off;
++    t = p[0]; p[0] = p[1]; p[1] = t;
++    t = p[2]; p[2] = p[3]; p[3] = t;
++    gsw_mark(g, off);
++    return 1;
++}
++/* Swap only the u16 in the first half; the trailing two bytes stay bytes. */
++static int gsw_w16hi(struct GeoSwap *g, u32 off) {
++    u8 *p;
++    u8 t;
++    if (gsw_marked(g, off)) {
++        return 0;
++    }
++    p = g->blob + off;
++    t = p[0]; p[0] = p[1]; p[1] = t;
++    gsw_mark(g, off);
++    return 1;
++}
++
++static int gsw_seg4(struct GeoSwap *g, u32 w, u32 need) {
++    return (w >> 24) == 4 && (w & 0xFFFFFF) + need <= g->size;
++}
++
++/* Field-wise swap of one TextureScroll node (0x78 bytes; the layout matches
++ * the PORT TextureScroll in include/geo_block_header.h). Words +0x04
++ * (textures) and +0x2C (palettes) were already turned into native pointers
++ * by the texScroll relocation walk, so the swap-once test skips them.
++ * primColor/envColor/blendColor/lightColor1/lightColor2 and the byte fields
++ * around minLOD keep memory byte order (r,g,b,a) -- byte readers all over
++ * the tree (renderLoadTextures, ovl6) depend on it; they are only marked so
++ * no later walk touches them. */
++static void gsw_texscroll(struct GeoSwap *g, u32 off) {
++    /* 0=mark only, 1=u32, 2=two u16s, 3=leading u16 only */
++    static const u8 kind[0x1E] = {
++        3, 0, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 3, 2, 2,
++        1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
++    };
++    u32 i;
++
++    if (off + 0x78 > g->size) {
++        return;
++    }
++    for (i = 0; i < 0x1E; i++, off += 4) {
++        switch (kind[i]) {
++        case 1: gsw_w32(g, off); break;
++        case 2: gsw_w16p(g, off); break;
++        case 3: gsw_w16hi(g, off); break;
++        default: gsw_mark(g, off); break;
++        }
++    }
++}
++
++/* Read-only validation that a plausible F3DEX2 display list starts at off:
++ * every command byte must be one the ucode knows (0x00..0x0A or
++ * 0xD7..0xFF), ending at G_ENDDL or a no-push G_DL. Reads are
++ * bitmap-aware, so a partially processed list still validates. */
++static int gsw_dl_ok(struct GeoSwap *g, u32 off) {
++    u32 n;
++
++    if (off & 7) {
++        return 0;
++    }
++    if (gsw_marked(g, off)) {
++        return 1; /* an earlier walk already processed this list */
++    }
++    for (n = 0; n < 0x20000; n++) {
++        u32 w0, op;
++        if (off + 8 > g->size) {
++            return 0;
++        }
++        w0 = gsw_rd(g, off);
++        op = w0 >> 24;
++        if (op == 0xDF) {
++            return 1;
++        }
++        if (op == 0xDE && ((w0 >> 16) & 0xFF) != 0) {
++            return 1; /* branch list: this list ends here */
++        }
++        if (op > 0x0A && op < 0xD7) {
++            return 0;
++        }
++        off += 8;
++    }
++    return 0;
++}
++
++/* Vtx runs referenced by G_VTX: 16 bytes each -- three words of s16 pairs
++ * (ob[3], flag, tc[2]) and one word of u8 colors/normals that stays. */
++static void gsw_vtx(struct GeoSwap *g, u32 off, u32 n) {
++    while (n--) {
++        if (off + 0x10 > g->size) {
++            return;
++        }
++        gsw_w16p(g, off);
++        gsw_w16p(g, off + 4);
++        gsw_w16p(g, off + 8);
++        gsw_mark(g, off + 12);
++        off += 0x10;
++    }
++}
++
++/* Swap one display list in place: every Gfx becomes two native u32 words.
++ * Follows G_DL calls/branches and G_BRANCH_Z, swaps referenced Vtx runs and
++ * G_MTX matrices. Only words THIS pass swapped are interpreted as segment
++ * addresses (a previously rewritten word -- e.g. a G_SETTIMG whose w1 the
++ * imgRefs pass replaced with a BGHeader pointer -- is skipped by the
++ * swap-once test, which matters because host bss crosses 0x04000000 and a
++ * native pointer can look like a segment-4 address). */
++static void gsw_dl_walk(struct GeoSwap *g, u32 off, int depth) {
++    u32 half1 = 0;
++
++    if (depth > 24 || (off & 7)) {
++        return;
++    }
++    for (;;) {
++        u32 w0, w1, op;
++        int raw1;
++
++        if (off + 8 > g->size) {
++            return;
++        }
++        if (gsw_marked(g, off)) {
++            return; /* the rest of this list was already walked */
++        }
++        gsw_w32(g, off);
++        raw1 = gsw_w32(g, off + 4);
++        w0 = *(u32 *)(g->blob + off);
++        w1 = *(u32 *)(g->blob + off + 4);
++        op = w0 >> 24;
++        if (op == 0xDF) { /* G_ENDDL */
++            return;
++        }
++        if (op == 0xDE) { /* G_DL */
++            if (raw1 && gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
++                gsw_dl_walk(g, w1 & 0xFFFFFF, depth + 1);
++            }
++            if (((w0 >> 16) & 0xFF) != 0) {
++                return; /* branch, not call */
++            }
++        } else if (op == 0x01) { /* G_VTX */
++            if (raw1 && gsw_seg4(g, w1, 0x10)) {
++                gsw_vtx(g, w1 & 0xFFFFFF, (w0 >> 12) & 0xFF);
++            }
++        } else if (op == 0xDA) { /* G_MTX: 64-byte fixed-point matrix */
++            if (raw1 && gsw_seg4(g, w1, 0x40)) {
++                u32 m = w1 & 0xFFFFFF;
++                u32 i;
++                for (i = 0; i < 0x40; i += 4) {
++                    gsw_w32(g, m + i);
++                }
++            }
++        } else if (op == 0xE1) { /* G_RDPHALF_1 carries G_BRANCH_Z's target */
++            half1 = w1;
++        } else if (op == 0x04) { /* G_BRANCH_Z */
++            if (gsw_seg4(g, half1, 8) && gsw_dl_ok(g, half1 & 0xFFFFFF)) {
++                gsw_dl_walk(g, half1 & 0xFFFFFF, depth + 1);
++            }
++        }
++        off += 8;
++    }
++}
++
++/* DObjPayloadTypeC pair array: {s32 dlistID; Gfx *dl;} until dlistID == 4.
++ * dlistID is CPU-read (renderDrawDObj_TypeC/_TypeD), dl goes to the
++ * interpreter as a segment-4 address. */
++static int gsw_typec_ok(struct GeoSwap *g, u32 off) {
++    u32 n;
++    for (n = 0; n < 512; n++) {
++        u32 id;
++        if (off + 4 > g->size) {
++            return 0;
++        }
++        id = gsw_rd(g, off);
++        if (id == 4) {
++            return 1;
++        }
++        if (id > 4) {
++            return 0;
++        }
++        if (off + 8 > g->size) {
++            return 0;
++        }
++        off += 8;
++    }
++    return 0;
++}
++static void gsw_typec(struct GeoSwap *g, u32 off, int depth) {
++    if (!gsw_typec_ok(g, off)) {
++        return;
++    }
++    for (;;) {
++        u32 id, w;
++        gsw_w32(g, off);
++        id = *(u32 *)(g->blob + off);
++        if (id >= 4) {
++            return;
++        }
++        if (gsw_w32(g, off + 4)) {
++            w = *(u32 *)(g->blob + off + 4);
++            if (gsw_seg4(g, w, 8) && gsw_dl_ok(g, w & 0xFFFFFF)) {
++                gsw_dl_walk(g, w & 0xFFFFFF, depth);
++                gsw_entry(g, off + 4, w & 0xFFFFFF);
++            }
++        }
++        off += 8;
++    }
++}
++
++/* DObjPayloadTypeI triple array: {s32 dlistID; Gfx *before; Gfx *after;}
++ * until dlistID == 4 (func_8001588C). */
++static int gsw_typei_ok(struct GeoSwap *g, u32 off) {
++    u32 n;
++    for (n = 0; n < 512; n++) {
++        u32 id;
++        if (off + 4 > g->size) {
++            return 0;
++        }
++        id = gsw_rd(g, off);
++        if (id == 4) {
++            return 1;
++        }
++        if (id > 4) {
++            return 0;
++        }
++        if (off + 12 > g->size) {
++            return 0;
++        }
++        off += 12;
++    }
++    return 0;
++}
++static void gsw_typei(struct GeoSwap *g, u32 off, int depth) {
++    u32 j;
++    if (!gsw_typei_ok(g, off)) {
++        return;
++    }
++    for (;;) {
++        u32 id, w;
++        gsw_w32(g, off);
++        id = *(u32 *)(g->blob + off);
++        if (id >= 4) {
++            return;
++        }
++        for (j = 4; j <= 8; j += 4) {
++            if (gsw_w32(g, off + j)) {
++                w = *(u32 *)(g->blob + off + j);
++                if (w != 0 && gsw_seg4(g, w, 8) && gsw_dl_ok(g, w & 0xFFFFFF)) {
++                    gsw_dl_walk(g, w & 0xFFFFFF, depth);
++                    gsw_entry(g, off + j, w & 0xFFFFFF);
++                }
++            }
++        }
++        off += 12;
++    }
++}
++
++/* Gfx *[2] payload (func_800156C4): two words, each 0 or a segment-4 DL. */
++static void gsw_dlpair(struct GeoSwap *g, u32 off, int depth) {
++    u32 i, w;
++    if (off + 8 > g->size) {
++        return;
++    }
++    for (i = 0; i < 2; i++) {
++        w = gsw_rd(g, off + i * 4);
++        if (w != 0 && !gsw_seg4(g, w, 8)) {
++            return;
++        }
++    }
++    for (i = 0; i < 2; i++) {
++        if (gsw_w32(g, off + i * 4)) {
++            w = *(u32 *)(g->blob + off + i * 4);
++            if (w != 0 && gsw_dl_ok(g, w & 0xFFFFFF)) {
++                gsw_dl_walk(g, w & 0xFFFFFF, depth);
++                gsw_entry(g, off + i * 4, w & 0xFFFFFF);
++            }
++        }
++    }
++}
++
++/* DObjPayloadTypeE array: {f32 drawDistance; Gfx *dl;}, last entry has
++ * drawDistance == 0 (the consumer loops while drawDistance > dist^2). */
++static void gsw_typee(struct GeoSwap *g, u32 off, int depth) {
++    u32 o = off;
++    u32 n;
++    for (n = 0; n < 64; n++) {
++        u32 dd, dl;
++        if (o + 8 > g->size) {
++            return;
++        }
++        dd = gsw_rd(g, o);
++        dl = gsw_rd(g, o + 4);
++        if (dl != 0 && !gsw_seg4(g, dl, 8)) {
++            return;
++        }
++        if (dd == 0) {
++            break;
++        }
++        /* must look like a positive, sanely sized f32 */
++        if ((dd >> 31) != 0 || (dd >> 23) < 0x60 || (dd >> 23) > 0x9F) {
++            return;
++        }
++        o += 8;
++    }
++    if (n >= 64) {
++        return;
++    }
++    for (;;) {
++        u32 dd, dl;
++        gsw_w32(g, off);
++        dd = *(u32 *)(g->blob + off);
++        if (gsw_w32(g, off + 4)) {
++            dl = *(u32 *)(g->blob + off + 4);
++            if (dl != 0 && gsw_dl_ok(g, dl & 0xFFFFFF)) {
++                gsw_dl_walk(g, dl & 0xFFFFFF, depth);
++                gsw_entry(g, off + 4, dl & 0xFFFFFF);
++            }
++        }
++        if (dd == 0) {
++            return;
++        }
++        off += 8;
++    }
++}
++
++/* ---- display-list widening ------------------------------------------------
++ * The Fast3D fork executes NATIVE F3DGfx commands: two uintptr_t words (16
++ * bytes on this LP64 host), while the blob stores packed 8-byte N64
++ * commands. The fork's packed-DL normalizer only fires for registered
++ * "reloc files" (pc_reloc_stubs.c registers none), so every packed DL the
++ * payload pass found is rebuilt here at load time into a native widened
++ * copy, and the u32 slot the game reads (layout node word +4, payload
++ * dlist word, or header +0) is rewritten to point at it:
++ *   - commands widen 1:1 (w0/w1 zero-extended), G_DL targets rewired to
++ *     their widened copies;
++ *   - G_VTX vertex runs and texture loads (G_SETTIMG + LOADBLOCK/LOADTILE/
++ *     LOADTLUT) are COPIED into memory above 4 GiB and the widened w1
++ *     rewritten to the copy, because the fork's low-VA guards
++ *     (gfx_vtx_addr_is_unresolved and the SETTIMG guard, interpreter.cpp)
++ *     treat every pointer below 4 GiB (vertices) / 256 MiB (textures) that
++ *     is not in a dlopen'd module as an unresolved N64 leftover and skip
++ *     the load -- and this port keeps ALL game-visible memory below 4 GiB;
++ *   - the widened command buffer itself is MAP_32BIT so the game's u32
++ *     slots can hold its address, which also lands it at 0x40000000+ where
++ *     no N64 segment number (all < 0x10) can mangle it in SegAddr.
++ * On any failure the entry slots are zeroed instead: a NULL glist makes
++ * every draw path skip the model -- a safe no-draw, never corruption. The
++ * buffers intentionally leak if the game's cache later evicts the blob
++ * (bounded by unique model loads; a reclamation hook can come later). */
++
++#include <sys/mman.h>
++
++#define GW_MAX_DLS 512
++#define GW_TEX_CAP 0x100000u
++
++struct GeoWiden {
++    struct GeoSwap *g;
++    u32 memo_off[GW_MAX_DLS];
++    uintptr_t memo_ptr[GW_MAX_DLS];
++    int memo_n;
++    int fail;
++    u32 cmds;      /* measured commands, incl. one safety terminator per DL */
++    u32 databytes; /* measured vertex + texel copy bytes */
++    u8 *cmdbuf;
++    u32 cmdcur;
++    u32 cmdmax; /* in 16-byte commands */
++    u8 *datbuf;
++    u32 datcur;
++    u32 datmax; /* bytes */
++};
++
++static int gw_memo_find(struct GeoWiden *w, u32 off, uintptr_t *out) {
++    int i;
++    for (i = 0; i < w->memo_n; i++) {
++        if (w->memo_off[i] == off) {
++            *out = w->memo_ptr[i];
++            return 1;
++        }
++    }
++    return 0;
++}
++static void gw_memo_add(struct GeoWiden *w, u32 off, uintptr_t p) {
++    if (w->memo_n >= GW_MAX_DLS) {
++        w->fail = 1;
++        return;
++    }
++    w->memo_off[w->memo_n] = off;
++    w->memo_ptr[w->memo_n] = p;
++    w->memo_n++;
++}
++
++/* Post-swap native read of a blob word. */
++static u32 gw_rd32(struct GeoSwap *g, u32 off) {
++    return *(u32 *)(g->blob + off);
++}
++
++/* One DL's own linear length in commands, up to and including its
++ * terminator (G_ENDDL or a no-push G_DL). abnormal = ran off the end. */
++static u32 gw_linear_len(struct GeoSwap *g, u32 off, int *abnormal) {
++    u32 n = 0;
++    *abnormal = 1;
++    while (off + 8 <= g->size && n < 0x20000) {
++        u32 w0 = gw_rd32(g, off);
++        u32 op = w0 >> 24;
++        n++;
++        if (op == 0xDF || (op == 0xDE && ((w0 >> 16) & 0xFF) != 0)) {
++            *abnormal = 0;
++            break;
++        }
++        off += 8;
++    }
++    return n;
++}
++
++/* Texel bytes moved by a LOADTLUT (0xF0) / LOADBLOCK (0xF3) / LOADTILE
++ * (0xF4) command, given the pending SETTIMG's siz. */
++static u32 gw_texbytes(u32 op, u32 w0, u32 w1, u32 siz) {
++    u32 t;
++    if (op == 0xF0) {
++        return (((w1 >> 14) & 0x3FF) + 1) * 2;
++    }
++    if (op == 0xF3) {
++        t = ((w1 >> 12) & 0xFFF) + 1;
++    } else {
++        u32 tw = (((w1 >> 12) & 0xFFF) >> 2) - (((w0 >> 12) & 0xFFF) >> 2) + 1;
++        u32 th = ((w1 & 0xFFF) >> 2) - ((w0 & 0xFFF) >> 2) + 1;
++        t = tw * th;
++    }
++    switch (siz) {
++    case 0: return (t + 1) >> 1;
++    case 1: return t;
++    case 2: return t * 2;
++    default: return t * 4;
++    }
++}
++
++/* Resolve the texel source behind a (post-swap) SETTIMG w1: either an
++ * imgRefs-patched host pointer (image bank block, low game arena --
++ * contiguous, trusted for len) or an in-blob segment-4 offset. */
++static const u8 *gw_timg_src(struct GeoSwap *g, u32 w1off, u32 w1, u32 len) {
++    if (gsw_hostptr(g, w1off)) {
++        return (const u8 *)(uintptr_t)w1;
++    }
++    if ((w1 >> 24) == 4 && (w1 & 0xFFFFFF) + len <= g->size) {
++        return g->blob + (w1 & 0xFFFFFF);
++    }
++    return NULL;
++}
++
++static void gw_measure(struct GeoWiden *w, u32 off, int depth) {
++    struct GeoSwap *g = w->g;
++    uintptr_t dummy;
++    int abnormal;
++    u32 len, i;
++    u32 pend_w1off = 0, pend_w1 = 0, pend_siz = 0;
++    int pend = 0;
++
++    if (w->fail || depth > 24) {
++        w->fail = 1;
++        return;
++    }
++    if (gw_memo_find(w, off, &dummy)) {
++        return;
++    }
++    gw_memo_add(w, off, 1);
++    len = gw_linear_len(g, off, &abnormal);
++    w->cmds += len + 1;
++    for (i = 0; i < len; i++) {
++        u32 w0 = gw_rd32(g, off + i * 8);
++        u32 w1 = gw_rd32(g, off + i * 8 + 4);
++        u32 op = w0 >> 24;
++        if (op == 0xDE) {
++            if (gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
++                gw_measure(w, w1 & 0xFFFFFF, depth + 1);
++            }
++        } else if (op == 0x01) {
++            u32 nv = (w0 >> 12) & 0xFF;
++            if (gsw_seg4(g, w1, nv * 0x10)) {
++                w->databytes += nv * 0x10;
++            }
++        } else if (op == 0xFD) {
++            pend = 1;
++            pend_siz = (w0 >> 19) & 3;
++            pend_w1off = off + i * 8 + 4;
++            pend_w1 = w1;
++        } else if (op == 0xF0 || op == 0xF3 || op == 0xF4) {
++            if (pend) {
++                u32 bytes = gw_texbytes(op, w0, w1, pend_siz);
++                if (bytes <= GW_TEX_CAP && gw_timg_src(g, pend_w1off, pend_w1, bytes) != NULL) {
++                    w->databytes += bytes;
++                }
++                pend = 0;
++            }
++        }
++    }
++}
++
++static uintptr_t gw_emit(struct GeoWiden *w, u32 off, int depth) {
++    struct GeoSwap *g = w->g;
++    uintptr_t found;
++    int abnormal;
++    u32 len, i, base_idx;
++    u8 *base;
++    u64 *pend_slot = NULL;
++    u32 pend_w1off = 0, pend_w1 = 0, pend_siz = 0;
++
++    if (w->fail || depth > 24) {
++        w->fail = 1;
++        return 0;
++    }
++    if (gw_memo_find(w, off, &found)) {
++        return found;
++    }
++    len = gw_linear_len(g, off, &abnormal);
++    if (w->cmdcur + len + 1 > w->cmdmax) {
++        w->fail = 1;
++        return 0;
++    }
++    base_idx = w->cmdcur;
++    w->cmdcur += len + 1;
++    base = w->cmdbuf + (uintptr_t)base_idx * 16;
++    gw_memo_add(w, off, (uintptr_t)base);
++
++    for (i = 0; i < len; i++) {
++        u32 w0 = gw_rd32(g, off + i * 8);
++        u32 w1 = gw_rd32(g, off + i * 8 + 4);
++        u32 op = w0 >> 24;
++        u64 w0v = w0;
++        u64 w1v = w1;
++        u64 *slot = (u64 *)(base + (uintptr_t)i * 16);
++
++        if (op == 0xDE) {
++            uintptr_t child = 0;
++            if (gsw_seg4(g, w1, 8) && gsw_dl_ok(g, w1 & 0xFFFFFF)) {
++                child = gw_emit(w, w1 & 0xFFFFFF, depth + 1);
++            }
++            if (child != 0) {
++                w1v = child;
++            } else if (((w0 >> 16) & 0xFF) == 0) {
++                w0v = 0; /* G_SPNOOP */
++                w1v = 0;
++            } else {
++                w0v = 0xDF000000u; /* branch with no target: end here */
++                w1v = 0;
++            }
++        } else if (op == 0x01) {
++            u32 nv = (w0 >> 12) & 0xFF;
++            if (gsw_seg4(g, w1, nv * 0x10) && w->datcur + nv * 0x10 <= w->datmax) {
++                __builtin_memcpy(w->datbuf + w->datcur, g->blob + (w1 & 0xFFFFFF), nv * 0x10);
++                w1v = (uintptr_t)(w->datbuf + w->datcur);
++                w->datcur += nv * 0x10;
++            }
++        } else if (op == 0xFD) {
++            pend_slot = slot;
++            pend_siz = (w0 >> 19) & 3;
++            pend_w1off = off + i * 8 + 4;
++            pend_w1 = w1;
++        } else if (op == 0xF0 || op == 0xF3 || op == 0xF4) {
++            if (pend_slot != NULL) {
++                u32 bytes = gw_texbytes(op, w0, w1, pend_siz);
++                const u8 *src = (bytes <= GW_TEX_CAP) ? gw_timg_src(g, pend_w1off, pend_w1, bytes) : NULL;
++                if (src != NULL && w->datcur + bytes <= w->datmax) {
++                    __builtin_memcpy(w->datbuf + w->datcur, src, bytes);
++                    pend_slot[1] = (uintptr_t)(w->datbuf + w->datcur);
++                    w->datcur += bytes;
++                }
++                pend_slot = NULL;
++            }
++        }
++        slot[0] = w0v;
++        slot[1] = w1v;
++    }
++    /* Safety terminator: reached even when the source list ran off the
++     * blob without a G_ENDDL. */
++    {
++        u64 *slot = (u64 *)(base + (uintptr_t)len * 16);
++        slot[0] = 0xDF000000u;
++        slot[1] = 0;
++    }
++    return (uintptr_t)base;
++}
++
++static void gsw_widen_all(struct GeoSwap *g) {
++    struct GeoWiden w;
++    u32 cmdbytes, datbytes;
++    int i;
++
++    if (g->ent_n == 0) {
++        return;
++    }
++    if (g->bm == NULL || g->ent_overflow) {
++        goto fail;
++    }
++    w.g = g;
++    w.memo_n = 0;
++    w.fail = 0;
++    w.cmds = 0;
++    w.databytes = 0;
++    w.cmdbuf = NULL;
++    w.datbuf = NULL;
++    for (i = 0; i < g->ent_n; i++) {
++        gw_measure(&w, g->ent_dl[i], 0);
++    }
++    if (w.fail || w.cmds == 0) {
++        goto fail;
++    }
++    cmdbytes = (w.cmds * 16 + 0xFFFu) & ~0xFFFu;
++    w.cmdbuf = mmap(NULL, cmdbytes, PROT_READ | PROT_WRITE,
++                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_32BIT, -1, 0);
++    if (w.cmdbuf == MAP_FAILED || (uintptr_t)w.cmdbuf + cmdbytes > 0xFFFFFFFFull) {
++        goto fail;
++    }
++    datbytes = (w.databytes + 0xFFFu) & ~0xFFFu;
++    if (datbytes != 0) {
++        /* must land ABOVE 4 GiB to pass the fork's low-VA guards */
++        w.datbuf = mmap((void *)(uintptr_t)0x200000000ull, datbytes,
++                        PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++        if (w.datbuf == MAP_FAILED || (uintptr_t)w.datbuf < 0x100000000ull) {
++            if (w.datbuf != MAP_FAILED) {
++                munmap(w.datbuf, datbytes);
++            }
++            munmap(w.cmdbuf, cmdbytes);
++            goto fail;
++        }
++    }
++    w.cmdcur = 0;
++    w.cmdmax = w.cmds;
++    w.datcur = 0;
++    w.datmax = w.databytes;
++    w.memo_n = 0;
++    for (i = 0; i < g->ent_n; i++) {
++        uintptr_t p = gw_emit(&w, g->ent_dl[i], 0);
++        *(u32 *)(g->blob + g->ent_slot[i]) = w.fail ? 0 : (u32)p;
++    }
++    if (w.fail) {
++        goto fail;
++    }
++    return;
++fail:
++    for (i = 0; i < g->ent_n; i++) {
++        *(u32 *)(g->blob + g->ent_slot[i]) = 0;
++    }
++}
++
++u32 *func_800A9250(u32 arg0, s32 arg1) {
++    u32 *entry;
++    u8 *blob;
++    u8 *list;
++    u8 *mid;
++    u8 *node;
++    u8 *sub;
++    u8 *n;
++    s32 size;
++    u32 w;
++    u32 mw;
++    u32 sw;
++    u32 off;
++    u32 bank;
++    u32 mode;
++    struct GeoSwap g;
++
++    entry = D_800D0184[arg0 >> 16]->geoBlockTable;
++    entry += (arg0 & 0xFFFF) * 2;
++    size = (entry[1] - entry[0]) | arg1;
++    blob = func_800A8358(size);
++    dma_read(entry[0], blob, size & 0xFFFFFC);
++
++    g.blob = blob;
++    g.size = (u32)(entry[1] - entry[0]) & 0xFFFFFC;
++    g.bm = calloc((g.size >> 5) + 2, 1);
++    g.bmh = calloc((g.size >> 5) + 2, 1);
++    g.ent_n = 0;
++    g.ent_overflow = 0;
++
++    /* +0xC: G_SETTIMG reference list -- stride 4, 0-terminated. Each slot
++     * holds a 24-bit offset to a node; the node's word +4 holds an image
++     * bank id. The slot is rewritten with that (decoded) bank id -- which is
++     * what func_800A8D64's compiled walk reads natively -- and the node's
++     * word +4 with the BGHeader pointer func_800A8BAC resolves it to. */
++    off = geo_rd(blob + 0xC) & 0xFFFFFF;
++    if (off != 0) {
++        list = blob + off;
++        gsw_put(&g, 0xC, (u32)(uintptr_t)list);
++        while ((w = geo_rd(list)) != 0) {
++            node = blob + (w & 0xFFFFFF);
++            bank = geo_rd(node + 4);
++            gsw_put(&g, (u32)(list - blob), bank);
++            gsw_put(&g, (u32)(node + 4 - blob), (u32)(uintptr_t)func_800A8BAC(bank));
++            list += 4;
++        }
++    }
++
++    /* +0x4: texture scroll section -- lists nested two deep, each stride 4,
++     * terminated by 0x99999999, with 0 slots skipped (but still stepped
++     * over). Outer and middle slots become native pointers into the blob;
++     * each level-3 node is a TextureScroll whose scalar fields are swapped
++     * in place (gsw_texscroll) and whose two bank-id lists at words +0x4 /
++     * +0x2C become native pointers to the lists, each nonzero list slot
++     * becoming a native BGHeader pointer from func_800A8BAC (called with
++     * the full decoded bank-id word). */
++    off = geo_rd(blob + 4) & 0xFFFFFF;
++    if (off != 0) {
++        list = blob + off;
++        gsw_put(&g, 4, (u32)(uintptr_t)list);
++        while ((w = geo_rd(list)) != 0x99999999U) {
++            if (w != 0) {
++                mid = blob + (w & 0xFFFFFF);
++                gsw_put(&g, (u32)(list - blob), (u32)(uintptr_t)mid);
++                while ((mw = geo_rd(mid)) != 0x99999999U) {
++                    if (mw != 0) {
++                        node = blob + (mw & 0xFFFFFF);
++                        gsw_put(&g, (u32)(mid - blob), (u32)(uintptr_t)node);
++                        off = geo_rd(node + 4) & 0xFFFFFF;
++                        if (off != 0) {
++                            sub = blob + off;
++                            gsw_put(&g, (u32)(node + 4 - blob), (u32)(uintptr_t)sub);
++                            while ((sw = geo_rd(sub)) != 0x99999999U) {
++                                if (sw != 0) {
++                                    gsw_put(&g, (u32)(sub - blob),
++                                            (u32)(uintptr_t)func_800A8BAC(sw));
++                                } else {
++                                    gsw_mark(&g, (u32)(sub - blob));
++                                }
++                                sub += 4;
++                            }
++                        }
++                        off = geo_rd(node + 0x2C) & 0xFFFFFF;
++                        if (off != 0) {
++                            sub = blob + off;
++                            gsw_put(&g, (u32)(node + 0x2C - blob), (u32)(uintptr_t)sub);
++                            while ((sw = geo_rd(sub)) != 0x99999999U) {
++                                if (sw != 0) {
++                                    gsw_put(&g, (u32)(sub - blob),
++                                            (u32)(uintptr_t)func_800A8BAC(sw));
++                                } else {
++                                    gsw_mark(&g, (u32)(sub - blob));
++                                }
++                                sub += 4;
++                            }
++                        }
++                        gsw_texscroll(&g, (u32)(node - blob));
++                    }
++                    mid += 4;
++                }
++            }
++            list += 4;
++        }
++    }
++
++    /* +0x0: layout section pointer. The asm relocates it unconditionally,
++     * so a 0 offset yields the blob base itself. */
++    w = geo_rd(blob + 0x0);
++    n = blob + (w & 0xFFFFFF);
++    gsw_put(&g, 0, (u32)(uintptr_t)n);
++
++    /* +0x18: animation refs pointer -- only when the count at +0x14 and the
++     * word itself are both nonzero. */
++    if (geo_rd(blob + 0x14) != 0) {
++        w = geo_rd(blob + 0x18);
++        if (w != 0) {
++            gsw_put(&g, 0x18, (u32)(uintptr_t)(blob + (w & 0xFFFFFF)));
++        }
++    }
++
++    mode = geo_rd(blob + 8);
++
++    /* +0x8: layout mode. For modes 0x18 and 0x1A..0x1E the layout section
++     * is an array of 0x2C-byte nodes ending at a node whose type word (+0)
++     * is 0x12: word +4 of every node before the terminator becomes a native
++     * pointer into the blob (0 stays 0), exactly like the N64 asm. */
++    switch (mode) {
++    case 0x18:
++    case 0x1A:
++    case 0x1B:
++    case 0x1C:
++    case 0x1D:
++    case 0x1E:
++        if (geo_rd(n) != 0x12) {
++            u8 *nn = n;
++            for (;;) {
++                w = geo_rd(nn + 4);
++                if (w != 0) {
++                    gsw_put(&g, (u32)(nn + 4 - blob), (u32)(uintptr_t)(blob + (w & 0xFFFFFF)));
++                }
++                w = geo_rd(nn + 0x2C);
++                nn += 0x2C;
++                if (w == 0x12) {
++                    break;
++                }
++            }
++        }
++        break;
++    }
++
++    /* PORT extra 1: byte-swap the layout node array itself for the modes
++     * whose consumers (func_800AF4BC -> func_8000F980/func_8000FB10) walk
++     * it natively as struct UnkE4E4Arg. Word +4 is skipped automatically by
++     * the swap-once test where the walk above already made it a pointer;
++     * for 0x17/0x19 it is swapped like any scalar (it holds a segment-4 DL
++     * address the DObj hands straight to the interpreter). Only the type
++     * word of the 0x12 terminator is touched -- the bytes after it belong
++     * to other sections. */
++    if (g.bm != NULL && mode >= 0x17 && mode <= 0x1E) {
++        off = (u32)(n - blob);
++        for (;;) {
++            u32 t;
++            u32 i;
++            if (off + 4 > g.size) {
++                break;
++            }
++            gsw_w32(&g, off);
++            t = *(u32 *)(blob + off);
++            if (t == 0x12) {
++                break;
++            }
++            if (off + 0x2C > g.size) {
++                break;
++            }
++            gsw_w32(&g, off + 4);
++            for (i = 8; i < 0x2C; i += 4) {
++                gsw_w32(&g, off + i);
++            }
++            off += 0x2C;
++        }
++    }
++
++    /* PORT extra 2: swap the draw payloads and display lists (map above). */
++    if (g.bm != NULL) {
++        switch (mode) {
++        case 0x13:
++        case 0x15:
++            off = (u32)(n - blob);
++            if (off < g.size && gsw_dl_ok(&g, off)) {
++                gsw_dl_walk(&g, off, 0);
++                gsw_entry(&g, 0, off); /* header +0 doubles as the DL slot */
++            } else if (mode == 0x15) {
++                gsw_typee(&g, off, 0);
++            }
++            break;
++        case 0x14:
++        case 0x16:
++            gsw_typec(&g, (u32)(n - blob), 0);
++            break;
++        case 0x17:
++        case 0x18:
++        case 0x19:
++        case 0x1A:
++        case 0x1B:
++        case 0x1C:
++        case 0x1D:
++        case 0x1E:
++            off = (u32)(n - blob);
++            for (;;) {
++                u32 t;
++                if (off + 4 > g.size) {
++                    break;
++                }
++                t = *(u32 *)(blob + off); /* native since extra 1 */
++                if (t == 0x12) {
++                    break;
++                }
++                if (off + 0x2C > g.size) {
++                    break;
++                }
++                w = *(u32 *)(blob + off + 4);
++                if (mode == 0x17 || mode == 0x19) {
++                    /* word +4 is itself a segment-4 DL address */
++                    if (gsw_seg4(&g, w, 8) && gsw_dl_ok(&g, w & 0xFFFFFF)) {
++                        gsw_dl_walk(&g, w & 0xFFFFFF, 0);
++                        gsw_entry(&g, off + 4, w & 0xFFFFFF);
++                    }
++                } else if (w != 0) {
++                    /* word +4 is a native pointer to an in-blob payload */
++                    u8 *p = (u8 *)(uintptr_t)w;
++                    if (p > blob && p < blob + g.size) {
++                        u32 poff = (u32)(p - blob);
++                        if (mode == 0x18 || mode == 0x1A) {
++                            gsw_typec(&g, poff, 0);
++                        } else if (mode == 0x1B || mode == 0x1D) {
++                            gsw_dlpair(&g, poff, 0);
++                        } else {
++                            gsw_typei(&g, poff, 0);
++                        }
++                    }
++                }
++                off += 0x2C;
++            }
++            break;
++        }
++
++        /* PORT extra 2b: widen every collected packed DL into native
++         * F3DGfx and rewire the slots the game reads (comment block above
++         * gsw_widen_all). */
++        gsw_widen_all(&g);
++    }
++
++    /* PORT extra 3: make the header scalars native for their compiled
++     * readers (layoutMode, numAnimations, lenLayout). +0x10 (vtxRefs) has
++     * no compiled consumer and stays BE. Unconditional (not via the
++     * swap-once helpers) so the read sites below stay correct even if the
++     * bitmap allocation failed and the deep swaps were skipped. */
++    geo_wr(blob + 0x8, mode);
++    geo_wr(blob + 0x14, geo_rd(blob + 0x14));
++    geo_wr(blob + 0x1C, geo_rd(blob + 0x1C));
++    gsw_mark(&g, 0x8);
++    gsw_mark(&g, 0x14);
++    gsw_mark(&g, 0x1C);
++
++    {
++        extern void pc_geoload_debug(u32 id, u32 mode, u32 size, const void *blob, u32 layoutOff);
++        pc_geoload_debug(arg0, mode, g.size, blob, (u32)(n - blob));
++    }
++
++    free(g.bm);
++    free(g.bmh);
++    return (u32 *)blob;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9250.s")
+ #endif
+@@ -976,6 +2091,34 @@
+     }
+     return arg0;
+ }
++#elif defined(PORT)
++/* PORT: still assembly on the matching build; the m2c sketch above is not
++ * compilable. Dispatch on the geo blob's layoutMode: store the layout
++ * pointer (header +0x00) and texScroll pointer (+0x04) -- both already
++ * native host pointers after func_800A9250's PORT relocation -- and hand
++ * them to the per-family setup. layoutMode (+0x08) is byte-swapped in
++ * place by the relocator, so it is a plain native read here. */
++void *func_800A9648(u32 *arg0) {
++    void func_800AF4BC(void *, void *, void *);
++    void func_800AF618(void *, void *, void *);
++    u32 mode;
++    void *layout;
++    void *texScroll;
++
++    mode = arg0[2];
++    layout = (void *)(uintptr_t)arg0[0];
++    texScroll = (void *)(uintptr_t)arg0[1];
++    if (mode >= 0x11 && mode <= 0x16) {
++        D_800DFA10[omCurrentObj->objId] = layout;
++        D_800DFD90[omCurrentObj->objId] = texScroll;
++        func_800AF618(layout, texScroll, D_800DFBD0[omCurrentObj->objId]);
++    } else if (mode >= 0x17 && mode <= 0x1E) {
++        D_800DFA10[omCurrentObj->objId] = layout;
++        D_800DFD90[omCurrentObj->objId] = texScroll;
++        func_800AF4BC(layout, texScroll, D_800DFBD0[omCurrentObj->objId]);
++    }
++    return arg0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9648.s")
+ #endif
+@@ -1050,6 +2193,45 @@
+     func_800A9A2C(omCurrentObj->objId);
+     func_800A9648(sp1C);
+ }
++#elif defined(PORT)
++/* PORT: behavioral port from the asm listing, modeled on the matched sibling
++ * func_800A9760 above -- identical bank-slot bind plus two sentinel-defaulted
++ * animation args handed to func_800AF9B8. 99999 (D_800D5DD8) means "use the
++ * default": arg1 falls back to the entry's word at +8 (layoutMode, made
++ * native in place by func_800A9250's PORT relocator), arg2 to 0x10. */
++void func_800A9864(u32 arg0, s32 arg1, s32 arg2) {
++    u32 *func_800A9250(u32, s32);
++    void func_800A99E4(s32);
++    void func_800A9A2C(s32);
++    void func_800A9D64(s32);
++    void *func_800A9648(u32 *);
++    void func_800AF9B8(u16, u8);
++    u32 **slot;
++    u32 *ptr;
++
++    slot = &D_800D00C4[arg0 >> 16][arg0 & 0xFFFF];
++    D_800E02D0[omCurrentObj->objId] = arg0;
++    if (*slot != NULL) {
++        ptr = *slot;
++        gSegment4StartArray[omCurrentObj->objId] = ptr;
++        func_800A8564((struct CacheLine *)ptr, 1);
++    } else {
++        ptr = func_800A9250(arg0, 3);
++        *slot = ptr;
++        gSegment4StartArray[omCurrentObj->objId] = ptr;
++    }
++    func_800A9D64(omCurrentObj->objId);
++    if ((u32)arg1 == 99999) {
++        arg1 = (s32)ptr[2];
++    }
++    if ((u32)arg2 == 99999) {
++        arg2 = 0x10;
++    }
++    func_800AF9B8((u16)arg1, (u8)arg2);
++    func_800A99E4(omCurrentObj->objId);
++    func_800A9A2C(omCurrentObj->objId);
++    func_800A9648(ptr);
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_3/func_800A9864.s")
+ #endif
+--- a/src/ovl1/ovl1_7.c
++++ b/src/ovl1/ovl1_7.c
+@@ -269,6 +269,23 @@
+     }
+     while (node != NULL) {
+         if (arg1 != NULL) {
++#ifdef PORT
++            /* The geo blob's texScroll lists are 4-byte u32 slots holding
++             * native pointers (func_800A9250's PORT relocator); a
++             * TextureScroll ** walk would stride 8 on the LP64 host. Same
++             * shape as func_8000FB10's PORT arm in src/main/anim.c. */
++            {
++                u32 *outer = (u32 *)arg1;
++                if (*outer != 0) {
++                    u32 *mids = (u32 *)(uintptr_t)*outer;
++                    while (*mids != 0 && *mids != 0x99999999U) {
++                        omDObjAddMObj(node, (TextureScroll *)(uintptr_t)*mids);
++                        mids++;
++                    }
++                }
++                arg1 = (TextureScroll ***)(outer + 1);
++            }
++#else
+             if (*arg1 != NULL) {
+                 mobjs = *arg1;
+                 t = *mobjs;
+@@ -279,6 +296,7 @@
+                 }
+             }
+             arg1++;
++#endif
+         }
+         node = animModelTreeNextNode(node);
+     }
+@@ -329,6 +347,22 @@
+ }
+ 
+ void func_800AF920(s32 arg0) {
++#ifdef PORT
++    /* UnkStruct800B158C is a raw-offset ILP32 image of the N64 SPObj; under
++       the LP64 SPObj (8-byte `next` at 0) its unk13 lands inside unkC instead
++       of on renderFlags. Go through the real SPObj (sprite.h -> SPObj.h). */
++    SPObj *tmp = omCurrentObj->unk4C;
++
++    if (arg0 < 0) {
++        tmp->renderFlags = tmp->renderFlags ^ 8;
++        return;
++    }
++    if (arg0 != 0) {
++        tmp->renderFlags = tmp->renderFlags & 0xFFF7;
++        return;
++    }
++    tmp->renderFlags = tmp->renderFlags | 8;
++#else
+     UnkStruct800B158C *tmp = omCurrentObj->unk4C;
+ 
+     if (arg0 < 0) {
+@@ -340,12 +374,20 @@
+         return;
+     }
+     tmp->unk13 = tmp->unk13 | 8;
++#endif
+ }
+ 
+ void func_800AF96C(s32 arg0) {
++#ifdef PORT
++    /* Same shear as func_800AF920: unk11 at raw 0x11 lands inside unkC. */
++    SPObj *tmp = omCurrentObj->unk4C;
++
++    tmp->unk11 = arg0;
++#else
+     UnkStruct800B158C *tmp = omCurrentObj->unk4C;
+ 
+     tmp->unk11 = arg0;
++#endif
+ }
+ 
+ void func_800AF980(s32 pri) {
+@@ -853,6 +895,68 @@
+ }
+ 
+ #ifdef NON_MATCHING
++#ifdef PORT
++/* PORT rewrite of the draft below. UnkStruct800B158C spells the N64 SPObj
++ * byte offsets with fixed-width fields, so under the LP64 SPObj every access
++ * shears: pos/scale (raw 0x20/0x28) land on width/height, xOffset and
++ * yOffset; unk5A (raw 0x5A) lands on bytes 2-3 of gfx[0].b.bg.imagePtr
++ * (LP64 0x58..0x60) and unkBA (raw 0xBA) lands on gfx[1].b.bg.imageW --
++ * which is exactly the boot-scene background corruption (imagePtr collapsing
++ * to its low 16 bits in one buffer, imageW=0 in the other). The N64 aliases
++ * resolve to, per kind:
++ *   pos.x/pos.y      -> xOffset/yOffset          (SPObj header)
++ *   scale.x/y/z      -> xScale/yScale/unk30      (SPObj header)
++ *   unk5A/unkBA      -> block+0x1A of gfx[0]/gfx[1]:
++ *                         kinds 0/1: b.bg imageFlip (the unk5A/unkBA aliases)
++ *                         kinds 2/3: t.ts.sprite scaleW (dead store on N64 --
++ *                                    func_800AD1A0 recomputes scaleW before
++ *                                    submission -- kept byte-faithful anyway)
++ *   unk6F/unkCF      -> block+0x2F = t.ts.sprite imageFlags
++ *   unk58/unkB8      -> block+0x18 = t.ts.sprite objX
++ *   unk60/unkC0      -> block+0x20 = t.ts.sprite objY */
++void func_800B158C(GObj *gobj) {
++    SPObj *sp = gobj->unk4C;
++    u16 var_a0;
++
++    if (sp != NULL) {
++        sp->xOffset = gEntitiesNextPosXArray[omCurrentObj->objId];
++        sp->yOffset = gEntitiesNextPosYArray[omCurrentObj->objId];
++        sp->xScale = gEntitiesScaleXArray[omCurrentObj->objId];
++        sp->yScale = gEntitiesScaleYArray[omCurrentObj->objId];
++        sp->unk30 = gEntitiesAngleZArray[omCurrentObj->objId];
++        var_a0 = 0;
++        switch (sp->unk10) {
++            case 0:
++            case 1:
++                if (D_800E10D0[omCurrentObj->objId] != 0.0f) {
++                    var_a0 = 1;
++                }
++                sp->unk5A = sp->unkBA = var_a0; /* gfx[0]/gfx[1] bg imageFlip */
++                break;
++            case 2:
++            case 3:
++                if (D_800E10D0[omCurrentObj->objId] != 0.0f) {
++                    var_a0 = 1;
++                }
++                sp->gfx[0].t.ts.sprite.s.scaleW = sp->gfx[1].t.ts.sprite.s.scaleW = var_a0;
++                break;
++            case 4:
++                if (D_800E10D0[omCurrentObj->objId] != 0.0f) {
++                    var_a0 = 1;
++                }
++                if (D_800E1290[omCurrentObj->objId] != 0.0f) {
++                    var_a0 |= 0x10;
++                }
++                sp->gfx[0].t.ts.sprite.s.imageFlags = sp->gfx[1].t.ts.sprite.s.imageFlags = var_a0;
++                sp->gfx[0].t.ts.sprite.s.objX = sp->gfx[1].t.ts.sprite.s.objX =
++                    gEntitiesAngleXArray[omCurrentObj->objId];
++                sp->gfx[0].t.ts.sprite.s.objY = sp->gfx[1].t.ts.sprite.s.objY =
++                    gEntitiesAngleYArray[omCurrentObj->objId];
++                break;
++        }
++    }
++}
++#else
+ void func_800B158C(GObj *gobj) {
+     UnkStruct800B158C *gobj_4C = gobj->unk4C;
+     u16 var_a0;
+@@ -888,6 +992,7 @@
+         }
+     }
+ }
++#endif /* PORT */
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_7/func_800B158C.s")
+ #endif
+--- a/src/ovl1/sprite.c
++++ b/src/ovl1/sprite.c
+@@ -491,6 +491,21 @@
+ }
+ 
+ void func_800AC8E0(struct SPObj_68 *arg0, struct C954Arg2 *arg1) {
++#ifdef PORT
++    /* struct SPObj_68 is the ILP32 image of uObjTxtr's tlut view; under LP64
++       uObjTxtr has an 8-byte image pointer at +0x8, so write the real GBI
++       fields instead of the raw-offset image. */
++    uObjTxtr *tx = (uObjTxtr *) arg0;
++
++    tx->tlut.type = G_OBJLT_TLUT;
++    tx->tlut.image = (u64 *) (uintptr_t) arg1->unkC;
++    tx->tlut.phead = 0x100;
++    tx->tlut.pnum = (arg1->unk2 - 1) & 0xFF;
++    tx->tlut.zero = 0;
++    tx->tlut.sid = 0;
++    tx->tlut.flag = arg1->unkC;
++    tx->tlut.mask = -1;
++#else
+     arg0->unk0 = 0x30;
+     arg0->unk4 = arg1->unkC;
+     arg0->unk8 = 0x100;
+@@ -499,6 +514,7 @@
+     arg0->unkE = 0;
+     arg0->unk10 = arg1->unkC;
+     arg0->unk14 = -1;
++#endif
+ }
+ 
+ void func_800AC924(uObjMtx *mtx) {
+@@ -515,6 +531,12 @@
+ // makes IDO emit the ROM's 3-words-per-pass loop.
+ struct SPObjBlk { u32 w[0x18]; };
+ 
++#ifdef PORT
++// Under LP64 the alias fields sheared off the block (see SPObj.h): the blocks
++// are real members now, so both the writers in func_800AC954 and the readers
++// below address them through the same typed layout.
++#define SPOBJ_GFX(sp) (&(sp)->gfx[(sp)->unk12])
++#else
+ // The RSP command block SPObj carries twice, at 0x40 and at 0xA0; spobj->unk12
+ // selects the copy so the CPU never rewrites the block the RSP is reading.
+ typedef union SPObjGfx {
+@@ -535,6 +557,7 @@
+ } SPObjBufs;
+ 
+ #define SPOBJ_GFX(sp) (&((SPObjBufs *) (sp))->gfx[(sp)->unk12])
++#endif
+ 
+ SPObj* func_800AC954(GObj* gobj, u32 kind, struct C954Arg2 *arg2) {
+     SPObj* sprite;
+@@ -582,6 +605,45 @@
+     sprite->xOffset = sprite->yOffset = 0.0f;
+     sprite->unk30 = sprite->unk34 = sprite->unk38 = 0.0f;
+     sprite->xScale = sprite->yScale = 1.0f;
++#ifdef PORT
++    /* Route every block write through the typed layout the readers use
++       (SPOBJ_GFX); the raw N64 offsets in the #else are sheared under LP64. */
++    {
++        SPObjGfx *blk = &sprite->gfx[0];
++
++        switch (kind) {
++            case 0:
++                func_800AC688(&blk->b.bg, arg2);
++                if (arg2->unk0 == 2) {
++                    func_800AC8E0((struct SPObj_68 *) &blk->b.tlut, arg2);
++                }
++                break;
++            case 1:
++                func_800AC700(&blk->b.bg, arg2);
++                if (arg2->unk0 == 2) {
++                    func_800AC8E0((struct SPObj_68 *) &blk->b.tlut, arg2);
++                }
++                break;
++            case 2:
++                func_800AC794(&blk->t.ts.sprite, arg2);
++                func_800AC820(&blk->t.ts.txtr, arg2);
++                if (arg2->unk0 == 2) {
++                    func_800AC8E0((struct SPObj_68 *) &blk->t.tlut, arg2);
++                }
++                break;
++            case 3:
++            case 4:
++                func_800AC794(&blk->t.ts.sprite, arg2);
++                func_800AC820(&blk->t.ts.txtr, arg2);
++                if (arg2->unk0 == 2) {
++                    func_800AC8E0((struct SPObj_68 *) &blk->t.tlut, arg2);
++                }
++                func_800AC924(&blk->t.mtx);
++                break;
++        }
++    }
++    sprite->gfx[1] = sprite->gfx[0];
++#else
+     switch (kind) {
+         case 0:
+             func_800AC688(&sprite->unk40, arg2);
+@@ -613,6 +675,7 @@
+             break;
+     }
+     *(struct SPObjBlk *) ((u8 *) sprite + 0xA0) = *(struct SPObjBlk *) ((u8 *) sprite + 0x40);
++#endif
+     return sprite;
+ }
+ 
+@@ -911,7 +974,19 @@
+ void func_80017E84(GObj *, s32);
+ 
+ void func_800ADD14(GObj *camObj) {
++#ifdef PORT
++    /* LP64: SpriteDrawCamera mirrors the CAMERA'S N64 BYTE OFFSETS (viewport
++     * at +0x08 after two 4-byte pointers, flags at +0x80). On the PC build
++     * pointers are 8 bytes, so the real Camera's viewport lives at +0x10 and
++     * everything the mirror reads is shifted 8 bytes into garbage -- the
++     * boot-screen bg camera then emits a scissor built from a stale pointer's
++     * bytes and the whole background is clipped away. GObj.h already includes
++     * main/object_manager.h, so the real Camera type is in scope; use it and
++     * let the compiler lay the fields out. */
++    Camera *cam;
++#else
+     struct SpriteDrawCamera *cam;
++#endif
+     u32 savedUcode;
+     s32 ulx;
+     s32 uly;
+@@ -954,7 +1029,11 @@
+ // (> 0x100), so the port derives the stride from the real size (it is already
+ // 8-aligned; SPObj.h asserts that) or the freelist would thread each SPObj's
+ // buffers into the next slot.
++#ifdef PORT
++#define SPOBJ_POOL_STRIDE sizeof(SPObj)
++#else
+ #define SPOBJ_POOL_STRIDE 0x100
++#endif
+ 
+ // The `q` pointer local and the `n ^ 0` are LOAD-BEARING (permuter result,
+ // applied verbatim): `q` forks the extra source-level temp IDO needs to keep
+--- a/src/ovl4/ovl4_3.c
++++ b/src/ovl4/ovl4_3.c
+@@ -684,7 +684,18 @@
+ u32 func_800A9AA8(s32, s32);
+ 
+ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
++#ifdef PORT
++    /* UnkSpObj8015AB70 spells the N64 SPObj byte offsets: 0x6C/0xCC are the
++       two RSP command blocks' tlut image pointers (block+0x2C), 0x78/0xD8
++       their state flags (block+0x38). Under the LP64 SPObj those raw offsets
++       land inside the gfx[0]/gfx[1] uObjBg fields instead (the real tlut
++       image/flag sit at 0x80/0x90 and 0xF0/0x100), so write through the
++       typed layout from SPObj.h. xOffset/yOffset (raw 0x20/0x24) shear too:
++       they land on width/height and xOffset. */
++    SPObj *sp;
++#else
+     UnkSpObj8015AB70 *sp;
++#endif
+     u32 a;
+     u32 b;
+     u32 c;
+@@ -694,10 +705,17 @@
+     D_800DEF90[omCurrentObj->objId] = NULL;
+     setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
+     omLinkGObjDL(arg0, func_800AD1A0, 0x16, 0x80000000, 0x16);
++#ifdef PORT
++    sp = (SPObj *) func_8015C740_ovl5(arg0, &D_8015AB70_ovl4);
++    b = func_800A9AA8(0x30001, 3);
++    a = (u32) (uintptr_t) sp->gfx[0].b.tlut.tlut.image;
++    c = func_800A9AA8(0x30002, 3);
++#else
+     sp = (UnkSpObj8015AB70 *) func_8015C740_ovl5(arg0, &D_8015AB70_ovl4);
+     b = func_800A9AA8(0x30001, 3);
+     a = sp->unk6C;
+     c = func_800A9AA8(0x30002, 3);
++#endif
+     sp->xOffset = D_8015AB90_ovl4[arg1].unk0;
+     sp->yOffset = D_8015AB90_ovl4[arg1].unk4;
+     while (1) {
+@@ -712,10 +730,17 @@
+             } else {
+                 v = c;
+             }
++#ifdef PORT
++            sp->gfx[0].b.tlut.tlut.image = (u64 *) (uintptr_t) v;
++            sp->gfx[0].b.tlut.tlut.flag = v;
++            sp->gfx[1].b.tlut.tlut.image = (u64 *) (uintptr_t) v;
++            sp->gfx[1].b.tlut.tlut.flag = v;
++#else
+             sp->unk6C = v;
+             sp->unk78 = v;
+             sp->unkCC = v;
+             sp->unkD8 = v;
++#endif
+         } else {
+             func_800AFBB4(0, omCurrentObj);
+         }
+--- a/src/ovl5/ovl5_11.c
++++ b/src/ovl5/ovl5_11.c
+@@ -6,6 +6,18 @@
+ #include "ovl1/ovl1_1.h"
+ #include "ovl1/ovl1_2.h"
+ #include "ovl1/ovl1_3.h"
++#ifdef PORT
++/* src/ovl1/ovl1_5.h carries a stale ILP32-era duplicate SPObj typedef.
++ * Under LP64 its pointer members inflate, so its unkBA alias lands at 0xDE
++ * -- 8 bytes past gfx[1].b.bg.s.imageFlip (0xD6), inside imageYorig -- while
++ * the real include/SPObj.h pins unk5A/unkBA to the imageFlip bytes of the
++ * two command blocks. Pre-claim the old header's include guard and use the
++ * real layout; the only other things this TU needs from ovl1_5.h is the
++ * func_800AD1A0 declaration, reproduced here. */
++#include "SPObj.h"
++#define OVL1_5_H
++void func_800AD1A0(void *);
++#endif
+ #include "ovl1/ovl1_5.h"
+ #include "track_arrays.h"
+ #include "ovl1/ovl1_7.h"
