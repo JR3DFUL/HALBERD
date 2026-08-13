@@ -21,13 +21,12 @@ into the menu scene. See *Current state* below.
 
 ## About
 
-This project came about because I wanted to preserve Kirby 64 and create
-new content for it, in a way that lets the larger Kirby fanbase enjoy and
-create alongside me.
+This project exists to preserve Kirby 64 and create new content for it,
+in a way that lets the larger Kirby fanbase enjoy and create alongside.
 
 Claude (ew) was used as a tool to bring the project to where it is today,
-but people as passionate about this game as I am are always welcome to
-contribute, and their contributions will always be valued over those of AI.
+but contributions from people passionate about this game are always
+welcome, and will always be valued over those of AI.
 
 ## No copyrighted assets are included in this repository
 
