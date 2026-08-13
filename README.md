@@ -19,6 +19,16 @@ Runs natively on Linux (and Windows via WSL2); further platforms planned.
 **Early development**: the port currently boots through the intro screens and
 into the menu scene. See *Current state* below.
 
+## About
+
+This project came about because I wanted to preserve Kirby 64 and create
+new content for it, in a way that lets the larger Kirby fanbase enjoy and
+create alongside me.
+
+Claude (ew) was used as a tool to bring the project to where it is today,
+but people as passionate about this game as I am are always welcome to
+contribute, and their contributions will always be valued over those of AI.
+
 ## No copyrighted assets are included in this repository
 
 **None of Nintendo's assets (code, textures, audio, models, text, ROM data)
