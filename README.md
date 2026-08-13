@@ -21,7 +21,7 @@ into the menu scene. See *Current state* below.
 
 ## About
 
-This project exists to preserve Kirby 64 and create new content for it,
+This project exists to preserve Kirby 64,
 in a way that lets the larger Kirby fanbase enjoy and create alongside.
 
 Claude (ew) was used as a tool to bring the project to where it is today,
