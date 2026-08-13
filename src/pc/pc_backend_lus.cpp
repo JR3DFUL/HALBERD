@@ -668,7 +668,15 @@ void pcb_input_poll(PCPad* pads, int n) {
      * WriteToPad refreshes sLusPads from the mapped devices; it is the call a
      * LUS main loop makes once per frame. Here the game asks whenever
      * osContStartReadData runs, which is the same cadence. (The fork widened
-     * the parameter to void* -- it is still an OSContPad[MAXCONTROLLERS].) */
+     * the parameter to void* -- it is still an OSContPad[MAXCONTROLLERS].)
+     *
+     * The pads MUST be zeroed first: LUS's Controller::ReadToOSContPad does
+     * `pad->button |= ...` and only writes sticks when the current value is 0,
+     * on the assumption that the host cleared the array this poll (a real LUS
+     * game zeroes its OSContPad block in osContGetReadData). Without the
+     * memset every button ever pressed stays latched in sLusPads forever, so
+     * the game sees one buttonPressed edge per key per process lifetime. */
+    memset(sLusPads, 0, sizeof(sLusPads));
     sControlDeck->WriteToPad(sLusPads);
 
     if (getenv("KIRBY_PC_INPUTDEBUG") != nullptr && sLusPads[0].button != 0) {
