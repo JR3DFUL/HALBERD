@@ -1,0 +1,508 @@
+diff --git a/include/fast/interpreter.h b/include/fast/interpreter.h
+index a0f7d0d..29656e8 100644
+--- a/include/fast/interpreter.h
++++ b/include/fast/interpreter.h
+@@ -488,6 +488,7 @@ class Interpreter {
+     void Gfxs2dexBgCopy(F3DuObjBg* bg);
+     void Gfxs2dexBg1cyc(F3DuObjBg* bg);
+     void Gfxs2dexRecyCopy(F3DuObjSprite* spr);
++    void Gfxs2dexObjLoadTxtr(F3DuObjTxtr* txtr);
+ 
+     void AdjustWidthHeightForScale(uint32_t& width, uint32_t& height, uint32_t nativeWidth,
+                                    uint32_t nativeHeight) const;
+@@ -564,6 +565,12 @@ class Interpreter {
+ };
+ 
+ void gfx_set_target_ucode(UcodeHandlers ucode);
++// Native-ROM ports: the game's own display lists carry a ucode POINTER in
++// G_LOAD_UCODE, not an OTR enum index. Set this so the interpreter keeps the
++// per-task ucode instead of reinterpreting those bits.
++extern bool gfx_native_ucode_mode;
++extern uintptr_t gfx_native_ucode_f3dex2;
++extern uintptr_t gfx_native_ucode_s2dex;
+ void gfx_push_current_dir(char* path);
+ int32_t gfx_check_image_signature(const char* imgData);
+ const char* gfx_get_shader(int16_t id);
+diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
+index 1af695e..64062ee 100644
+--- a/src/fast/Fast3dGui.cpp
++++ b/src/fast/Fast3dGui.cpp
+@@ -42,6 +42,26 @@ IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARA
+ 
+ namespace Fast {
+ 
++/* mWindow is normally populated by Init(GuiWindowInitData), but a native-ROM
++ * host can reach the frame path on a Gui instance whose Init ordering never
++ * ran that assignment. Self-heal from the context registry (proven live at
++ * this point) instead of dereferencing an empty shared_ptr. Used at the top
++ * of every method that calls mWindow->GetWindowBackend(). */
++#define HEAL_MWINDOW()                                                                 \
++    do {                                                                               \
++        if (mWindow == nullptr) {                                                      \
++            auto healCtx = GetContext();                                               \
++            if (healCtx != nullptr) {                                                  \
++                mWindow = healCtx->GetChildren().GetFirst<Ship::Window>();             \
++            }                                                                          \
++            fprintf(stderr, "[dbg] %s healed mWindow=%p\n", __func__,                  \
++                    (void*)mWindow.get());                                             \
++            if (mWindow == nullptr) {                                                  \
++                return;                                                                \
++            }                                                                          \
++        }                                                                              \
++    } while (0)
++
+ Fast3dGui::Fast3dGui() : Ship::Gui() {
+ }
+ 
+@@ -113,6 +133,7 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+ }
+ 
+ void Fast3dGui::ImGuiWMInit() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     mInterpreter = std::dynamic_pointer_cast<Fast3dWindow>(window)->GetInterpreterWeak();
+ 
+@@ -147,6 +168,7 @@ void Fast3dGui::ImGuiWMInit() {
+ }
+ 
+ void Fast3dGui::ImGuiWMShutdown() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+ #ifdef ENABLE_OPENGL
+@@ -170,6 +192,7 @@ void Fast3dGui::ImGuiWMShutdown() {
+ }
+ 
+ void Fast3dGui::ImGuiBackendInit() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+ #ifdef ENABLE_OPENGL
+@@ -204,6 +227,7 @@ void Fast3dGui::ImGuiBackendInit() {
+ }
+ 
+ void Fast3dGui::ImGuiBackendShutdown() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+ #ifdef ENABLE_OPENGL
+@@ -227,6 +251,7 @@ void Fast3dGui::ImGuiBackendShutdown() {
+ }
+ 
+ void Fast3dGui::ImGuiBackendNewFrame() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+ #ifdef ENABLE_OPENGL
+@@ -254,6 +279,7 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+ }
+ 
+ void Fast3dGui::ImGuiWMNewFrame() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+         case WindowBackend::FAST3D_SDL_OPENGL:
+@@ -273,6 +299,7 @@ void Fast3dGui::ImGuiWMNewFrame() {
+ // Bind ImGui's SDL3 gamepad backend to the controller(s) the
+ // ControlDeck has already opened
+ void Fast3dGui::RefreshImGuiGamepads() {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     auto backend = window->GetWindowBackend();
+     if (backend != WindowBackend::FAST3D_SDL_OPENGL && backend != WindowBackend::FAST3D_SDL_METAL) {
+@@ -283,6 +310,7 @@ void Fast3dGui::RefreshImGuiGamepads() {
+ }
+ 
+ void Fast3dGui::ImGuiRenderDrawData(ImDrawData* data) {
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     switch (window->GetWindowBackend()) {
+ #ifdef ENABLE_OPENGL
+@@ -314,6 +342,7 @@ void Fast3dGui::DrawFloatingWindows() {
+         return;
+     }
+ 
++    HEAL_MWINDOW();
+     auto window = mWindow;
+     // OpenGL requires extra platform handling for the GL context
+     if (window->GetWindowBackend() == WindowBackend::FAST3D_SDL_OPENGL && mImpl.Opengl.Context != nullptr) {
+diff --git a/src/fast/backends/gfx_opengl.cpp b/src/fast/backends/gfx_opengl.cpp
+index 6c4dfc8..b74091c 100644
+--- a/src/fast/backends/gfx_opengl.cpp
++++ b/src/fast/backends/gfx_opengl.cpp
+@@ -71,9 +71,22 @@ void GfxRenderingAPIOGL::SetUniforms(ShaderProgram* prg) const {
+ }
+ 
+ void GfxRenderingAPIOGL::SetPerDrawUniforms() {
++    /* A native-ROM list can reach its first draw before any shader program has
++     * been bound (measured: first S2DEX texrect of the boot frame). Skip the
++     * uniforms rather than dereferencing null; the next combiner state change
++     * binds a program through the normal lookup path. */
++    if (mCurrentShaderProgram == nullptr) {
++        return;
++    }
+     glUniform1f(mCurrentShaderProgram->prim_depth_location, mCurrentPrimDepth);
+ 
+     if (mCurrentShaderProgram->usedTextures[0] || mCurrentShaderProgram->usedTextures[1]) {
++        /* Same first-draw hazard as above: texture ids may not have been
++         * selected yet, and indexing the vector with a stale id faults. */
++        if (mCurrentTextureIds[0] < 0 || (size_t)mCurrentTextureIds[0] >= textures.size() ||
++            mCurrentTextureIds[1] < 0 || (size_t)mCurrentTextureIds[1] >= textures.size()) {
++            return;
++        }
+         GLint filtering[2] = { textures[mCurrentTextureIds[0]].filtering, textures[mCurrentTextureIds[1]].filtering };
+         glUniform1iv(mCurrentShaderProgram->texture_filtering_location, 2, filtering);
+ 
+diff --git a/src/fast/backends/gfx_sdl.cpp b/src/fast/backends/gfx_sdl.cpp
+index c8bc6cd..b1e44c6 100644
+--- a/src/fast/backends/gfx_sdl.cpp
++++ b/src/fast/backends/gfx_sdl.cpp
+@@ -351,6 +351,14 @@ void GfxWindowBackendSDL::Init(const char* gameName, const char* gfxApiName, boo
+         SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
+         SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
+         SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
++#if !defined(__APPLE__) && !defined(_WIN32)
++        // Ask for a DESKTOP GL context explicitly. Without this SDL3 picks the
++        // platform default, which on a Mesa/EGL setup is GLES -- and then
++        // ImGui's `#version 120` shaders fail to compile with "GLSL 1.20 is not
++        // supported. Supported versions are: 1.00 ES, 3.00 ES, ...", taking the
++        // whole renderer down at startup.
++        SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_COMPATIBILITY);
++#endif
+     } else {
+         SDL_SetHint(SDL_HINT_RENDER_DRIVER, "metal");
+     }
+diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
+index fa032df..e766d09 100644
+--- a/src/fast/interpreter.cpp
++++ b/src/fast/interpreter.cpp
+@@ -70,6 +70,11 @@ std::stack<std::string> currentDir;
+ namespace Fast {
+ 
+ static UcodeHandlers ucode_handler_index = ucode_f3dex2;
++// Set by a native-ROM host: trust the per-task ucode, ignore in-DL enum loads.
++bool gfx_native_ucode_mode = false;
++// Host-registered ucode TEXT pointers, used to resolve a native G_LOAD_UCODE.
++uintptr_t gfx_native_ucode_f3dex2 = 0;
++uintptr_t gfx_native_ucode_s2dex = 0;
+ 
+ const static uint32_t f3dex2AttrHandler[] = {
+     F3DEX2_G_MTX_PROJECTION, F3DEX2_G_MTX_LOAD,  F3DEX2_G_MTX_PUSH,  F3DEX_G_MTX_NOPUSH,
+@@ -3028,11 +3033,22 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+         uls = (bg->b.imageW - bg->b.imageX) << 3;
+     }
+ 
+-    SUPPORT_CHECK(bg->b.imageSiz == G_IM_SIZ_16b);
+-    GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, nullptr, texFlags, rawTexMetadata, (void*)data);
+-    GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
+-    GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, (bg->b.imageW * bg->b.imageH >> 4) - 1, 0);
+-    GfxDpSetTile(bg->b.imageFmt, G_IM_SIZ_16b, bg->b.imageW >> 4, 0, G_TX_RENDERTILE, bg->b.imagePal, 0, 0, 0, 0, 0, 0);
++    /* NATIVE-ROM: backgrounds are not always RGBA16 -- Kirby 64's boot
++     * screens are CI8 + TLUT. Forcing 16b here made LoadBlock size the read
++     * as 2 bytes/texel over a 1 byte/texel buffer and run off the end of the
++     * arena mapping (SIGBUS). Honour the bg's own fmt/siz; LoadBlock derives
++     * its byte count from the siz set by SetTextureImage. The RENDERTILE line
++     * is 64-bit words per row: pixels*(bytes<<siz)/16 == imageW >> (6-siz)
++     * with imageW in u10.2. */
++    {
++        uint8_t bgFmt = bg->b.imageFmt;
++        uint8_t bgSiz = bg->b.imageSiz;
++        uint32_t line = bgSiz <= 6 ? ((uint32_t)bg->b.imageW >> (6 - bgSiz)) : 0;
++        GfxDpSetTextureImage(bgFmt, bgSiz, 0, nullptr, texFlags, rawTexMetadata, (void*)data);
++        GfxDpSetTile(bgFmt, bgSiz, 0, 0, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++        GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, (bg->b.imageW * bg->b.imageH >> 4) - 1, 0);
++        GfxDpSetTile(bgFmt, bgSiz, line, 0, G_TX_RENDERTILE, bg->b.imagePal, 0, 0, 0, 0, 0, 0);
++    }
+     GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, bg->b.imageW, bg->b.imageH);
+     GfxDpTextureRectangle(bg->b.frameX, bg->b.frameY, bg->b.frameX + bg->b.imageW - 4, bg->b.frameY + bg->b.imageH - 4,
+                           G_TX_RENDERTILE, uls, bg->b.imageY << 3, dsdx, 1 << 10, false);
+@@ -3081,6 +3097,88 @@ void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
+                           bg->b.imageY << 3, dsdxRect, 1 << 10, false);
+ }
+ 
++// S2DEX G_OBJ_LOADTXTR (gSPObjLoadTxtr).
++//
++// The game emits uObjTxtr structures in the N64 wire layout (24 bytes, see gs2dex.h): the image field is a single
++// 32-bit word holding a plain host address below 4GB (not segmented). The F3DuObjTxtr mirror in lus_gbi.h declares
++// image as a native 64-bit pointer, which shifts every following field on 64-bit hosts, so the structure is read here
++// through a wire-accurate view instead.
++struct F3DuObjTxtrWire {
++    uint32_t type;  /* G_OBJLT_TXTRBLOCK / G_OBJLT_TXTRTILE / G_OBJLT_TLUT */
++    uint32_t image; /* host address of source data (32-bit on the wire) */
++    uint16_t w0;    /* BLOCK: tmem    TILE: tmem     TLUT: phead */
++    uint16_t w1;    /* BLOCK: tsize   TILE: twidth   TLUT: pnum  */
++    uint16_t w2;    /* BLOCK: tline   TILE: theight  TLUT: zero  */
++    uint16_t sid;   /* STATE ID */
++    uint32_t flag;  /* STATE flag */
++    uint32_t mask;  /* STATE mask */
++};
++
++void Interpreter::Gfxs2dexObjLoadTxtr(F3DuObjTxtr* txtr) {
++    const F3DuObjTxtrWire* wire = reinterpret_cast<const F3DuObjTxtrWire*>(txtr);
++    uintptr_t data = (uintptr_t)wire->image;
++
++    uint32_t texFlags = 0;
++    RawTexMetadata rawTexMetadata = {};
++
++    // Same image resolution as the uObjBg paths above: OTR resources are resolved to their pixel data, anything else
++    // is treated as a raw host pointer to texels.
++    if ((bool)gfx_check_image_signature((char*)data)) {
++        std::shared_ptr<Fast::Texture> tex =
++            std::static_pointer_cast<Fast::Texture>(mResourceManager->LoadResourceProcess((char*)data));
++        texFlags = tex->Flags;
++        rawTexMetadata.width = tex->Width;
++        rawTexMetadata.height = tex->Height;
++        rawTexMetadata.h_byte_scale = tex->HByteScale;
++        rawTexMetadata.v_pixel_scale = tex->VPixelScale;
++        rawTexMetadata.type = tex->Type;
++        rawTexMetadata.resource = tex;
++        data = (uintptr_t) reinterpret_cast<char*>(tex->ImageData);
++    }
++
++    switch (wire->type) {
++        case G_OBJLT_TLUT: {
++            // Equivalent of gDPLoadTLUT: phead is the TMEM word address (256..511 = standard palette area), pnum is
++            // entry count - 1. Routing through GfxDpSetTextureImage/GfxDpSetTile/GfxDpLoadTlut reuses the exact
++            // palette staging logic (palette_staging/palettes/palette_dram_addr) of the RDP G_LOADTLUT path.
++            uint16_t phead = wire->w0;
++            uint16_t pnum = wire->w1;
++            GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, nullptr, texFlags, rawTexMetadata, (void*)data);
++            GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, phead, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            GfxDpLoadTlut(G_TX_LOADTILE, pnum);
++            break;
++        }
++        case G_OBJLT_TXTRBLOCK: {
++            // tsize = TMEM 64-bit words to load - 1 => byte count = (tsize + 1) * 8. The load is performed as a plain
++            // block of 16-bit texels so GfxDpLoadBlock records texture_to_load/loaded_texture addr + size and marks
++            // textures_changed; the real texel format/size of the render tile comes from the tile setup accompanying
++            // the following sprite draw, exactly like the uObjBg block loads above.
++            uint16_t tmem = wire->w0;
++            uint32_t texels16 = ((uint32_t)wire->w1 + 1) << 2; // (tsize + 1) * 8 bytes, 2 bytes per 16b texel
++            GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, nullptr, texFlags, rawTexMetadata, (void*)data);
++            GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, tmem, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, texels16 - 1, 0);
++            break;
++        }
++        case G_OBJLT_TXTRTILE: {
++            // twidth = (TMEM words per line << 2) - 1, theight = (texture rows << 2) - 1. Deferred: true
++            // sub-rectangle tile loads where the DRAM stride differs from the TMEM line width; the load is treated as
++            // one contiguous block, which is equivalent for the full-width tile loads the game emits.
++            uint16_t tmem = wire->w0;
++            uint32_t lineWords = ((uint32_t)wire->w1 + 1) >> 2;
++            uint32_t rows = ((uint32_t)wire->w2 + 1) >> 2;
++            uint32_t sizeBytes = lineWords * 8 * rows;
++            GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 1, nullptr, texFlags, rawTexMetadata, (void*)data);
++            GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, tmem, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, (sizeBytes >> 1) - 1, 0);
++            break;
++        }
++        default:
++            // Unknown load type; nothing sensible to do.
++            break;
++    }
++}
++
+ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
+     s16 dsdx = 4 << 10;
+     [[maybe_unused]] s16 uls = spr->s.objX << 3;
+@@ -3106,6 +3204,24 @@ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
+ }
+ 
+ void* Interpreter::SegAddr(uintptr_t w1) {
++    /* NATIVE-ROM PORTS resolve real N64 segmented addresses.
++     *
++     * The `w1 & 1` test below is an OTR marker: the asset pipeline sets bit 0
++     * to flag a segmented pointer. A game running its own display lists emits
++     * ordinary N64 segment addresses -- segment number in the top byte, 24-bit
++     * offset -- and bit 0 is NOT set, so every one of them fell through and
++     * was returned as a raw host pointer. Dereferencing 0x0E000000 then walks
++     * data instead of commands, which is what produced the endless 0x9/0xB
++     * "unhandled opcode" pairs with a black frame.
++     *
++     * Segment 0 is the identity segment and must stay a plain address. */
++    if (gfx_native_ucode_mode) {
++        const uint32_t segNum = (uint32_t)(w1 >> 24);
++        if (segNum != 0 && segNum < 16 && mSegmentPointers[segNum] != 0) {
++            return (void*)(mSegmentPointers[segNum] + (w1 & 0x00FFFFFF));
++        }
++        return (void*)w1;
++    }
+     // Segmented?
+     if (w1 & 1) {
+         uint32_t segNum = (uint32_t)(w1 >> 24);
+@@ -4465,6 +4581,14 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+     return false;
+ }
+ 
++bool gfx_obj_loadtxtr_handler_s2dex(F3DGfx** cmd0) {
++    Interpreter* gfx = mInstance.lock().get();
++    F3DGfx* cmd = *(cmd0);
++
++    gfx->Gfxs2dexObjLoadTxtr((F3DuObjTxtr*)cmd->words.w1); // host pointer, not gfx->SegAddr (see bg handlers)
++    return false;
++}
++
+ bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
+     Interpreter* gfx = mInstance.lock().get();
+     F3DGfx* cmd = *(cmd0);
+@@ -4652,6 +4776,7 @@ static constexpr UcodeHandler s2dexHandlers = {
+     { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
+     { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
+     { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
++    { F3DEX2_G_OBJ_LOADTXTR, { "G_OBJ_LOADTXTR", gfx_obj_loadtxtr_handler_s2dex } },
+     { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
+     { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
+     { F3DEX2_G_DL, { "G_DL", gfx_dl_handler_common } },
+@@ -4679,6 +4804,16 @@ const char* GfxGetOpcodeName(int8_t opcode) {
+     if (ucode_handler_index < ucode_handlers.size()) {
+         if (ucode_handlers[ucode_handler_index]->contains(opcode)) {
+             return ucode_handlers[ucode_handler_index]->at(opcode).first;
++        } else if (gfx_native_ucode_mode && ucode_handler_index == ucode_f3dex2 &&
++                   s2dexHandlers.contains(opcode)) {
++            return s2dexHandlers.at(opcode).first;
++        } else if (gfx_native_ucode_mode && ucode_handler_index == ucode_s2dex &&
++                   f3dex2Handlers.contains(opcode)) {
++            /* Symmetric fallback: shared state/RDP ops (0xE2/0xE3 and friends)
++             * live in the F3DEX2 table here but are resident in S2DEX2 on
++             * hardware. Without this, honouring the game's mid-list switch to
++             * S2DEX2 dies on the first othermode write. */
++            return f3dex2Handlers.at(opcode).first;
+         } else {
+             SPDLOG_CRITICAL("Unhandled OP code: 0x{:X}, for loaded ucode: {}", (uint8_t)opcode,
+                             (uint32_t)ucode_handler_index);
+@@ -4732,7 +4867,36 @@ static void gfx_step() {
+ #endif
+ 
+     if (opcode == F3DEX2_G_LOAD_UCODE) {
+-        gfx_set_ucode_handler((UcodeHandlers)(cmd->words.w0 & 0xFFFFFF));
++        /* NATIVE-ROM PORTS: w0's low 24 bits are NOT a UcodeHandlers index.
++         *
++         * That reinterpretation is an OTR convention -- the asset pipeline
++         * rewrites gSPLoadUcode with an enum. A port running the game's OWN
++         * display lists carries the real ucode TEXT POINTER here, so masking
++         * w0 yields garbage. In Kirby 64 it yielded 5 (ucode_s2dex), which put
++         * the interpreter in the S2DEX table for an F3DEX2 list and made every
++         * subsequent frame die on "Unhandled OP code: 0xE3".
++         *
++         * The task already names its own ucode and the host sets it per task
++         * via gfx_set_target_ucode before Run(), which is the same thing the
++         * RSP does. So honour a load only when the payload really is a valid
++         * enum AND the host has not declared native mode; otherwise keep the
++         * task's ucode and skip the command. */
++        const uint32_t ucodeArg = cmd->words.w0 & 0xFFFFFF;
++        if (gfx_native_ucode_mode) {
++            /* Resolve by POINTER: w1 is the ucode text address the game passed
++             * to gSPLoadUcode. Kirby 64 switches between F3DEX2 and S2DEX2
++             * inside a single task, so this load must be honoured -- it just
++             * cannot be read as an enum. L3DEX2 is F3DEX2 plus line prims and
++             * maps onto the same handler table. */
++            const uintptr_t uc = (uintptr_t)cmd->words.w1;
++            if (gfx_native_ucode_s2dex && uc == gfx_native_ucode_s2dex) {
++                gfx_set_ucode_handler(ucode_s2dex);
++            } else if (gfx_native_ucode_f3dex2 && uc == gfx_native_ucode_f3dex2) {
++                gfx_set_ucode_handler(ucode_f3dex2);
++            }
++        } else if (ucodeArg < (uint32_t)ucode_max) {
++            gfx_set_ucode_handler((UcodeHandlers)ucodeArg);
++        }
+         ++cmd;
+         return;
+         // Instead of having a handler for each ucode for switching ucode, just check for it early and return.
+@@ -4766,6 +4930,28 @@ static void gfx_step() {
+             if (ucode_handlers[ucode_handler_index]->at(opcode).second(&cmd)) {
+                 return;
+             }
++        } else if (gfx_native_ucode_mode && ucode_handler_index == ucode_f3dex2 &&
++                   s2dexHandlers.contains(opcode)) {
++            /* S2DEX2 IS A SUPERSET OF F3DEX2 and this game mixes them in ONE
++             * display list: G_BG_1CYC (0x09), G_BG_COPY (0x0A) and
++             * G_OBJ_RENDERMODE (0x0B) arrive while the interpreter is in the
++             * F3DEX2 table, which keeps those handlers in a separate map. On
++             * hardware the RSP has S2DEX2 resident and just executes them.
++             * Falling back for exactly these opcodes is what lets a native list
++             * draw instead of logging 274 pairs of "Unhandled OP code" a frame
++             * against a black screen. */
++            if (s2dexHandlers.at(opcode).second(&cmd)) {
++                return;
++            }
++        } else if (gfx_native_ucode_mode && ucode_handler_index == ucode_s2dex &&
++                   f3dex2Handlers.contains(opcode)) {
++            /* Symmetric fallback: shared state/RDP ops (0xE2/0xE3 and friends)
++             * live in the F3DEX2 table here but are resident in S2DEX2 on
++             * hardware. Without this, honouring the game's mid-list switch to
++             * S2DEX2 dies on the first othermode write. */
++            if (f3dex2Handlers.at(opcode).second(&cmd)) {
++                return;
++            }
+         } else {
+             SPDLOG_CRITICAL("Unhandled OP code: 0x{:X}, for loaded ucode: {}", (uint8_t)opcode,
+                             (uint32_t)ucode_handler_index);
+@@ -4929,9 +5115,23 @@ void Interpreter::StartFrame() {
+         }
+     }
+ 
++    /* KIRBY_PC_DIRECT=1: present the game straight to the window backbuffer.
++     * The offscreen mGameFb is composited by ImGui (Fast3dGui::DrawGame draws
++     * it as an ImGui image); a headless host without a functioning ImGui
++     * frame never runs that composite, so the finished frame stays offscreen
++     * and the window is permanently black. Rendering to framebuffer 0 at
++     * window resolution bypasses the composite entirely. */
++    static int sForceDirectPresent = -1;
++    if (sForceDirectPresent < 0) {
++        sForceDirectPresent = getenv("KIRBY_PC_DIRECT") != nullptr;
++    }
++    if (sForceDirectPresent) {
++        mCurDimensions = mGfxCurrentWindowDimensions;
++    }
++
+     mPrvDimensions = mCurDimensions;
+     mPrevNativeDimensions = mNativeDimensions;
+-    if (!ViewportMatchesRendererResolution() || mMsaaLevel > 1) {
++    if (!sForceDirectPresent && (!ViewportMatchesRendererResolution() || mMsaaLevel > 1)) {
+         mRendersToFb = true;
+         if (!ViewportMatchesRendererResolution()) {
+             mRapi->UpdateFramebufferParameters(mGameFb, mCurDimensions.width, mCurDimensions.height, mMsaaLevel, true,
+diff --git a/src/ship/controller/controldeck/ControlDeck.cpp b/src/ship/controller/controldeck/ControlDeck.cpp
+index 6d922e2..bafe7d3 100644
+--- a/src/ship/controller/controldeck/ControlDeck.cpp
++++ b/src/ship/controller/controldeck/ControlDeck.cpp
+@@ -92,6 +92,12 @@ bool ControlDeck::GamepadGameInputBlocked() {
+ }
+ 
+ bool ControlDeck::KeyboardGameInputBlocked() {
++    // A native-ROM game polls the pad from its own thread the moment the SI
++    // is asked for data, which can be before the first GUI frame has ever
++    // begun. No ImGui context yet means nothing can be typing in it.
++    if (ImGui::GetCurrentContext() == NULL) {
++        return AllGameInputBlocked();
++    }
+     // block keyboard input when typing in imgui
+     ImGuiWindow* activeIDWindow = ImGui::GetCurrentContext()->ActiveIdWindow;
+     return AllGameInputBlocked() ||
+@@ -100,6 +106,10 @@ bool ControlDeck::KeyboardGameInputBlocked() {
+ }
+ 
+ bool ControlDeck::MouseGameInputBlocked() {
++    // Same early-poll guard as KeyboardGameInputBlocked above.
++    if (ImGui::GetCurrentContext() == NULL) {
++        return AllGameInputBlocked();
++    }
+     // block mouse input when user interacting with gui
+     ImGuiWindow* window = ImGui::GetCurrentContext()->HoveredWindow;
+     if (window == NULL) {
+diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
+index c16a207..734231d 100644
+--- a/src/ship/window/gui/Gui.cpp
++++ b/src/ship/window/gui/Gui.cpp
+@@ -286,6 +286,11 @@ void Gui::DrawMenu() {
+ 
+ void Gui::HandleMouseCapture() {
+     ImGuiWindowFlags flags = ImGuiWindowFlags_NoMouseInputs;
++    // A native-ROM host drives frames straight from the game's scheduler; the
++    // overlay window may not exist yet on the very first draws.
++    if (ImGui::GetCurrentContext() == NULL || GetGameOverlay() == NULL) {
++        return;
++    }
+     for (auto windowIter : ImGui::GetCurrentContext()->WindowsById.Data) {
+         if (windowIter.key != GetMainGameWindowID() && windowIter.key != GetGameOverlay()->GetID()) {
+             ImGuiWindow* window = (ImGuiWindow*)windowIter.val_p;
