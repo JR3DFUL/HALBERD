@@ -1,10 +1,18 @@
 /* The libultraship backend, as an interface sketch.
  *
- * NOT AN IMPLEMENTATION. libultraship and Torch cannot be fetched in this
- * session (docs/PC_PORT_ARCHITECTURE.md, "Current blocker"), so this file
- * exists to make the integration mechanical when they land: it says exactly
+ * HISTORICAL DESIGN NOTE, NOT THE IMPLEMENTATION. The implementation is
+ * src/pc/pc_backend_lus.cpp, which now targets the JRICKEY FORK of
+ * libultraship (the BattleShip/SSB64 port's LUS) and boots it with the
+ * fork's staged Context init API (CreateUninitializedInstance + InitX per
+ * component); the fork's interpreter additionally requires five portReloc*
+ * host symbols, provided as no-ops by src/pc/pc_reloc_stubs.c. This header
+ * is included by nothing and kept because the mapping analysis below is
+ * still the clearest statement of WHY the seams sit where they sit.
+ *
+ * Originally written when libultraship and Torch could not be fetched
+ * (docs/PC_PORT_ARCHITECTURE.md, "Current blocker"): it says exactly
  * which LUS entry point each pc_backend.h call maps onto, and -- more
- * usefully -- which ones do NOT map, because those are where the design has
+ * usefully -- which ones do NOT map, because those are where the design had
  * to change rather than be filled in.
  *
  * The reason a third backend is cheap at all is that pc_backend.h already
@@ -139,7 +147,10 @@ void pcb_frame_begin(void);
 void pcb_frame_end(void);
 
 /* Hand a display list to the renderer. Returns when it has been consumed,
- * so the caller can then raise SP-done and DP-done in the right order. */
-void pcb_gfx_run(const void *displayList, u32 sizeHint);
+ * so the caller can then raise SP-done and DP-done in the right order.
+ * (The sizeHint once sketched here was never needed: Fast3D walks the list
+ * to its gsSPEndDisplayList, so the real surface -- pc_backend.h and the
+ * .cpp -- takes only the list head.) */
+void pcb_gfx_run(const void *displayList);
 
 #endif /* PC_BACKEND_LUS_H */

@@ -30,8 +30,12 @@ CC="gcc -m64 -no-pie -fno-pie"
 CXX="g++ -m64 -no-pie -fno-pie"
 
 PC_LUS=${PC_LUS:-1}
-LUS_ROOT=${LUS_ROOT:-/workspace/jr3dful/libultraship}
-LUS_BUILD=${LUS_BUILD:-/workspace/lus-build}
+# The JRickey fork (the BattleShip/SSB64 port's libultraship) and its CMake
+# build tree. Exported: tools/pc/build_lus_backend.sh and tools/pc/lus_flags.sh
+# read the same two variables and must agree with this link.
+LUS_ROOT=${LUS_ROOT:-/workspace/jrickey/libultraship}
+LUS_BUILD=${LUS_BUILD:-/workspace/lus2-build}
+export LUS_ROOT LUS_BUILD
 
 python3 tools/pc/gen_defsyms.py >/dev/null
 python3 tools/pc/gen_stubs.py
@@ -57,6 +61,12 @@ LU_OBJS=$(ls build/pc/src/libreultra/*.o 2>/dev/null | tr '\n' ' ')
 # pc_backend_sdl.c are #ifdef'd against each other, but the libultraship one is
 # C++ and is not built by Makefile.pc at all, so the C ones are dropped here
 # instead.
+#
+# src/pc/pc_reloc_stubs.c stays in the list in BOTH modes: it is plain C,
+# Makefile.pc's src/*/*.c wildcard builds it into build/pc/src/pc/ with
+# everything else, and it defines the five portReloc* host symbols the fork's
+# interpreter requires (no-ops; see the file). With PC_LUS=0 nothing
+# references them and the linker keeps them harmlessly.
 if [ "$PC_LUS" = "1" ]; then
     GAME_OBJS=$(echo "$GAME_OBJS" | tr ' ' '\n' \
         | grep -v 'pc_backend_null\.o$' | grep -v 'pc_backend_sdl\.o$' \

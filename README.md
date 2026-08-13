@@ -2,7 +2,7 @@
 
 Native PC port of **Kirby 64: The Crystal Shards** (N64), built on the
 [JR3DFUL/kirby64_decomp](https://github.com/JR3DFUL/kirby64_decomp)
-decompilation, using [libultraship](https://github.com/JR3DFUL/libultraship)
+decompilation, using [libultraship](https://github.com/JRickey/libultraship) (JRickey `ssb64` fork, the one shipping under BattleShip; patched per `patches/`)
 for rendering/window/input and [Torch](https://github.com/JR3DFUL/Torch) for
 build-time asset extraction.
 
@@ -24,7 +24,8 @@ at build time from a ROM you supply
 | `tools/pc/` | Stub/data generators, linker driver (`link.sh`), Torch yaml generator, asset staging |
 | `port/yamls/` | Torch extraction manifests (10,583 resources) |
 | `port/assets/` | Fast3D shader staged for the ResourceManager FolderArchive |
-| `patches/libultraship-native-rom.patch` | Native-ROM support for the LUS fork: pointer-resolved `G_LOAD_UCODE`, S2DEX fallbacks both directions, `G_OBJ_LOADTXTR` (TLUT) handler, CI8-capable `BgCopy`, first-draw guards, `KIRBY_PC_DIRECT` present path, headless ImGui heals |
+| `patches/libultraship-jrickey-kirby.patch` | Kirby additions to the JRickey (BattleShip) libultraship fork, the adopted renderer: `G_OBJ_LOADTXTR` handler (TLUT/block/tile), format-general `BgCopy` (CI8), shared state ops under the S2DEX table |
+| `patches/libultraship-native-rom.patch` | HISTORICAL: the equivalent patch set against the previous JR3DFUL fork, kept for reference |
 | `docs/` | Port architecture, asset pipeline, LUS integration, surface inventory |
 
 ## Current state (honest)

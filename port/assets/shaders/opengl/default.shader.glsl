@@ -121,10 +121,6 @@
     uniform int frame_count;
     uniform float noise_scale;
 
-    @if(o_prim_depth)
-    uniform float prim_depth;
-    @end
-
     uniform int texture_width[2];
     uniform int texture_height[2];
     uniform int texture_filtering[2];
@@ -288,10 +284,6 @@
 
         @if(srgb_mode)
             @{vOutColor} = fromLinear(@{vOutColor});
-        @end
-
-        @if(o_prim_depth)
-            gl_FragDepth = prim_depth;
         @end
     }
 @end

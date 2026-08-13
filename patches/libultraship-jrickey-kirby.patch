@@ -1,0 +1,134 @@
+diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
+index 6aad126..f57a75e 100644
+--- a/src/fast/interpreter.cpp
++++ b/src/fast/interpreter.cpp
+@@ -4756,11 +4756,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+         uls = (bg->b.imageW - bg->b.imageX) << 3;
+     }
+ 
+-    SUPPORT_CHECK(bg->b.imageSiz == G_IM_SIZ_16b);
+-    GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, nullptr, texFlags, rawTexMetadata, (void*)data);
+-    GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, 0, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++    // PORT (Kirby 64): BG_COPY used to force RGBA16 and SUPPORT_CHECK-abort on
++    // anything else; Kirby's boot background is CI8. Honor the bg's own
++    // imageFmt/imageSiz instead. The LoadBlock texel count stays
++    // (imageW*imageH>>4)-1 (imageW/imageH are u10.2, so that's the pixel
++    // count - 1) — GfxDpLoadBlock derives the byte count from the real siz.
++    // The render tile's line is the row size in 64-bit words:
++    // imageW >> (6 - siz) for siz 0..2 (4b/8b/16b); 16b reproduces the old
++    // imageW >> 4.
++    uint8_t bgFmt = bg->b.imageFmt;
++    uint8_t bgSiz = bg->b.imageSiz;
++    if (bgSiz > G_IM_SIZ_16b) {
++        static bool sBgCopy32bWarned = false;
++        if (!sBgCopy32bWarned) {
++            sBgCopy32bWarned = true;
++            SPDLOG_WARN("Gfxs2dexBgCopy: unexpected 32b background (fmt={} siz={}), clamping line math to 16b",
++                        (int)bgFmt, (int)bgSiz);
++        }
++    }
++    uint32_t bgLine = bg->b.imageW >> (6 - (bgSiz > G_IM_SIZ_16b ? G_IM_SIZ_16b : bgSiz));
++    GfxDpSetTextureImage(bgFmt, bgSiz, 0, nullptr, texFlags, rawTexMetadata, (void*)data);
++    GfxDpSetTile(bgFmt, bgSiz, 0, 0, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
+     GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, (bg->b.imageW * bg->b.imageH >> 4) - 1, 0);
+-    GfxDpSetTile(bg->b.imageFmt, G_IM_SIZ_16b, bg->b.imageW >> 4, 0, G_TX_RENDERTILE, bg->b.imagePal, 0, 0, 0, 0, 0, 0);
++    GfxDpSetTile(bgFmt, bgSiz, bgLine, 0, G_TX_RENDERTILE, bg->b.imagePal, 0, 0, 0, 0, 0, 0);
+     GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, bg->b.imageW, bg->b.imageH);
+     GfxDpTextureRectangle(bg->b.frameX, bg->b.frameY, bg->b.frameX + bg->b.imageW - 4, bg->b.frameY + bg->b.imageH - 4,
+                           G_TX_RENDERTILE, uls, bg->b.imageY << 3, dsdx, 1 << 10, false);
+@@ -4768,6 +4786,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+ 
+ void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
+     uintptr_t data = (uintptr_t)bg->b.imagePtr;
++    if (getenv((const char*)"KIRBY_PC_BGDEBUG") != nullptr) {
++        fprintf(stderr,
++                "[bg1cyc] bg=%p img=%p X=%u W=%u fX=%d fW=%u Y=%u H=%u fY=%d fH=%u load=0x%x fmt=%u siz=%u pal=%u\n",
++                (void*)bg, (void*)data, bg->b.imageX, bg->b.imageW, bg->b.frameX, bg->b.frameW, bg->b.imageY,
++                bg->b.imageH, bg->b.frameY, bg->b.frameH, bg->b.imageLoad, bg->b.imageFmt, bg->b.imageSiz,
++                bg->b.imagePal);
++    }
+ 
+     uint32_t texFlags = 0;
+     RawTexMetadata rawTexMetadata = {};
+@@ -6320,6 +6345,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+     return false;
+ }
+ 
++// PORT (Kirby 64): G_OBJ_LOADTXTR (S2DEX). w1 is a host pointer to a uObjTxtr
++// struct in native layout (no SegAddr, matching the BG handlers' convention).
++// TLUT loads reuse the RDP palette plumbing by mirroring the gDPLoadTLUT macro
++// expansion (SETTIMG RGBA16 + SETTILE tmem=phead on LOADTILE + LOADTLUT), so
++// palette_staging/palettes[] logic in GfxDpLoadTlut is shared, not duplicated.
++// Block/tile loads stage texture_to_load via SETTIMG + SETTILE(tmem) +
++// LOADBLOCK, with the texel count derived from the wire fields the same way
++// the S2DEX spec computes them (GS_TB_TSIZE / GS_TT_TWIDTH / GS_TT_THEIGHT),
++// expressed as 16b texels (which is what tsize encodes: tmem 64-bit words).
++bool gfx_obj_loadtxtr_handler_s2dex(F3DGfx** cmd0) {
++    Interpreter* gfx = mInstance.lock().get();
++    F3DGfx* cmd = *(cmd0);
++
++    F3DuObjTxtr* txtr = (F3DuObjTxtr*)cmd->words.w1; // not gfx->SegAddr here, matching the bg handlers
++    if (txtr == nullptr) {
++        return false;
++    }
++
++    switch (txtr->block.type) {
++        case G_OBJLT_TLUT:
++            // phead is the palette-area TMEM word address (256..511); pnum is
++            // the high entry index (entry count - 1), exactly LOADTLUT's arg.
++            gfx->GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, nullptr, 0, {}, (void*)txtr->tlut.image);
++            gfx->GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, txtr->tlut.phead, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            gfx->GfxDpLoadTlut(G_TX_LOADTILE, txtr->tlut.pnum);
++            break;
++        case G_OBJLT_TXTRBLOCK: {
++            // tsize = (tmem 64-bit words) - 1 (GS_TB_TSIZE); one word holds
++            // four 16b texels, so lrs = words * 4 - 1. tline is the DXT value.
++            uint32_t words = (uint32_t)txtr->block.tsize + 1;
++            gfx->GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, nullptr, 0, {}, (void*)txtr->block.image);
++            gfx->GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, txtr->block.tmem, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            gfx->GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, (words << 2) - 1, txtr->block.tline);
++            break;
++        }
++        case G_OBJLT_TXTRTILE: {
++            // twidth = (line words << 2) - 1 (GS_TT_TWIDTH) and
++            // theight = (rows << 2) - 1 (GS_TT_THEIGHT), so the total load is
++            // line_words * rows words = (twidth + 1) * ((theight + 1) >> 2)
++            // 16b texels (4 texels per word cancels the twidth <<2).
++            uint32_t texels16 = ((uint32_t)txtr->tile.twidth + 1) * (((uint32_t)txtr->tile.theight + 1) >> 2);
++            if (texels16 == 0) {
++                break;
++            }
++            gfx->GfxDpSetTextureImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, nullptr, 0, {}, (void*)txtr->tile.image);
++            gfx->GfxDpSetTile(G_IM_FMT_RGBA, G_IM_SIZ_16b, 0, txtr->tile.tmem, G_TX_LOADTILE, 0, 0, 0, 0, 0, 0, 0);
++            gfx->GfxDpLoadBlock(G_TX_LOADTILE, 0, 0, texels16 - 1, 0);
++            break;
++        }
++        default:
++            SPDLOG_WARN("G_OBJ_LOADTXTR: unknown uObjTxtr type 0x{:08X}", (uint32_t)txtr->block.type);
++            break;
++    }
++    return false;
++}
++
+ bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
+     Interpreter* gfx = mInstance.lock().get();
+     F3DGfx* cmd = *(cmd0);
+@@ -6517,8 +6598,18 @@ static constexpr UcodeHandler s2dexHandlers = {
+     { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
+     { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
+     { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
++    { F3DEX2_G_OBJ_LOADTXTR, { "G_OBJ_LOADTXTR", gfx_obj_loadtxtr_handler_s2dex } },
+     { F3DEX2_G_DL, { "G_DL", gfx_dl_handler_common } },
+     { F3DEX2_G_ENDDL, { "G_ENDDL", gfx_end_dl_handler_common } },
++    // PORT (Kirby 64): the game's sprite display lists interleave F3DEX2 state
++    // commands while the S2DEX handler table is active (the RSP task ucode
++    // handled both on hardware). Cross-register them here the same way the
++    // fork cross-registers the BG ops into f3dex2Handlers, pointing at the
++    // exact same handler functions the f3dex2 table uses.
++    { F3DEX2_G_SETOTHERMODE_L, { "G_SETOTHERMODE_L", gfx_othermode_l_handler_f3dex2 } },
++    { F3DEX2_G_SETOTHERMODE_H, { "G_SETOTHERMODE_H", gfx_othermode_h_handler_f3dex2 } },
++    { F3DEX2_G_TEXTURE, { "G_TEXTURE", gfx_texture_handler_f3dex2 } },
++    { F3DEX2_G_GEOMETRYMODE, { "G_GEOMETRYMODE", gfx_geometry_mode_handler_f3dex2 } },
+ };
+ 
+ static constexpr std::array ucode_handlers = {
