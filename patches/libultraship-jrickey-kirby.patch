@@ -1,8 +1,155 @@
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..f57a75e 100644
+index 6aad126..8b08f44 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
-@@ -4756,11 +4756,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -2139,6 +2139,32 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
+         }
+     }
+ 
++    if (getenv("KIRBY_PC_BGDEBUG") != nullptr) {
++        static int ci8n = 0;
++        if (ci8n++ < 24) {
++            // Sample the middle row of the decoded upload to see if the image
++            // is flat or has real art in it.
++            uint32_t midy = height / 2;
++            fprintf(stderr, "[ci8] addr=%p w=%u h=%u stride=%u idx[mid]=", (const void*)addr, width, height,
++                    fullImageLineSizeBytes);
++            for (uint32_t sx = 0; sx < 8; sx++) {
++                uint32_t x = width * sx / 8;
++                fprintf(stderr, "%02x ", addr[midy * fullImageLineSizeBytes + x]);
++            }
++            fprintf(stderr, "rgba[mid]=");
++            for (uint32_t sx = 0; sx < 8; sx++) {
++                uint32_t x = width * sx / 8;
++                uint32_t o = 4 * (midy * width + x);
++                fprintf(stderr, "%02x%02x%02x%02x ", mTexUploadBuffer[o], mTexUploadBuffer[o + 1],
++                        mTexUploadBuffer[o + 2], mTexUploadBuffer[o + 3]);
++            }
++            fprintf(stderr, "pal0[0..7]=");
++            for (uint32_t p = 0; p < 16; p++) {
++                fprintf(stderr, "%02x", mRdp->palettes[0][p]);
++            }
++            fprintf(stderr, "\n");
++        }
++    }
+     Ssb64RenderDiagLogUpload("CI8", metadata, addr, tile, mRdp->texture_tile[tile].tmem_index, width, height);
+     if (!importReplacement) {
+         if (GfxHiResHookFn hook = gHiResHook) {
+@@ -2954,6 +2980,20 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
+     struct LoadedVertex* v3 = &mRsp->loaded_vertices[vtx3_idx];
+     struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
+ 
++    if (!is_rect && getenv("KIRBY_PC_TRIDEBUG") != nullptr) {
++        static int tn = 0;
++        if (tn++ < 120) {
++            fprintf(stderr,
++                    "[tri] ndc=(%.2f,%.2f)(%.2f,%.2f)(%.2f,%.2f) w=(%.2f,%.2f,%.2f) col=(%02x%02x%02x%02x) "
++                    "comb=%016llx oml=%08x tex0=%d\n",
++                    v1->w != 0 ? v1->x / v1->w : 999, v1->w != 0 ? v1->y / v1->w : 999,
++                    v2->w != 0 ? v2->x / v2->w : 999, v2->w != 0 ? v2->y / v2->w : 999,
++                    v3->w != 0 ? v3->x / v3->w : 999, v3->w != 0 ? v3->y / v3->w : 999, v1->w, v2->w, v3->w,
++                    v1->color.r, v1->color.g, v1->color.b, v1->color.a, (unsigned long long)mRdp->combine_mode,
++                    mRdp->other_mode_l, mRdp->texture_tile[mRdp->first_tile_index].fmt);
++        }
++    }
++
+     // if (rand()%2) return;
+ 
+     if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
+@@ -3895,11 +3935,30 @@ void Interpreter::GfxSpTexture(uint16_t sc, uint16_t tc, uint8_t level, uint8_t
+ }
+ 
+ void Interpreter::GfxDpSetScissor(uint32_t mode, uint32_t ulx, uint32_t uly, uint32_t lrx, uint32_t lry) {
++    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
++        static int sn = 0;
++        if (sn++ < 40) {
++            fprintf(stderr, "[scissor] mode=%u u102 ul=(%u,%u) lr=(%u,%u) px=(%.1f,%.1f)-(%.1f,%.1f)\n", mode, ulx,
++                    uly, lrx, lry, ulx / 4.0f, uly / 4.0f, lrx / 4.0f, lry / 4.0f);
++        }
++    }
+     float x = ulx / 4.0f;
+     float y = lry / 4.0f;
+     float width = (lrx - ulx) / 4.0f;
+     float height = (lry - uly) / 4.0f;
+ 
++    // PORT: an inverted scissor (lr <= ul) is an EMPTY region on the RDP --
++    // nothing inside it is drawn. The unsigned subtraction above would wrap
++    // to a gigantic width/height instead (scissor.width is uint32_t), turning
++    // "draw nothing" into "draw everything right/below of ul". Kirby 64's
++    // boot cameras hit this. Clamp to zero so the empty region stays empty.
++    if ((int32_t)lrx <= (int32_t)ulx) {
++        width = 0.0f;
++    }
++    if ((int32_t)lry <= (int32_t)uly) {
++        height = 0.0f;
++    }
++
+     mRdp->scissor.x = x;
+     mRdp->scissor.y = y;
+     mRdp->scissor.width = width;
+@@ -4458,6 +4517,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+ 
+     AdjustVIewportOrScissor(&default_viewport);
+ 
++    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
++        static int dn = 0;
++        if (dn++ < 60) {
++            fprintf(stderr,
++                    "[drawrect] u102=(%d,%d)-(%d,%d) ndc=(%.3f,%.3f)-(%.3f,%.3f) vp=(%d,%d %ux%u) "
++                    "sc=(%d,%d %ux%u) native=%ux%u fbActive=%d ws=%d\n",
++                    ulx, uly, lrx, lry, ulxf, ulyf, lrxf, lryf, (int)default_viewport.x, (int)default_viewport.y,
++                    (unsigned)default_viewport.width, (unsigned)default_viewport.height, (int)mRdp->scissor.x,
++                    (int)mRdp->scissor.y, (unsigned)mRdp->scissor.width, (unsigned)mRdp->scissor.height,
++                    (unsigned)mNativeDimensions.width, (unsigned)mNativeDimensions.height, (int)mFbActive,
++                    (int)mWidescreenActive);
++        }
++    }
++
+     mRdp->viewport = default_viewport;
+     mRdp->viewport_or_scissor_changed = true;
+     mRsp->geometry_mode = 0;
+@@ -4487,6 +4560,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+ 
+ void Interpreter::GfxDpTextureRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry, uint8_t tile, int16_t uls,
+                                         int16_t ult, int16_t dsdx, int16_t dtdy, bool flip) {
++    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
++        static int rn = 0;
++        if (rn++ < 80) {
++            fprintf(stderr,
++                    "[texrect] ul=(%d,%d) lr=(%d,%d) tile=%d uls=%d ult=%d dsdx=%d dtdy=%d fmt=%d siz=%d omh=%08x "
++                    "oml=%08x comb=%016llx env=%02x%02x%02x%02x prim=%02x%02x%02x%02x zbuf=%d\n",
++                    ulx, uly, lrx, lry, tile, uls, ult, dsdx, dtdy, mRdp->texture_tile[tile].fmt,
++                    mRdp->texture_tile[tile].siz, mRdp->other_mode_h, mRdp->other_mode_l,
++                    (unsigned long long)mRdp->combine_mode, mRdp->env_color.r, mRdp->env_color.g, mRdp->env_color.b,
++                    mRdp->env_color.a, mRdp->prim_color.r, mRdp->prim_color.g, mRdp->prim_color.b, mRdp->prim_color.a,
++                    (int)RdpColorImageIsZBuffer());
++        }
++    }
++
+     // Skip draws targeting the Z buffer.  N64 game code sometimes flips the
+     // color image to the Z buffer address, draws a texture or fill to it to
+     // manipulate depth values (e.g. for an alpha-based stencil that a
+@@ -4615,6 +4702,19 @@ void Interpreter::GfxDpImageRectangle(int32_t tile, int32_t w, int32_t h, int32_
+ }
+ 
+ void Interpreter::GfxDpFillRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
++    if (getenv("KIRBY_PC_RECTDEBUG") != nullptr) {
++        static int fn = 0;
++        if (fn++ < 40) {
++            fprintf(stderr,
++                    "[fillrect] ul=(%d,%d) lr=(%d,%d) fill=(%02x,%02x,%02x,%02x) prim=(%02x,%02x,%02x,%02x) "
++                    "omh=%08x oml=%08x comb=%016llx zbuf=%d\n",
++                    ulx, uly, lrx, lry, mRdp->fill_color.r, mRdp->fill_color.g, mRdp->fill_color.b,
++                    mRdp->fill_color.a, mRdp->prim_color.r, mRdp->prim_color.g, mRdp->prim_color.b,
++                    mRdp->prim_color.a, mRdp->other_mode_h, mRdp->other_mode_l,
++                    (unsigned long long)mRdp->combine_mode, (int)RdpColorImageIsZBuffer());
++        }
++    }
++
+     if (RdpColorImageIsZBuffer()) {
+         // PORT: color-image-redirect fill — the game is writing a constant
+         // 16-bit value into the Z buffer through the color path (per-camera
+@@ -4756,11 +4856,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
          uls = (bg->b.imageW - bg->b.imageX) << 3;
      }
  
@@ -36,7 +183,7 @@ index 6aad126..f57a75e 100644
      GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, bg->b.imageW, bg->b.imageH);
      GfxDpTextureRectangle(bg->b.frameX, bg->b.frameY, bg->b.frameX + bg->b.imageW - 4, bg->b.frameY + bg->b.imageH - 4,
                            G_TX_RENDERTILE, uls, bg->b.imageY << 3, dsdx, 1 << 10, false);
-@@ -4768,6 +4786,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -4768,6 +4886,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
  
  void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
      uintptr_t data = (uintptr_t)bg->b.imagePtr;
@@ -50,7 +197,7 @@ index 6aad126..f57a75e 100644
  
      uint32_t texFlags = 0;
      RawTexMetadata rawTexMetadata = {};
-@@ -6320,6 +6345,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -6320,6 +6445,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -113,7 +260,7 @@ index 6aad126..f57a75e 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6517,8 +6598,18 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6517,8 +6698,18 @@ static constexpr UcodeHandler s2dexHandlers = {
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
