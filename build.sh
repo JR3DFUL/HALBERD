@@ -3,7 +3,7 @@
 #
 #   ./build.sh /path/to/baserom.us.z64
 #
-# Produces ./out/kirby64 plus staged assets, then prints the run command.
+# Produces ./out/halberd plus staged assets, then prints the run command.
 # Every stage is idempotent: rerun after a failure and it resumes.
 #
 # STATUS: beta. This encodes the exact chain the development container uses.
@@ -72,7 +72,7 @@ msg "5/7 game build + link"
 ( cd "$WORK/kirby64_decomp" && \
   LUS_ROOT="$WORK/libultraship" LUS_BUILD="$WORK/lus-build" \
   SDL2_PREFIX="$WORK/sdl2-install" bash tools/pc/link.sh )
-cp "$WORK/kirby64_decomp/build/pc/kirby64" "$OUT/kirby64"
+cp "$WORK/kirby64_decomp/build/pc/kirby64" "$OUT/halberd"
 
 msg "6/7 assets (Torch o2r + Fast3D shaders)"
 if [ ! -f "$WORK/torch-build/torch" ]; then
@@ -89,10 +89,10 @@ cp "$WORK/libultraship/src/fast/shaders/opengl/default.shader.glsl" "$OUT/port/a
 msg "7/7 done"
 cat <<EOF
 
-Build complete: $OUT/kirby64
+Build complete: $OUT/halberd
 
 Run (from $OUT, so the port/ asset dirs resolve):
-    cd $OUT && LD_LIBRARY_PATH=$WORK/sdl2-install/lib ./kirby64
+    cd $OUT && LD_LIBRARY_PATH=$WORK/sdl2-install/lib ./halberd
 
 Headless/debug extras: KIRBY_PC_SCHEDDEBUG=1, KIRBY_PC_BGDEBUG=1 (stderr diagnostics).
 EOF

@@ -1,6 +1,13 @@
-# kirby64_port
+<p align="center">
+  <img src="assets/halberd-logo.png" alt="HALBERD" width="640">
+</p>
 
-Native PC port of **Kirby 64: The Crystal Shards** (N64), built on the
+# HALBERD
+
+**HALBERD** is a native PC port of **Kirby 64: The Crystal Shards** (N64) --
+named for Meta Knight's battleship, a tip of the mask to
+[BattleShip](https://github.com/JRickey/BattleShip), the SSB64 port whose
+architecture this project follows. Built on the
 [JR3DFUL/kirby64_decomp](https://github.com/JR3DFUL/kirby64_decomp)
 decompilation, using [libultraship](https://github.com/JRickey/libultraship) (JRickey `ssb64` fork, the one shipping under BattleShip; patched per `patches/`)
 for rendering/window/input and [Torch](https://github.com/JR3DFUL/Torch) for

@@ -264,7 +264,11 @@ static bool lus_init(void) {
      *     creation. */
     try {
         sContext = Ship::Context::CreateUninitializedInstance(
-            "Kirby 64: The Crystal Shards", "kirby64", "kirby64.cfg.json");
+            /* HALBERD: the port's name (Meta Knight's battleship -- a nod to
+             * BattleShip, the SSB64 port whose architecture this follows).
+             * The name is the window title; the shortName scopes the app-data
+             * directory. */
+            "HALBERD - Kirby 64: The Crystal Shards", "halberd", "halberd.cfg.json");
         if (sContext == nullptr) {
             fprintf(stderr, "[lus] CreateUninitializedInstance failed\n");
             return false;
