@@ -4258,15 +4258,16 @@
  #endif
 --- a/src/ovl20/tamper_check.c
 +++ b/src/ovl20/tamper_check.c
-@@ -35,6 +35,7 @@
+@@ -35,7 +35,14 @@
      osWritebackDCache(&D_80300170, 0xC0);
      osInvalICache(&D_80300170, 0xC0);
      gGameTampered = 0;
-+#ifndef PORT
-     /* PORT: the check decodes and executes MIPS machine code in place,
-      * which cannot run on the host; calling the weak stub instead would
-      * either abort the run or flag the game as tampered. The port is not a
-@@ -42,4 +43,5 @@
++#ifdef PORT
++    /* The check decodes and executes MIPS machine code in place, which
++     * cannot run on the host; calling the weak stub instead would either
++     * abort the run or flag the game as tampered. The port is not a
++     * tampered cartridge, so the flag simply stays 0. */
++#else
      if ((*func_80300170)() == 0) {
          gGameTampered = 1;
      }
@@ -4394,10 +4395,10 @@
  }
  
  SPObj *func_80153F2C_ovl6(void) {
-@@ -1522,9 +1542,87 @@
+@@ -1521,9 +1541,87 @@
+     func_80153064_ovl6();
      func_800AC610();
  }
- 
 +#ifdef PORT
 +/* PORT: byte-order fixup for the movie scripts.
 + *
