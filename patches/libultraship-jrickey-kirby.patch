@@ -1,5 +1,5 @@
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..141f2dd 100644
+index 6aad126..9f534f3 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
 @@ -1463,6 +1463,32 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
@@ -420,7 +420,49 @@ index 6aad126..141f2dd 100644
      gfx->GfxSpMovememF3dex2(C0(0, 8), C0(8, 8) * 8, gfx->SegAddr(cmd->words.w1));
  
      return false;
-@@ -6320,6 +6569,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -6292,6 +6541,41 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
+     return false;
+ }
+ 
++/* PORT (Kirby 64): S2DEX G_SELECT_DL support. HAL menu UI is built on
++ * gSPSelectDL: an 0xE1 (G_RDPHALF_0) carrying the branch DL address, then
++ * 0x04 (G_SELECT_DL) whose sid/flag/mask compare against the S2DEX status
++ * registers to decide whether to run the branch (a texture-load-skipping
++ * optimization on hardware). This port takes the branch UNCONDITIONALLY:
++ * "status never matched" is always render-correct, merely redundant, and
++ * needs no status-register emulation. Single-threaded interpreter, so a
++ * file-static pending slot is safe. */
++static uintptr_t sPendingSelectDlAddr = 0;
++
++bool gfx_select_dl_half_handler_s2dex(F3DGfx** cmd0) {
++    F3DGfx* cmd = *(cmd0);
++    sPendingSelectDlAddr = (uintptr_t)cmd->words.w1;
++    return false;
++}
++
++bool gfx_select_dl_handler_s2dex(F3DGfx** cmd0) {
++    Interpreter* gfx = mInstance.lock().get();
++    uintptr_t target = sPendingSelectDlAddr;
++    sPendingSelectDlAddr = 0;
++    if (target == 0) {
++        return false;
++    }
++    F3DGfx* sub = (F3DGfx*)gfx->SegAddr((uintptr_t)target);
++    if (sub == nullptr || (uintptr_t)sub == target) {
++        /* Unresolved segment: skip rather than walk a raw N64 token. */
++        if ((uintptr_t)sub <= 0x0FFFFFFFu) {
++            return false;
++        }
++    }
++    /* G_DL_PUSH semantics: run the branch as a call and return here. */
++    g_exec_stack.call(*cmd0, sub);
++    return false;
++}
++
+ bool gfx_bg_copy_handler_s2dex(F3DGfx** cmd0) {
+     Interpreter* gfx = mInstance.lock().get();
+     F3DGfx* cmd = *(cmd0);
+@@ -6320,6 +6604,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -483,7 +525,18 @@ index 6aad126..141f2dd 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6517,8 +6822,18 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6462,6 +6802,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
+     // The RSP was already running the right ucode from task setup; on PC we handle them here.
+     { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
+     { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
++    // PORT (Kirby 64): same cross-registration for the S2DEX SelectDL pair --
++    // the menu UI emits gSPSelectDL inside F3DEX2-table lists.
++    { (int8_t)0xE1, { "G_RDPHALF_0_SELECT", gfx_select_dl_half_handler_s2dex } },
++    { (int8_t)0x04, { "G_SELECT_DL", gfx_select_dl_handler_s2dex } },
+ };
+ 
+ static constexpr UcodeHandler f3dexHandlers = {
+@@ -6517,8 +6861,20 @@ static constexpr UcodeHandler s2dexHandlers = {
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
      { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
@@ -499,10 +552,12 @@ index 6aad126..141f2dd 100644
 +    { F3DEX2_G_SETOTHERMODE_H, { "G_SETOTHERMODE_H", gfx_othermode_h_handler_f3dex2 } },
 +    { F3DEX2_G_TEXTURE, { "G_TEXTURE", gfx_texture_handler_f3dex2 } },
 +    { F3DEX2_G_GEOMETRYMODE, { "G_GEOMETRYMODE", gfx_geometry_mode_handler_f3dex2 } },
++    { (int8_t)0xE1, { "G_RDPHALF_0_SELECT", gfx_select_dl_half_handler_s2dex } },
++    { (int8_t)0x04, { "G_SELECT_DL", gfx_select_dl_handler_s2dex } },
  };
  
  static constexpr std::array ucode_handlers = {
-@@ -6846,6 +7161,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
+@@ -6846,6 +7202,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
      if (mForceRenderToFb) {
          return false;
      }
@@ -526,7 +581,7 @@ index 6aad126..141f2dd 100644
      if (mCurDimensions.width == mGameWindowViewport.width && mCurDimensions.height == mGameWindowViewport.height) {
          return true;
      }
-@@ -7003,7 +7335,28 @@ void Interpreter::RunGuiOnly() {
+@@ -7003,7 +7376,28 @@ void Interpreter::RunGuiOnly() {
      }
  }
  

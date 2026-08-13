@@ -671,6 +671,13 @@ void pcb_input_poll(PCPad* pads, int n) {
      * the parameter to void* -- it is still an OSContPad[MAXCONTROLLERS].) */
     sControlDeck->WriteToPad(sLusPads);
 
+    if (getenv("KIRBY_PC_INPUTDEBUG") != nullptr && sLusPads[0].button != 0) {
+        static int inDbgN = 0;
+        if (inDbgN++ < 40) {
+            fprintf(stderr, "[input] pad0 buttons=%04x stick=(%d,%d)\n",
+                    (unsigned)sLusPads[0].button, sLusPads[0].stick_x, sLusPads[0].stick_y);
+        }
+    }
     for (i = 0; i < n && i < MAXCONTROLLERS; i++) {
         pads[i].button = sLusPads[i].button;
         pads[i].stick_x = sLusPads[i].stick_x;
