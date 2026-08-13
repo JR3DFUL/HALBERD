@@ -10,8 +10,7 @@
 decompilation, using
 [libultraship](https://github.com/JRickey/libultraship) for PC-native
 rendering / input and [Torch](https://github.com/HarbourMasters/Torch) for
-extracting assets out of the ROM at build time. The name is Meta Knight's
-airship -- and a tip of the mask to
+extracting assets out of the ROM at build time. The name is a nod to
 [BattleShip](https://github.com/JRickey/BattleShip), the SSB64 port whose
 architecture this project follows.
 
