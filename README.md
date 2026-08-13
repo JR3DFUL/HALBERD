@@ -47,7 +47,17 @@ everything that is *only* about the PC build. Next structural step (per
 BattleShip): decomp as a git submodule at `decomp/`, CMake superbuild,
 libultraship + torch submodules with the patch applied on the fork.
 
-## Building (current, transitional)
+## Building — one command
+
+    ./build.sh /path/to/baserom.us.z64
+
+Linux or WSL2. Fetches and builds every dependency (SDL2, the patched
+libultraship fork, the decomp game code, Torch), extracts assets from your
+ROM, and produces `out/kirby64` with a printed run command. Idempotent:
+rerun after any failure and it resumes. Beta -- mirrors the development
+container's exact chain.
+
+## Building (manual, transitional)
 
 The build currently expects to run from a `kirby64_decomp` checkout with this
 repo's files overlaid at the same relative paths (that is how they were
