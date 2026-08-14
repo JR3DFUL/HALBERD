@@ -93,13 +93,23 @@ mkdir -p "$OUT/port/o2r" "$OUT/port/assets/shaders/opengl"
   echo "WARN: torch o2r failed -- game runs, textures may be limited"
 cp "$WORK/libultraship/src/fast/shaders/opengl/default.shader.glsl" "$OUT/port/assets/shaders/opengl/"
 
-msg "7/7 done"
+msg "7/7 launcher"
+cat > "$OUT/run.sh" <<LAUNCH
+#!/bin/sh
+# Launch HALBERD. Everything is baked in; no environment setup needed.
+cd "\$(dirname "\$0")"
+export LD_LIBRARY_PATH="$WORK/sdl2-install/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+export KIRBY_PC_TRACE=\${KIRBY_PC_TRACE:-1}
+exec ./halberd "\$@"
+LAUNCH
+chmod +x "$OUT/run.sh"
+
 cat <<EOF
 
-Build complete: $OUT/halberd
+Build complete.
 
-Run (from $OUT, so the port/ asset dirs resolve):
-    cd $OUT && LD_LIBRARY_PATH=$WORK/sdl2-install/lib ./halberd
+Run the game:
+    $OUT/run.sh
 
 Headless/debug extras: KIRBY_PC_SCHEDDEBUG=1, KIRBY_PC_BGDEBUG=1 (stderr diagnostics).
 EOF
