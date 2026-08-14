@@ -45,14 +45,19 @@ fi
 msg "3/7 libultraship (JRickey ssb64 fork + Kirby patch)"
 if [ ! -d "$WORK/libultraship" ]; then
     git clone --depth 1 -b ssb64 https://github.com/JRickey/libultraship "$WORK/libultraship"
-    git -C "$WORK/libultraship" apply "$ROOT/patches/libultraship-jrickey-kirby.patch"
 fi
-if [ ! -f "$WORK/lus-build/src/libultraship.a" ]; then
+# Re-apply the current patch every run (reset first, same as the decomp
+# staging below) so a pulled patch update actually reaches the build; ninja
+# then recompiles only what the patch touched.
+git -C "$WORK/libultraship" checkout -- . 2>/dev/null || true
+git -C "$WORK/libultraship" apply "$ROOT/patches/libultraship-jrickey-kirby.patch" || \
+    { echo "libultraship-jrickey-kirby.patch failed to apply"; exit 1; }
+if [ ! -f "$WORK/lus-build/build.ninja" ]; then
     cmake -S "$WORK/libultraship" -B "$WORK/lus-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
           -DGBI_UCODE=F3DEX_GBI_2 -DLUS_BUILD_TESTS=OFF \
           -DCMAKE_PREFIX_PATH="$WORK/sdl2-install"
-    ninja -C "$WORK/lus-build" -j"$JOBS" libultraship
 fi
+ninja -C "$WORK/lus-build" -j"$JOBS" libultraship
 
 msg "4/7 decomp sources (game code)"
 if [ ! -d "$WORK/kirby64_decomp" ]; then
