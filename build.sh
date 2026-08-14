@@ -72,6 +72,7 @@ git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" 2>/dev/nul
     git -C "$WORK/kirby64_decomp" apply --reverse --check "$ROOT/patches/decomp-port.patch" 2>/dev/null || \
     { echo "decomp-port.patch failed to apply"; exit 1; }
 cp "$ROM" "$WORK/kirby64_decomp/baserom.us.z64"
+cp "$ROM" "$OUT/baserom.us.z64"
 
 msg "5/7 game build + link"
 ( cd "$WORK/kirby64_decomp" && make -f Makefile.pc -j"$JOBS" )
