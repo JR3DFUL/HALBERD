@@ -209,6 +209,10 @@ def render_widened(sym, section, entries):
 SUPPRESS_BSS = {
     'D_800D79B0', 'D_800D79B4', 'D_800D79B8', 'D_800D79BC',
     'D_800D79D8', 'D_800D79DC', 'D_800D79E0',
+    # ovl4 planet-map track-id table: D_8015C6AC is D_8015C6A8 + 4 on N64
+    # (one s32 array split at the interior label; writers use the C6AC name,
+    # readers index from C6A8, and split objects broke the aliasing).
+    'D_8015C6A8_ovl4', 'D_8015C6AC_ovl4',
 }
 
 

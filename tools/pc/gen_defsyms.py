@@ -59,8 +59,32 @@ def named_blocks(skip):
     return out
 
 
+def _widened_blocks():
+    """{symbol} for every block gen_data.py emits as an 8-byte-per-word
+    void*[] (pointer blocks and FORCE_WIDEN tables). A defsym that lands
+    inside one of these must scale its N64 byte offset by 2, or it points
+    mid-cell: the ovl18 demo-setup records (D_8022AED8 et al) resolved to
+    D_8022AE4C_ovl18+0x8C in a block whose host layout put that data at
+    +0x118, and func_800BBC6C copied display-list halves into the stage
+    globals."""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import gen_data
+    widened = set()
+    for f in glob.glob('asm/data/**/*.s', recursive=True):
+        for sym, _sec, entries in gen_data.parse(f):
+            if sym in gen_data.FORCE_WORD32 or sym in gen_data.SUPPRESS_BSS:
+                continue
+            if (gen_data.is_pointer_block(entries)
+                    or (sym in gen_data.FORCE_WIDEN
+                        and {k for k, _ in entries
+                             if k != 'incbin'} == {'word'})):
+                widened.add(sym)
+    return widened
+
+
 def data_blocks():
-    """[(start_vram, last_vram, symbol)] for every dlabel, sorted by address."""
+    """[(start_vram, last_vram, symbol, widened)] for every dlabel, sorted."""
+    widened = _widened_blocks()
     blocks = []
     for f in glob.glob('asm/data/**/*.s', recursive=True):
         cur, addrs = None, []
@@ -68,14 +92,14 @@ def data_blocks():
             m = re.match(r'^dlabel (\w+)', line)
             if m:
                 if cur and addrs:
-                    blocks.append((addrs[0], addrs[-1], cur))
+                    blocks.append((addrs[0], addrs[-1], cur, cur in widened))
                 cur, addrs = m.group(1), []
                 continue
             m = ADDR.search(line)
             if m and cur:
                 addrs.append(int(m.group(1), 16))
         if cur and addrs:
-            blocks.append((addrs[0], addrs[-1], cur))
+            blocks.append((addrs[0], addrs[-1], cur, cur in widened))
     blocks.sort()
     return blocks
 
@@ -88,7 +112,8 @@ def main():
 
     text = open('datatodo.txt').read()
     own = set(re.findall(r'^(\w+)\s*=', text, re.M))
-    blocks = sorted(data_blocks() + named_blocks(own))
+    blocks = sorted(data_blocks()
+                    + [b + (False,) for b in named_blocks(own)])
     starts = [b[0] for b in blocks]
 
     lines, unresolved, relative = [], [], 0
@@ -104,6 +129,8 @@ def main():
         i = bisect.bisect_right(starts, a) - 1
         if i >= 0 and blocks[i][0] <= a <= blocks[i][1] + 8:
             base, off = blocks[i][2], a - blocks[i][0]
+            if blocks[i][3]:
+                off *= 2    # widened void*[]: 8 host bytes per N64 word
             lines.append(f'--defsym {name}={base}+0x{off:X}'
                          if off else f'--defsym {name}={base}')
         else:

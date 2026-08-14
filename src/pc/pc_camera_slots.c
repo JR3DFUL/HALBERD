@@ -38,3 +38,13 @@ __asm__("   .globl D_800D79B4\n"
         "   .set D_800D79DC, D_800D79D8 + 8\n"
         "   .globl D_800D79E0\n"
         "   .set D_800D79E0, D_800D79D8 + 16\n");
+
+/* ovl4's planet-map track-id table, split by splat at an interior label:
+ * N64 has one s32 run -- D_8015C6A8[0] (the exit dot's track id, written by
+ * func_80153AEC_ovl4) immediately followed by D_8015C6AC[9] (the level dots,
+ * written by func_801533A8_ovl4) -- and func_801523A0_ovl4 indexes the WHOLE
+ * run from D_8015C6A8. As two separate doubled bss objects the alias broke
+ * and every level-dot lookup read zero. One array, one +4 alias. */
+int D_8015C6A8_ovl4[10];
+__asm__("   .globl D_8015C6AC_ovl4\n"
+        "   .set D_8015C6AC_ovl4, D_8015C6A8_ovl4 + 4\n");

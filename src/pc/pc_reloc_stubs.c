@@ -136,3 +136,16 @@ void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const vo
             id, raw, r[0], r[1], *(const unsigned short *)(r + 4), *(const unsigned short *)(r + 6),
             img, pal, i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7]);
 }
+
+/* Transient bring-up tap: file-select flow tracing (KIRBY_PC_FSDEBUG). */
+#include <stdio.h>
+#include <stdlib.h>
+void pc_fsel_debug(const char *tag, int a, int b, int c) {
+    static int on = -1;
+    if (on < 0) {
+        on = getenv("KIRBY_PC_FSDEBUG") != NULL;
+    }
+    if (on) {
+        fprintf(stderr, "[fsel] %s a=%d b=%d c=%d\n", tag, a, b, c);
+    }
+}

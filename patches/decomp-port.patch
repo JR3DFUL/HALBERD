@@ -358,6 +358,56 @@
 +#endif
  
  #endif
+--- a/include/unk_structs/D_800D79D8.h
++++ b/include/unk_structs/D_800D79D8.h
+@@ -1,3 +1,40 @@
++#ifdef PORT
++/* This struct is a raw N64-byte-offset overlay of the Camera payload. The
++ * fields compiled code touches, with their N64 Camera meaning:
++ *   unk20/24/28/2C   perspMtx.persp fovy/aspect/near/far   (func_800A70C4)
++ *   unk3C..unk5C     viewMtx.lookAt eye/at/up, 9 floats    (func_800A6F68)
++ *   unk74/unk78      timeRemaining/animSpeed  (func_800B3008/3070/3094,
++ *                    func_800AAFC4/AB040/AB0A8/AB0CC)
++ *   unk80            flags                                  (func_800A7160)
++ * On the LP64 host every one of those moved (pointers in the leading fields
++ * and unions grew), so writes through the N64 offsets landed on neighbours:
++ * func_800B3070's 2.0f arrived in cam->mtxCount and the planet-map render
++ * walked float bits as OMMtx pointers. Pad each group onto its real LP64
++ * offset; the numbers come from the compiled Camera in object_manager.h
++ * (fovy +44, eye +80, timeRemaining +160, flags +172). */
++struct UnkStruct800D79D8 {
++    u8 pad0[44];
++    f32 unk20;  /* perspMtx.persp.fovy */
++    f32 unk24;  /* perspMtx.persp.aspect */
++    f32 unk28;  /* perspMtx.persp.near */
++    f32 unk2C;  /* perspMtx.persp.far */
++    u8 pad1[20];
++    f32 unk3C;  /* viewMtx.lookAt.eye.x */
++    f32 unk40;  /* eye.y */
++    f32 unk44;  /* eye.z */
++    f32 unk48;  /* at.x */
++    f32 unk4C;  /* at.y */
++    f32 unk50;  /* at.z */
++    f32 unk54;  /* up.x */
++    f32 unk58;  /* up.y */
++    f32 unk5C;  /* up.z */
++    u8 pad2[44];
++    f32 unk74;  /* timeRemaining */
++    f32 unk78;  /* animSpeed */
++    u8 pad3[4];
++    u32 unk80;  /* flags */
++};
++#else
+ struct UnkStruct800D79D8 {
+     u32 unk0;
+     u32 unk4;
+@@ -33,5 +70,6 @@ struct UnkStruct800D79D8 {
+     u32 unk7C;
+     u32 unk80;
+ };
++#endif
+ 
+ extern struct UnkStruct800D79D8 *D_800D79D8[];
 --- a/src/main/anim.c
 +++ b/src/main/anim.c
 @@ -1102,6 +1102,32 @@ void animUpdateTextureAnimatedParams(MObj *mobj) {
@@ -1361,6 +1411,28 @@
      viSetScreenParams(settings->screenWidth, settings->screenHeight, settings->flags);
 +#endif
  }
+--- a/src/ovl1/game.c
++++ b/src/ovl1/game.c
+@@ -168,6 +168,19 @@ void func_800A2C80(void) {
+ 
+ void func_800A2CE4(void) {
+     saveCurrentFileNum = D_800EC9FC;
++#ifdef PORT
++    /* The config-block default for "last used file" is 3 = none
++     * (func_800B91B8's SAVE_U16(0x164) = 3). The N64 file select tolerates
++     * the out-of-range value through data adjacency (D_800ECA08[3] lands in
++     * the config block) that this port's separate bss objects do not
++     * reproduce: func_801555AC_ovl4(3) read garbage, called the empty file
++     * "existing", and the first A press started a game on an uninitialized
++     * file whose level-unlock flags were all zero. Park the cursor on file 1
++     * instead, which is what a fresh cartridge boot shows. */
++    if ((u32)saveCurrentFileNum > 2) {
++        saveCurrentFileNum = 0;
++    }
++#endif
+     gKirbyLives = 3;
+     gKirbyHp = 6.0f;
+     D_800D6E54 = 0;
 --- a/src/ovl1/ovl1.c
 +++ b/src/ovl1/ovl1.c
 @@ -147,6 +147,43 @@ typedef struct UnkScript {
@@ -2320,6 +2392,189 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A2550.s")
  #endif
+--- a/src/ovl1/ovl1_12.c
++++ b/src/ovl1/ovl1_12.c
+@@ -80,6 +80,52 @@ void func_800BBBA0(void) {
+     }
+ }
+ 
++#ifdef PORT
++/* The demo-setup records (D_8022B7C0/D_8022AED8/D_8022B428) live inside
++ * ovl18's widened void*[] data block: one 8-byte cell per N64 word, value in
++ * the low half. The u32-field struct view above them sheared -- unkC read a
++ * cell's high half and the stage globals filled with display-list halves.
++ * Read cells by N64 word index instead; u8/u16 packed data extracts from the
++ * value-preserved word big-endian-wise. */
++static u32 pc_demo_cell(u32 wordIndex) {
++    return (u32)((const uintptr_t *)D_800ED4E0[0])[wordIndex];
++}
++
++static u16 pc_demo_half(u32 halfIndex) {
++    u32 w = pc_demo_cell(halfIndex >> 1);
++
++    return (halfIndex & 1) ? (u16)w : (u16)(w >> 16);
++}
++
++void func_800BBC6C(void) {
++    u32 i;
++    u32 hpBits;
++
++    D_800ED4EC = 0;
++    D_800ED4F4 = 0;
++    set_hard_rng_seed(pc_demo_cell(0));
++    D_800BE4EC = pc_demo_cell(1);
++    D_800BE500 = D_800BE52C = pc_demo_cell(2);
++    D_800BE504 = D_800BE530 = pc_demo_cell(3);
++    D_800BE508 = D_800BE534 = pc_demo_cell(4);
++    D_800BE50C = D_800BE538 = pc_demo_cell(5);
++    D_800BE4FC = pc_demo_cell(7);
++    gKirbyLives = (s32)pc_demo_cell(8);
++    hpBits = pc_demo_cell(9);
++    gKirbyHp = *(f32 *)&hpBits;
++    D_800D6E54 = pc_demo_cell(10);
++    gKirbyStars = pc_demo_cell(11);
++    D_800D6E64 = pc_demo_cell(12);
++    saveHUDTheme = pc_demo_cell(13);
++    set_soft_rng_seed(pc_demo_cell(14));
++
++    for (i = 0; i < 16; i++) {
++        D_800D6E20[i] = (u8)(pc_demo_cell(16 + i / 4) >> (24 - 8 * (i % 4)));
++    }
++
++    D_800D6F38 = pc_demo_cell(15);
++}
++#else
+ void func_800BBC6C(void) {
+     u32 i;
+ 
+@@ -106,7 +152,119 @@ void func_800BBC6C(void) {
+ 
+     D_800D6F38 = D_800ED4E0[0]->unk3C;
+ }
++#endif
++
++#ifdef PORT
++/* The recorded input tape sits at N64 byte offset 0x100 of the same widened
++ * record, read as u16 halves. Same cell translation as func_800BBC6C above:
++ * every raw `*(u16 *)((u8 *)rec + off)` becomes pc_demo_half(off / 2). */
++void func_800BBDC4(void)
++{
++  extern u32 D_800BE4F8;
++  extern Controller_800D6FE8 gPlayerControllers[];
++  u16 flags;
++  u16 a;
++  u16 b;
++  unsigned int c;
++  u32 base;
+ 
++  gPlayerControllers[0].buttonHeld = (gPlayerControllers[0].buttonPressed =
++      (gPlayerControllers[0].buttonHeldLong = 0));
++  if (D_800ED4EC < 0)
++  {
++    D_800BE4F8 = 2;
++    D_800D6F38 = 0;
++    return;
++  }
++  D_800ED4F4 = D_800ED4F4 - 1;
++  if (((s32) D_800ED4F4) <= 0)
++  {
++    flags = pc_demo_half(0x80 + D_800ED4EC);
++    D_800ED4EC = D_800ED4EC + 1;
++    if (flags & 0xE000)
++    {
++      D_800ED4EC++;
++    }
++    if (flags & 0x1C00)
++    {
++      D_800ED4EC++;
++    }
++    if (flags & 0x380)
++    {
++      D_800ED4EC++;
++    }
++    flags = pc_demo_half(0x80 + D_800ED4EC);
++    if (flags == 0xFFFF)
++    {
++      D_800ED4EC = -1;
++      return;
++    }
++    D_800ED4F4 = flags & 0x7F;
++  }
++  base = 0x80 + D_800ED4EC;
++  flags = pc_demo_half(base);
++  c = 0;
++  b = 0;
++  a = 0;
++  if (flags & 0x8000)
++  {
++    a = pc_demo_half(base + 1);
++  }
++  if (flags & 0x4000)
++  {
++    b = pc_demo_half(base + 1);
++  }
++  if (flags & 0x2000)
++  {
++    c = pc_demo_half(base + 1);
++  }
++  if (flags & 0x1000)
++  {
++    a = pc_demo_half(base + 2);
++  }
++  if (flags & 0x800)
++  {
++    b = pc_demo_half(base + 2);
++  }
++  if (flags & 0x400)
++  {
++    c = pc_demo_half(base + 2);
++  }
++  if (flags & 0x200)
++  {
++    a = pc_demo_half(base + 3);
++  }
++  if (flags & 0x100)
++  {
++    b = pc_demo_half(base + 3);
++  }
++  if (flags & 0x80)
++  {
++    c = pc_demo_half(base + 3);
++  }
++  gPlayerControllers[0].buttonHeld = a;
++  gPlayerControllers[0].buttonPressed = b;
++  gPlayerControllers[0].buttonHeldLong = c;
++  gPlayerControllers[0].stickX = 0;
++  gPlayerControllers[0].stickY = 0;
++  if (a & 8)
++  {
++    gPlayerControllers[0].stickX = 0x40;
++  }
++  if (a & 4)
++  {
++    gPlayerControllers[0].stickX = -0x40;
++  }
++  if (a & 0x10)
++  {
++    gPlayerControllers[0].stickY = 0x40;
++  }
++  if (a & 0x40)
++  {
++    gPlayerControllers[0].stickY = -0x40;
++  }
++}
++#else
+ // Draft, 7/103: every instruction matches except that IDO puts the CSE'd
+ // D_800ED4EC load in $v0 where the ROM has $v1 (7 words, all the same value).
+ // Swept: idx local vs pure CSE, declaration order (first/last/none), s32 vs u16
+@@ -207,6 +365,7 @@ void func_800BBDC4(void)
+     gPlayerControllers[0].stickY = -0x40;
+   }
+ }
++#endif
+ 
+ // last function in this translation unit: its listing carries the
+ // TU's trailing alignment padding, which C does not emit
 --- a/src/ovl1/ovl1_3.c
 +++ b/src/ovl1/ovl1_3.c
 @@ -38,12 +38,32 @@ void ohSleep(s32);
@@ -4381,6 +4636,73 @@
  
  // The `q` pointer local and the `n ^ 0` are LOAD-BEARING (permuter result,
  // applied verbatim): `q` forks the extra source-level temp IDO needs to keep
+--- a/src/ovl1/util.c
++++ b/src/ovl1/util.c
+@@ -656,6 +656,31 @@ s32 utilResetRect(void) {
+     return 1;
+ }
+ 
++#ifdef PORT
++/* Every caller passes its GObj thread arg (the DObj typing only worked on N64
++ * because GObj.unk4C and DObj.unk4C share raw offset 0x4C), and GObj.unk4C
++ * holds the object's SPObj (func_800AF920's PORT arm documents the same
++ * contract). Raw offsets 0x14../0x18.. are the N64 SPObj prim/env colors;
++ * write the LP64 fields. */
++#include "SPObj.h"
++void func_800A5B14(DObj *arg0, u8 arg1, u8 arg2, u8 arg3, u8 arg4) {
++    SPObj *sp = (SPObj *)((GObj *)arg0)->unk4C;
++
++    sp->primColorRed = arg1;
++    sp->primColorGreen = arg2;
++    sp->primColorBlue = arg3;
++    sp->primColorAlpha = arg4;
++}
++
++void func_800A5B3C(DObj *arg0, u8 arg1, u8 arg2, u8 arg3, u8 arg4) {
++    SPObj *sp = (SPObj *)((GObj *)arg0)->unk4C;
++
++    sp->envColorRed = arg1;
++    sp->envColorGreen = arg2;
++    sp->envColorBlue = arg3;
++    sp->envColorAlpha = arg4;
++}
++#else
+ void func_800A5B14(DObj *arg0, u8 arg1, u8 arg2, u8 arg3, u8 arg4) {
+     u8 *store = (u8 *)arg0->unk4C;
+ 
+@@ -673,6 +698,7 @@ void func_800A5B3C(DObj *arg0, u8 arg1, u8 arg2, u8 arg3, u8 arg4) {
+     store[0x1A] = arg3;
+     store[0x1B] = arg4;
+ }
++#endif
+ 
+ f32 func_800A5B64(f32 arg0) {
+     u16 idx = (s32)(arg0 * 651.8986f) & 0xFFF;
+--- a/src/ovl18/code_239080.c
++++ b/src/ovl18/code_239080.c
+@@ -313,9 +313,22 @@ u32 func_80227308_ovl18(s32 arg0) {
+     scRemovePostProcessFunc();
+     auSetBGMVolume(0, 0x7800);
+     gameSetUpdateRate(2.0f);
++#ifdef PORT
++    /* Both blobs come out of the generated data as 8-byte-per-N64-word cells
++     * (the widened layout viApplyScreenSettings' and gtlCreateScene's PORT
++     * arms read). The local 4-byte structs above would patch the zbuffer and
++     * heap size into the LOW HALF of cell 1/2 -- the heap-size write landed
++     * on the scene's onPrivDraw pointer and gtlDraw called the byte delta
++     * (pc = 0x186db0). Patch the real cells. */
++    ((uintptr_t *)&D_8022AE30_ovl18)[3] = (u32)((uintptr_t)&D_8012EB00 - 0x1900);
++    viApplyScreenSettings(&D_8022AE30_ovl18);
++    ((uintptr_t *)&D_8022AE4C_ovl18)[4] =
++        (u32)((u8 *)gFrameBuffer - (u8 *)&D_8022FB50);
++#else
+     D_8022AE30_ovl18.zb = (u32)&D_8012EB00 - 0x1900;
+     viApplyScreenSettings(&D_8022AE30_ovl18);
+     D_8022AE4C_ovl18.unk10 = (u32)gFrameBuffer - (u32)&D_8022FB50;
++#endif
+     zp = (vu16 *) D_803D6900;
+     i = 0;
+     do {
 --- a/src/ovl2/ovl2.c
 +++ b/src/ovl2/ovl2.c
 @@ -19,6 +19,69 @@ extern s32 D_800D7B68;
@@ -5943,9 +6265,472 @@
  
  void func_80152A48_ovl4(void) {
      s32 i;
+@@ -423,7 +508,139 @@ s32 func_80153324_ovl4(s32 arg0) {
+     return 0;
+ }
+ 
++#ifdef PORT
++/* Functional port of the per-level map-dot proc (dispatch states 2..7, one
++ * per level slot of the current planet; this was the crash site on entering
++ * Pop Star). No sketch existed; ported from the asm. The ROM copies two
++ * 6x6x2 u32 tables (D_8015A4F0_ovl4 sprite-bank ids, D_8015A610_ovl4 image
++ * ids) to the stack and indexes them [planet][level]{closed,open}; both are
++ * emitted as plain u32[] in build/pc/data/ovl4_ovl4.data.c (track descriptor
++ * ids, not pointers), so the LP64 code indexes the live tables directly.
++ * Role: a locked dot tears its track down via func_800B1900, an "== 2"
++ * (newly reachable) dot picks the open art unless the unlock cutscene
++ * (D_800D6B80) is about to reveal it, the dot pulses (func_800AECC0/AED20)
++ * while hovered, blinks open during the unlock cutscene with sounds
++ * 0xF2/0xF3, and the level-100% special (func_80153324_ovl4) makes the last
++ * Ripple Star dot flicker between its two art sets forever. */
++void func_801533A8_ovl4(s32 arg0) {
++    void func_80153AB0_ovl4(struct GObj *);
++    void func_800A9864(void *, s32, s32);
++    void func_800AA018(s32);
++    void func_800AECC0(f32);
++    void func_800AED20(f32);
++    void func_8000BBE0(GObj *);
++    void func_800A9760(u32);
++    void func_800A9F98(s32, f32);
++    s32 func_800AA888(u32);
++    extern u32 D_8015A4F0_ovl4[]; /* [6 planets][6 levels][2] */
++    extern u32 D_8015A610_ovl4[]; /* [6 planets][6 levels][2] */
++    extern s32 D_8015C6AC_ovl4[];
++    extern s32 D_800D6B80;
++    extern s32 D_800D6B9C;
++    f32 t;
++    s32 blink;
++
++#define DOT_ART(i) D_8015A4F0_ovl4[((D_800D6B98 * 6) + arg0) * 2 + (i)]
++#define DOT_IMG(i) D_8015A610_ovl4[((D_800D6B98 * 6) + arg0) * 2 + (i)]
++
++    if (func_80152220_ovl4(D_800D6B98, arg0) == 0) {
++        func_800B1900((u16) omCurrentObj->objId);
++    }
++    D_8015C6AC_ovl4[arg0] = omCurrentObj->objId;
++    D_800DF150[omCurrentObj->objId] = func_80153AB0_ovl4;
++    if (func_80152220_ovl4(D_800D6B98, arg0) == 2) {
++        if ((D_800D6B80 != 0) && ((arg0 + 1) == D_800D6B9C)) {
++            func_800A9864((void *) (uintptr_t) DOT_ART(0), 0x1869F, 0x10);
++            func_800AA018(DOT_IMG(0));
++        } else {
++            func_800A9864((void *) (uintptr_t) DOT_ART(1), 0x1869F, 0x10);
++            func_800AA018(DOT_IMG(1));
++        }
++    } else {
++        func_800A9864((void *) (uintptr_t) DOT_ART(0), 0x1869F, 0x10);
++        func_800AA018(DOT_IMG(0));
++    }
++    if ((arg0 + 1) == D_800E9FE0[D_8015C698_ovl4].as_s32) {
++        func_800AECC0(2.0f);
++        func_800AED20(2.0f);
++    } else {
++        func_800AECC0(0.0f);
++        func_800AED20(0.0f);
++    }
++    if (D_800D6B80 != 0) {
++        if (arg0 == D_800D6B9C) {
++            func_800AFBB4(0, omCurrentObj);
++        }
++        blink = 0;
++        play_sound(0xF2);
++        while (D_800D6B80 != 0) {
++            if ((arg0 + 1) == D_800D6B9C) {
++                func_8000BBE0(D_800DE350[omCurrentObj->objId]);
++                if (((blink / 2) % 2) != 0) {
++                    func_800A9760(DOT_ART(0));
++                } else {
++                    func_800A9760(DOT_ART(1));
++                }
++            }
++            blink++;
++            ohSleep(1);
++        }
++        if ((arg0 + 1) == D_800D6B9C) {
++            func_8000BBE0(D_800DE350[omCurrentObj->objId]);
++            func_800A9760(DOT_ART(1));
++            func_800A9F98(DOT_IMG(1), D_800DE350[omCurrentObj->objId]->animTimer);
++        }
++        play_sound(0xF3);
++        if (arg0 == D_800D6B9C) {
++            ohSleep(0xA);
++            blink = 0;
++            while ((f32) blink < 15.0f) {
++                if (((blink / 2) % 2) != 0) {
++                    func_800AFBB4(0, omCurrentObj);
++                } else {
++                    func_800AFBB4(1, omCurrentObj);
++                }
++                ohSleep(1);
++                blink++;
++            }
++        }
++        func_800AFBB4(1, omCurrentObj);
++    }
++    blink = 0;
++    while (1) {
++        if ((arg0 + 1) == D_800E9FE0[D_8015C698_ovl4].as_s32) {
++            func_800AECC0(2.0f);
++            func_800AED20(2.0f);
++        } else {
++            func_800AECC0(0.0f);
++            func_800AED20(0.0f);
++        }
++        if (func_80153324_ovl4(arg0) != 0) {
++            t = D_800DE350[omCurrentObj->objId]->animTimer;
++            if (((blink / 2) % 2) != 0) {
++                if (func_800AA888(DOT_ART(0)) == 0) {
++                    func_8000BBE0(D_800DE350[omCurrentObj->objId]);
++                    func_800A9760(DOT_ART(0));
++                    func_800A9F98(DOT_IMG(0), t);
++                }
++            } else {
++                if (func_800AA888(DOT_ART(1)) == 0) {
++                    func_8000BBE0(D_800DE350[omCurrentObj->objId]);
++                    func_800A9760(DOT_ART(1));
++                    func_800A9F98(DOT_IMG(1), t);
++                }
++            }
++            blink++;
++        }
++        ohSleep(1);
++    }
++
++#undef DOT_ART
++#undef DOT_IMG
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl4/ovl4_2/func_801533A8_ovl4.s")
++#endif
+ 
+ extern s32 D_8015C694_ovl4;
+ 
+@@ -471,7 +688,98 @@ void func_80153C3C_ovl4(struct GObj *arg0) {
+     gEntitiesAngleYArray[omCurrentObj->objId] = gEntitiesAngleYArray[D_8015C694_ovl4];
+ }
+ 
++#ifdef PORT
++/* Functional port of the map-cursor glide proc (dispatch state 15). Ported
++ * from the asm; no sketch existed. D_8015A760_ovl4 is a [6 planets]{art,img}
++ * pair table of u32 track-descriptor ids (plain u32[] in the PC data, safe
++ * to index live on LP64). Role: it owns the star cursor that sits on the
++ * selected level dot. When another proc requests a move by setting
++ * D_800E98E0[objId] nonzero, it snapshots the cursor DObj child's position,
++ * lets func_800A9F98 seek the sprite to the newly selected dot to learn the
++ * target position, restores the snapshot, then glides pos.x/pos.z toward
++ * the target at 50 units/frame along the atan2 direction, clamping each
++ * axis on overshoot; D_800E9AA0[D_8015C698_ovl4] = 1 keeps the planet-map
++ * input proc's cooldown armed while the glide runs. */
++void func_80153C78_ovl4(void) {
++    void func_8015427C_ovl4(struct GObj *);
++    void func_800A9864(void *, s32, s32);
++    void func_800A9F98(s32, f32);
++    void func_800AF408(void);
++    void animUpdateModelTreeAnimation(GObj *);
++    extern u32 D_8015A760_ovl4[]; /* [6 planets][2] */
++    struct DObj *child;
++    Vector saved;
++    Vector target;
++    f32 angle;
++    f32 stepX;
++    f32 stepZ;
++    f32 dx;
++    f32 dz;
++
++    D_8015C6A0_ovl4 = omCurrentObj->objId;
++    D_800E98E0[omCurrentObj->objId] = 0;
++    D_800DF150[omCurrentObj->objId] = func_8015427C_ovl4;
++    func_800A9864((void *) (uintptr_t) D_8015A760_ovl4[D_800D6B98 * 2], 0x1869F, 0x10);
++    func_800A9F98(D_8015A760_ovl4[(D_800D6B98 * 2) + 1], (f32) D_800E9FE0[D_8015C698_ovl4].as_s32);
++    if (D_800E9FE0[D_8015C698_ovl4].as_s32 == 0) {
++        animUpdateModelTreeAnimation(D_800DE350[omCurrentObj->objId]);
++    }
++    func_800AF408();
++    while (1) {
++        if (D_800E98E0[omCurrentObj->objId] == 0) {
++            ohSleep(1);
++            continue;
++        }
++        ((s32 *) D_800E9AA0)[D_8015C698_ovl4] = 1;
++        child = D_800DE350[omCurrentObj->objId]->data.dobj->firstChild;
++        saved = child->pos.v;
++        func_800A9F98(D_8015A760_ovl4[(D_800D6B98 * 2) + 1], (f32) D_800E9FE0[D_8015C698_ovl4].as_s32);
++        if (D_800E9FE0[D_8015C698_ovl4].as_s32 == 0) {
++            animUpdateModelTreeAnimation(D_800DE350[omCurrentObj->objId]);
++        }
++        child = D_800DE350[omCurrentObj->objId]->data.dobj->firstChild;
++        target = child->pos.v;
++        func_800AF408();
++        child->pos.v = saved;
++        dz = (target.z < saved.z) ? (saved.z - target.z) : (target.z - saved.z);
++        dx = (target.x < saved.x) ? (saved.x - target.x) : (target.x - saved.x);
++        angle = atan2f(dz, dx);
++        stepX = (saved.x < target.x) ? (cosf(angle) * 50.0f) : -(cosf(angle) * 50.0f);
++        stepZ = (saved.z < target.z) ? (sinf(angle) * 50.0f) : -(sinf(angle) * 50.0f);
++        while (1) {
++            child = D_800DE350[omCurrentObj->objId]->data.dobj->firstChild;
++            if (target.x != child->pos.v.x) {
++                child->pos.v.x += stepX;
++                if (stepX > 0.0f) {
++                    if (target.x < child->pos.v.x) {
++                        child->pos.v.x = target.x;
++                    }
++                } else if (child->pos.v.x < target.x) {
++                    child->pos.v.x = target.x;
++                }
++            }
++            if (target.z != child->pos.v.z) {
++                child->pos.v.z += stepZ;
++                if (stepZ > 0.0f) {
++                    if (target.z < child->pos.v.z) {
++                        child->pos.v.z = target.z;
++                    }
++                } else if (child->pos.v.z < target.z) {
++                    child->pos.v.z = target.z;
++                }
++            }
++            if ((child->pos.v.x == target.x) && (child->pos.v.z == target.z)) {
++                D_800E98E0[omCurrentObj->objId] = 0;
++                break;
++            }
++            ((s32 *) D_800E9AA0)[D_8015C698_ovl4] = 1;
++            ohSleep(1);
++        }
++    }
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl4/ovl4_2/func_80153C78_ovl4.s")
++#endif
+ 
+ extern s32 D_8015C694_ovl4;
+ 
+@@ -512,7 +820,98 @@ f32 func_801542B8_ovl4(s32 arg0, s32 arg1) {
+     return t;
+ }
+ 
++#ifdef PORT
++/* Functional port of the crystal-shard info panel proc (dispatch state 13).
++ * Ported from the asm; no sketch existed. D_8015A93C_ovl4/D_8015A940_ovl4
++ * are u32 track-descriptor ids in the PC data (safe on LP64). Role: shows
++ * the per-level shard/boss icon next to the hovered dot. Whenever the
++ * hovered selection (D_800E9FE0[D_8015C698_ovl4]) changes it shrinks the
++ * panel to zero scale at 0.4/frame (with sound 0x277, skipped the very
++ * first time), re-seeks the icon sprite to func_801542B8_ovl4's frame
++ * (shard bits, or 8/9 for the boss level), teleports the panel to the new
++ * dot via func_80152444_ovl4, then regrows it to scale 1.0; selection 0
++ * (planet exit) or 0x29A (nothing hovered) just shrinks it away. */
++void func_801543C8_ovl4(void) {
++    void func_80154880_ovl4(struct GObj *);
++    void func_800A9864(void *, s32, s32);
++    void func_800A9F98(s32, f32);
++    void func_800AECC0(f32);
++    void func_800AED20(f32);
++    extern u32 D_8015A93C_ovl4[];
++    extern u32 D_8015A940_ovl4[];
++    Vector pos;
++    s32 first;
++    s32 sel;
++    s32 cur;
++
++    first = 1;
++    D_800DF150[omCurrentObj->objId] = func_80154880_ovl4;
++    func_800AECC0(0.0f);
++    func_800AED20(0.0f);
++    func_800A9864((void *) (uintptr_t) D_8015A93C_ovl4[0], 0x1869F, 0x10);
++    sel = D_800E9FE0[D_8015C698_ovl4].as_s32;
++    D_800E98E0[omCurrentObj->objId] = sel + 1;
++    while (1) {
++        cur = D_800E98E0[omCurrentObj->objId];
++        if (cur != sel) {
++            D_800E98E0[omCurrentObj->objId] = sel;
++            cur = D_800E98E0[omCurrentObj->objId];
++            if ((cur == 0x29A) || (cur == 0)) {
++                while (gEntitiesScaleXArray[omCurrentObj->objId] > 0.0f) {
++                    gEntitiesScaleXArray[omCurrentObj->objId] += -0.4f;
++                    gEntitiesScaleYArray[omCurrentObj->objId] += -0.4f;
++                    gEntitiesScaleZArray[omCurrentObj->objId] += -0.4f;
++                    if (gEntitiesScaleXArray[omCurrentObj->objId] < 0.0f) {
++                        gEntitiesScaleXArray[omCurrentObj->objId] = 0.0f;
++                        gEntitiesScaleYArray[omCurrentObj->objId] = 0.0f;
++                        gEntitiesScaleZArray[omCurrentObj->objId] = 0.0f;
++                    }
++                    ohSleep(1);
++                }
++                cur = D_800E98E0[omCurrentObj->objId];
++            } else {
++                if (first != 0) {
++                    first = 0;
++                } else {
++                    play_sound(0x277);
++                    while (gEntitiesScaleXArray[omCurrentObj->objId] > 0.0f) {
++                        gEntitiesScaleXArray[omCurrentObj->objId] += -0.4f;
++                        gEntitiesScaleYArray[omCurrentObj->objId] += -0.4f;
++                        gEntitiesScaleZArray[omCurrentObj->objId] += -0.4f;
++                        if (gEntitiesScaleXArray[omCurrentObj->objId] < 0.0f) {
++                            gEntitiesScaleXArray[omCurrentObj->objId] = 0.0f;
++                            gEntitiesScaleYArray[omCurrentObj->objId] = 0.0f;
++                            gEntitiesScaleZArray[omCurrentObj->objId] = 0.0f;
++                        }
++                        ohSleep(1);
++                    }
++                }
++                func_800A9F98(D_8015A940_ovl4[1],
++                              func_801542B8_ovl4(D_800D6B98, D_800E98E0[omCurrentObj->objId] - 1));
++                func_80152444_ovl4(&pos, D_800D6B98, D_800E98E0[omCurrentObj->objId] - 1);
++                gEntitiesNextPosXArray[omCurrentObj->objId] = pos.x;
++                gEntitiesNextPosYArray[omCurrentObj->objId] = pos.y;
++                gEntitiesNextPosZArray[omCurrentObj->objId] = pos.z;
++                cur = D_800E98E0[omCurrentObj->objId];
++            }
++        }
++        if ((cur != 0x29A) && (cur != 0) && (gEntitiesScaleXArray[omCurrentObj->objId] < 1.0f)) {
++            gEntitiesScaleXArray[omCurrentObj->objId] += 0.4f;
++            gEntitiesScaleYArray[omCurrentObj->objId] += 0.4f;
++            gEntitiesScaleZArray[omCurrentObj->objId] += 0.4f;
++            if (gEntitiesScaleXArray[omCurrentObj->objId] > 1.0f) {
++                gEntitiesScaleXArray[omCurrentObj->objId] = 1.0f;
++                gEntitiesScaleYArray[omCurrentObj->objId] = 1.0f;
++                gEntitiesScaleZArray[omCurrentObj->objId] = 1.0f;
++            }
++        }
++        ohSleep(1);
++        sel = D_800E9FE0[D_8015C698_ovl4].as_s32;
++    }
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl4/ovl4_2/func_801543C8_ovl4.s")
++#endif
+ 
+ extern s32 D_8015C694_ovl4;
+ 
+@@ -520,7 +919,97 @@ void func_80154880_ovl4(struct GObj *arg0) {
+     gEntitiesAngleYArray[omCurrentObj->objId] = gEntitiesAngleYArray[D_8015C694_ovl4];
+ }
+ 
++#ifdef PORT
++/* Functional port of the level-number panel proc (dispatch state 14).
++ * Ported from the asm; twin of func_801543C8_ovl4 (state 13) with the same
++ * shrink/reseek/regrow skeleton, differing only in art (D_8015A948_ovl4 /
++ * D_8015A94C_ovl4, u32 track-descriptor ids in the PC data) and content:
++ * the numeral sprite frame is the raw selection index, or frame 0 when the
++ * hovered dot is the planet's final (boss) level per func_801532CC_ovl4. */
++void func_801548BC_ovl4(void) {
++    void func_80154DA0_ovl4(struct GObj *);
++    void func_800A9864(void *, s32, s32);
++    void func_800A9F98(s32, f32);
++    void func_800AECC0(f32);
++    void func_800AED20(f32);
++    extern u32 D_8015A948_ovl4[];
++    extern u32 D_8015A94C_ovl4[];
++    Vector pos;
++    s32 first;
++    s32 sel;
++    s32 cur;
++
++    first = 1;
++    D_800DF150[omCurrentObj->objId] = func_80154DA0_ovl4;
++    func_800AECC0(0.0f);
++    func_800AED20(0.0f);
++    func_800A9864((void *) (uintptr_t) D_8015A948_ovl4[0], 0x1869F, 0x10);
++    sel = D_800E9FE0[D_8015C698_ovl4].as_s32;
++    D_800E98E0[omCurrentObj->objId] = sel + 1;
++    while (1) {
++        cur = D_800E98E0[omCurrentObj->objId];
++        if (cur != sel) {
++            D_800E98E0[omCurrentObj->objId] = sel;
++            cur = D_800E98E0[omCurrentObj->objId];
++            if ((cur == 0x29A) || (cur == 0)) {
++                while (gEntitiesScaleXArray[omCurrentObj->objId] > 0.0f) {
++                    gEntitiesScaleXArray[omCurrentObj->objId] += -0.4f;
++                    gEntitiesScaleYArray[omCurrentObj->objId] += -0.4f;
++                    gEntitiesScaleZArray[omCurrentObj->objId] += -0.4f;
++                    if (gEntitiesScaleXArray[omCurrentObj->objId] < 0.0f) {
++                        gEntitiesScaleXArray[omCurrentObj->objId] = 0.0f;
++                        gEntitiesScaleYArray[omCurrentObj->objId] = 0.0f;
++                        gEntitiesScaleZArray[omCurrentObj->objId] = 0.0f;
++                    }
++                    ohSleep(1);
++                }
++                cur = D_800E98E0[omCurrentObj->objId];
++            } else {
++                if (first != 0) {
++                    first = 0;
++                } else {
++                    play_sound(0x277);
++                    while (gEntitiesScaleXArray[omCurrentObj->objId] > 0.0f) {
++                        gEntitiesScaleXArray[omCurrentObj->objId] += -0.4f;
++                        gEntitiesScaleYArray[omCurrentObj->objId] += -0.4f;
++                        gEntitiesScaleZArray[omCurrentObj->objId] += -0.4f;
++                        if (gEntitiesScaleXArray[omCurrentObj->objId] < 0.0f) {
++                            gEntitiesScaleXArray[omCurrentObj->objId] = 0.0f;
++                            gEntitiesScaleYArray[omCurrentObj->objId] = 0.0f;
++                            gEntitiesScaleZArray[omCurrentObj->objId] = 0.0f;
++                        }
++                        ohSleep(1);
++                    }
++                }
++                if (func_801532CC_ovl4(D_800D6B98, D_800E98E0[omCurrentObj->objId] - 1) != 0) {
++                    func_800A9F98(D_8015A94C_ovl4[1], 0.0f);
++                } else {
++                    func_800A9F98(D_8015A94C_ovl4[1], (f32) D_800E98E0[omCurrentObj->objId]);
++                }
++                func_80152444_ovl4(&pos, D_800D6B98, D_800E98E0[omCurrentObj->objId] - 1);
++                gEntitiesNextPosXArray[omCurrentObj->objId] = pos.x;
++                gEntitiesNextPosYArray[omCurrentObj->objId] = pos.y;
++                gEntitiesNextPosZArray[omCurrentObj->objId] = pos.z;
++                cur = D_800E98E0[omCurrentObj->objId];
++            }
++        }
++        if ((cur != 0x29A) && (cur != 0) && (gEntitiesScaleXArray[omCurrentObj->objId] < 1.0f)) {
++            gEntitiesScaleXArray[omCurrentObj->objId] += 0.4f;
++            gEntitiesScaleYArray[omCurrentObj->objId] += 0.4f;
++            gEntitiesScaleZArray[omCurrentObj->objId] += 0.4f;
++            if (gEntitiesScaleXArray[omCurrentObj->objId] > 1.0f) {
++                gEntitiesScaleXArray[omCurrentObj->objId] = 1.0f;
++                gEntitiesScaleYArray[omCurrentObj->objId] = 1.0f;
++                gEntitiesScaleZArray[omCurrentObj->objId] = 1.0f;
++            }
++        }
++        ohSleep(1);
++        sel = D_800E9FE0[D_8015C698_ovl4].as_s32;
++    }
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl4/ovl4_2/func_801548BC_ovl4.s")
++#endif
+ 
+ extern s32 D_8015C694_ovl4;
+ 
 --- a/src/ovl4/ovl4_3.c
 +++ b/src/ovl4/ovl4_3.c
-@@ -486,21 +486,48 @@ void func_80156160_ovl4(GObj *arg0) {
+@@ -185,6 +185,12 @@ void func_80155890_ovl4(GObj *);
+ void func_80155C00_ovl4(GObj *);
+ 
+ void func_801555F4_ovl4(GObj *arg0) {
++#ifdef PORT
++    {
++        extern void pc_fsel_debug(const char *, int, int, int);
++        pc_fsel_debug("cursor-init", omCurrentObj->objId, saveCurrentFileNum, D_8015C6DC_ovl4);
++    }
++#endif
+     D_8015C6D0_ovl4 = omCurrentObj->objId;
+     D_800E98E0[omCurrentObj->objId] = 0;
+     D_800E9AA0[omCurrentObj->objId].as_s32 = 0;
+@@ -237,6 +243,13 @@ void func_80155890_ovl4(GObj *arg0) {
+         D_800E9E20[omCurrentObj->objId]--;
+         return;
+     }
++#ifdef PORT
++    if (gPlayerControllers[0].buttonPressed != 0) {
++        extern void pc_fsel_debug(const char *, int, int, int);
++        pc_fsel_debug("confirm-press", gPlayerControllers[0].buttonPressed,
++                      saveCurrentFileNum, func_801555AC_ovl4(saveCurrentFileNum));
++    }
++#endif
+     if (gPlayerControllers[0].buttonPressed & 0x9000) {
+         if (func_801555AC_ovl4(saveCurrentFileNum) != 0) {
+             switch (D_8015C6D4_ovl4) {
+@@ -486,21 +499,48 @@ void func_80156160_ovl4(GObj *arg0) {
  }
  
  s32 func_801561DC_ovl4(void) {
@@ -5994,7 +6779,7 @@
      }
  }
  
-@@ -591,13 +618,24 @@ void func_8015665C_ovl4(GObj *arg0) {
+@@ -591,13 +631,24 @@ void func_8015665C_ovl4(GObj *arg0) {
      extern Unk3Words D_8015A9C8_ovl4;
      SPObj *sp4C[3];
      s32 i;
@@ -6019,7 +6804,7 @@
      }
      while (1) {
          for (i = 0; i != 3; i++) {
-@@ -629,7 +667,14 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
+@@ -629,7 +680,14 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
      s32 prev;
      s32 cur;
      s32 idx;
@@ -6034,7 +6819,7 @@
  
      prev = func_801555AC_ovl4(arg1) + 1;
      D_800DEF90[omCurrentObj->objId] = NULL;
-@@ -650,7 +695,11 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
+@@ -650,7 +708,11 @@ void func_801567BC_ovl4(GObj *arg0, s32 arg1) {
                      sp->xOffset = D_8015ABD4_ovl4[arg1].unk0;
                      sp->yOffset = D_8015ABD4_ovl4[arg1].unk4;
                  } else {
@@ -6046,7 +6831,7 @@
                  }
              }
              idx = arg1 == saveCurrentFileNum;
-@@ -684,7 +733,18 @@ extern s32 D_8015C6F0_ovl4;
+@@ -684,7 +746,18 @@ extern s32 D_8015C6F0_ovl4;
  u32 func_800A9AA8(s32, s32);
  
  void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
@@ -6065,7 +6850,7 @@
      u32 a;
      u32 b;
      u32 c;
-@@ -694,10 +754,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
+@@ -694,10 +767,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
      D_800DEF90[omCurrentObj->objId] = NULL;
      setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
      omLinkGObjDL(arg0, func_800AD1A0, 0x16, 0x80000000, 0x16);
@@ -6083,7 +6868,7 @@
      sp->xOffset = D_8015AB90_ovl4[arg1].unk0;
      sp->yOffset = D_8015AB90_ovl4[arg1].unk4;
      while (1) {
-@@ -712,10 +779,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
+@@ -712,10 +792,17 @@ void func_801569F0_ovl4(GObj *arg0, s32 arg1) {
              } else {
                  v = c;
              }
@@ -6101,7 +6886,7 @@
          } else {
              func_800AFBB4(0, omCurrentObj);
          }
-@@ -759,7 +833,14 @@ extern s32 D_8015C6EC_ovl4;
+@@ -759,7 +846,14 @@ extern s32 D_8015C6EC_ovl4;
  s32 func_80156BAC_ovl4(s32);
  
  void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
@@ -6116,7 +6901,7 @@
      SPObj *sp;
      Unk2Fs *p;
      s32 cur;
-@@ -770,7 +851,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
+@@ -770,7 +864,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
      D_800DEF90[omCurrentObj->objId] = NULL;
      setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
      omLinkGObjDL(arg0, func_800AD1A0, 0x12, 0x80000000, 0x12);
@@ -6128,7 +6913,7 @@
      p = &D_8015AF28_ovl4[arg1];
      sp->xOffset = p->unk0;
      sp->yOffset = p->unk4;
-@@ -782,7 +867,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
+@@ -782,7 +880,11 @@ void func_80156C4C_ovl4(GObj *arg0, s32 arg1) {
                  if (func_80156BAC_ovl4(arg1) != cur) {
                      cur = func_80156BAC_ovl4(arg1);
                      func_800ACBDC(arg0);
@@ -6140,7 +6925,7 @@
                      sp->xOffset = p->unk0;
                      sp->yOffset = p->unk4;
                  }
-@@ -807,18 +896,37 @@ typedef struct {
+@@ -807,18 +909,37 @@ typedef struct {
  extern Unk10Words D_8015AA08_ovl4;
  
  void func_80156EB0_ovl4(GObj *arg0, s32 arg1, f32 arg2, f32 arg3) {
@@ -6178,7 +6963,7 @@
      sp->xOffset = arg2;
      sp->yOffset = arg3;
  }
-@@ -931,8 +1039,17 @@ extern Unk2Ss D_8015B46C_ovl4[][3];
+@@ -931,8 +1052,17 @@ extern Unk2Ss D_8015B46C_ovl4[][3];
  s32 func_80157258_ovl4(s32, s32);
  
  void func_801572E4_ovl4(GObj *arg0, s32 arg1) {
@@ -6196,7 +6981,7 @@
      SPObj *sp;
      s32 i;
      s32 pad;
-@@ -947,10 +1064,18 @@ void func_801572E4_ovl4(GObj *arg0, s32 arg1) {
+@@ -947,10 +1077,18 @@ void func_801572E4_ovl4(GObj *arg0, s32 arg1) {
      sp->xOffset = D_8015B074_ovl4[arg1].unk0;
      sp->yOffset = D_8015B074_ovl4[arg1].unk4;
      for (i = 0; i < 6; i++) {
@@ -6215,7 +7000,7 @@
          dst2[i]->xOffset = D_8015B46C_ovl4[i][arg1].unk0;
          dst2[i]->yOffset = D_8015B46C_ovl4[i][arg1].unk4;
      }
-@@ -1029,10 +1154,20 @@ void func_800B1900(s32);
+@@ -1029,10 +1167,20 @@ void func_800B1900(s32);
  void func_800BB468(s32, s32);
  
  void func_80157840_ovl4(GObj *arg0, s32 arg1) {
@@ -6236,7 +7021,7 @@
      Unk2Ss *q;
      s32 i;
  
-@@ -1040,8 +1175,13 @@ void func_80157840_ovl4(GObj *arg0, s32 arg1) {
+@@ -1040,8 +1188,13 @@ void func_80157840_ovl4(GObj *arg0, s32 arg1) {
      setProcessMain(gEntityGObjProcessArray5[omCurrentObj->objId], procMainStub);
      omLinkGObjDL(arg0, func_800AD1A0, 0x12, 0x80000000, 0x12);
      q = &D_8015B6C4_ovl4[arg1];
