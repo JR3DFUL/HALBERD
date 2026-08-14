@@ -116,29 +116,45 @@ _VRAM_SYMS = None
 
 
 def vram_symbols():
-    """{n64_address: symbol} from the matching build, or {} if it is absent."""
+    """{n64_address: symbol} from the matching build, or its shipped map."""
     global _VRAM_SYMS
     if _VRAM_SYMS is not None:
         return _VRAM_SYMS
     _VRAM_SYMS = {}
     elf = 'build/kirby.us.elf'
-    if not os.path.exists(elf):
+    if os.path.exists(elf):
+        import subprocess
+        out = subprocess.run(['nm', elf], capture_output=True, text=True).stdout
+        for line in out.split('\n'):
+            p = line.split()
+            if len(p) != 3 or p[1] in 'AaUuNnWwVv':
+                continue
+            name = p[2]
+            # `func_X.NON_MATCHING` and friends are build aliases, not names
+            # the port can link against; the plain name is at the same address.
+            if '.' in name:
+                continue
+            addr = int(p[0], 16)
+            # Keep the first name seen, so the result does not depend on nm's
+            # ordering between two symbols that genuinely share an address.
+            _VRAM_SYMS.setdefault(addr, name)
         return _VRAM_SYMS
-    import subprocess
-    out = subprocess.run(['nm', elf], capture_output=True, text=True).stdout
-    for line in out.split('\n'):
-        p = line.split()
-        if len(p) != 3 or p[1] in 'AaUuNnWwVv':
-            continue
-        name = p[2]
-        # `func_X.NON_MATCHING` and friends are build aliases, not names the
-        # port can link against; the plain name is at the same address.
-        if '.' in name:
-            continue
-        addr = int(p[0], 16)
-        # Keep the first name seen, so the result does not depend on nm's
-        # ordering between two symbols that genuinely share an address.
-        _VRAM_SYMS.setdefault(addr, name)
+    # No matched N64 build (user machines have no MIPS toolchain): use the
+    # symbol map committed alongside this script, same content as nm above.
+    txt = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vram_syms.txt')
+    if not os.path.exists(txt):
+        # Leaving VRAM addresses unresolved does not fail the build; it fails
+        # at RUNTIME as a jump to an N64 address (SIGSEGV at 0x80xxxxxx).
+        # Refuse to generate silently-broken data.
+        sys.stderr.write('gen_data.py: neither %s nor %s exists; '
+                         'pointer tables cannot be resolved\n' % (elf, txt))
+        sys.exit(1)
+    with open(txt) as f:
+        for line in f:
+            p = line.split()
+            if len(p) != 2 or p[0].startswith('#'):
+                continue
+            _VRAM_SYMS.setdefault(int(p[0], 16), p[1])
     return _VRAM_SYMS
 
 
