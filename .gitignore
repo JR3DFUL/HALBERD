@@ -1,3 +1,5 @@
 port/o2r/
 baserom*.z64
 build/
+third_party/
+out/
