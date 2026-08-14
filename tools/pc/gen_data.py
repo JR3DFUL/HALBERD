@@ -259,6 +259,80 @@ FORCE_WIDEN = {
     'D_801C5130_ovl7',
 }
 
+# Light structs the RSP consumes as a raw BYTE stream. gSPLight/gSPSetLights1
+# moves 8/16 bytes of Light/Ambient straight into light state, and the fork's
+# GfxSpMovememF3dex2 memcpys them the same way: col[0] is the FIRST BYTE in
+# memory. The normal scalar-u32 emission stores each N64 word as a native
+# little-endian value, which puts the trailing 0x00 pad byte where col[0]
+# (red) should be -- every lit model rendered with red=0 and its green/blue
+# shifted (the dark-teal title-screen characters). CPU readers of these
+# blocks are byte readers too (func_800A54FC, func_800A7BF4, the u32 copies
+# in ovl2_2.c only move memory), so the only correct host image is the N64's
+# byte image. Emitted as .byte asm blobs (see FORCE_BYTES_RUNS for why not
+# plain u8[]). Grown per finding: any other data block handed to
+# gSPLight / gSPSetLights* belongs here.
+FORCE_BYTES = {
+    'D_800BE548',       # scene ambient (Lights1 head): B4 B4 B4
+    'D_800BE550',       # scene diffuse light: FF FF FF, dir 32 3C 28
+    'D_801C27D0_ovl7',  # enelib alt ambient: 64 50 96
+    'D_801C27D8_ovl7',  # enelib alt diffuse: FF FF 50, dir EC C4 14
+}
+
+# FORCE_BYTES symbols that game code addresses through ONE Lights1 struct
+# (gsSPSetLights1(D_800BE548) reads the diffuse at &D_800BE548 + 8, i.e.
+# D_800BE550): each run is emitted as a single asm blob in the file that
+# holds its head, with the later members as interior labels, because
+# separate C objects -- even in the same TU -- give the linker license to
+# leave a gap between them (and D_800BE548/D_800BE550 don't even share a
+# TU). The tail members' own blocks emit nothing.
+FORCE_BYTES_RUNS = [
+    ('D_800BE548', 'D_800BE550'),
+    ('D_801C27D0_ovl7', 'D_801C27D8_ovl7'),
+]
+_FB_TAILS = {s for run in FORCE_BYTES_RUNS for s in run[1:]}
+_FB_DATA = {}   # sym -> (section, [byte, ...]); pre-pass fills it
+
+
+def _fb_bytes(entries):
+    out = []
+    for _k, v in entries:
+        w = int(v, 0) & 0xFFFFFFFF
+        out += list(w.to_bytes(4, 'big'))
+    return out
+
+
+def _fb_asm(section, parts):
+    """One asm blob defining [(sym, bytes), ...] back to back."""
+    sect = '.rodata' if section == '.rodata' else '.data'
+    lines = [f'   .pushsection {sect}', '   .balign 8']
+    for sym, data in parts:
+        lines.append(f'   .globl {sym}')
+        lines.append(f'{sym}:')
+        for i in range(0, len(data), 8):
+            lines.append('   .byte ' + ', '.join(f'0x{b:02X}'
+                                                 for b in data[i:i + 8]))
+    lines.append('   .popsection')
+    return ('__asm__(' + '\n        '.join(f'"{l}\\n"' for l in lines)
+            + ');\n')
+
+
+def render_bytes(sym, section, entries):
+    """A FORCE_BYTES block: the N64 byte image, one u8 per ROM byte."""
+    const = 'const ' if section == '.rodata' else ''
+    if sym in _FB_TAILS:
+        # Emitted inside its run head's blob; only the declaration here.
+        return f'extern {const}u8 {sym}[];\n', ''
+    for run in FORCE_BYTES_RUNS:
+        if run[0] == sym:
+            parts = [(s, _FB_DATA[s][1]) for s in run if s in _FB_DATA]
+            if len(parts) == len(run):
+                fwd = ''.join(f'extern {const}u8 {s}[];\n' for s, _ in parts)
+                return fwd, _fb_asm(section, parts)
+            break   # partner listing missing; fall back to standalone
+    return (f'extern {const}u8 {sym}[];\n',
+            _fb_asm(section, [(sym, _fb_bytes(entries))]))
+
+
 # The one mixed pointer-bearing block that really IS a string table: 632
 # entries of sound-name text next to pointer words. Widening would fragment
 # every string across 8-byte cells; it keeps the packed-struct emission.
@@ -506,6 +580,9 @@ def render(sym, section, entries, refs):
 
     if sym in FORCE_WIDEN and kinds == {'word'}:
         return render_widened(sym, section, entries)
+
+    if sym in FORCE_BYTES and kinds == {'word'}:
+        return render_bytes(sym, section, entries)
 
     # .bss -- plain zeroed storage, and it must NOT be const.
     #
@@ -765,6 +842,10 @@ def main():
             if sym not in defined and sym not in SUPPRESS_BSS \
                     and is_widened_block(sym, entries):
                 _WIDENED_REGISTRY.add(sym)
+            if sym in FORCE_BYTES and sym not in defined:
+                ent = [e for e in entries if e[0] != 'incbin']
+                if ent and {k for k, _ in ent} == {'word'}:
+                    _FB_DATA[sym] = (_sec, _fb_bytes(ent))
 
     nfiles = nsyms = skipped = nmerged = 0
     for path in sorted(glob.glob('asm/data/**/*.s', recursive=True)):
