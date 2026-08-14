@@ -16,8 +16,8 @@ architecture this project follows.
 
 Runs natively on Linux (and Windows via WSL2); further platforms planned.
 
-**Early development**: the port currently plays from the title screen through
-the menus into level loading. See *Current state* below.
+**Early development**: the port currently plays from the title screen
+through the menus and into running levels. See *Current state* below.
 
 ## About
 
@@ -60,12 +60,13 @@ If your dump does not match the hash, it will not build.
 
 Boots, renders the intro movie and title screen, and takes input through
 the full menu flow: file select (saves persist to `kirby64.eep`), the
-opening cutscene, the world map and the planet level-select. Level loading
-runs the ported stage pipeline (config, collision, tracks, entities); the
-player-spawn chain and in-level rendering are in active development, as is
-game audio. Some sprites draw untextured and a number of game-side
-functions carry behavioral (non-matching) PORT implementations pending
-genuine matches -- see commit history for the running list.
+opening cutscene, the world map and the planet level-select. Levels load
+and run -- stage pipeline (config, collision, tracks, entities), enemy
+spawning and the scene loop are live. The player-spawn chain (controllable
+Kirby) and in-level rendering are in active development, as is game audio.
+Some sprites draw untextured and a number of game-side functions carry
+behavioral (non-matching) PORT implementations pending genuine matches --
+see commit history for the running list.
 
 ## Relationship to the decomp
 
@@ -76,15 +77,63 @@ everything that is *only* about the PC build. Next structural step (per
 BattleShip): decomp as a git submodule at `decomp/`, CMake superbuild,
 libultraship + torch submodules with the patch applied on the fork.
 
-## Building — one command
+## Install and build
 
-    ./build.sh /path/to/baserom.us.z64
+Works on Linux, or on Windows through WSL2 (Ubuntu).
 
-Linux or WSL2. Fetches and builds every dependency (SDL2, the patched
+**Windows, one-time setup** -- in a regular `cmd` window:
+
+    wsl --install -d Ubuntu
+
+Reboot if asked, open "Ubuntu" from the Start menu, and create a username
+and password when prompted. That password is what `sudo` asks for during
+the build.
+
+**Everyone** -- get the repo (clone it, or use GitHub Desktop), put your
+ROM in the repo folder named `baserom.us.z64`, then from a WSL/Linux
+terminal inside the repo folder:
+
+    cd /mnt/c/path/to/HALBERD       # your repo folder; drive C:\ is /mnt/c in WSL
+    ./build.sh baserom.us.z64
+
+The script installs the compiler packages itself (asks for your password
+once), then fetches and builds every dependency (SDL2, the patched
 libultraship fork, the decomp game code, Torch), extracts assets from your
-ROM, and produces `out/halberd` with a printed run command. Idempotent:
-rerun after any failure and it resumes. Beta -- mirrors the development
-container's exact chain.
+ROM, and finishes by writing the launcher. First build takes 10-30
+minutes; it is resumable -- if anything fails, rerun the same line and it
+continues where it stopped.
+
+## Run
+
+    ./out/run.sh
+
+Keyboard mapping (N64 pad):
+
+| Key | N64 |
+|-----|-----|
+| Space | START |
+| X / C / Z | A / B / Z |
+| W A S D | control stick |
+| T G F H | D-pad |
+| arrow keys | C buttons |
+| E / R | L / R |
+
+Space at the title, X through the file menu (X twice on an empty slot:
+first creates the save, second starts it), T/G/F/H + X on the maps.
+
+On WSL the window appears on the Windows desktop automatically. If the
+game is audibly/visibly running in the terminal but no window shows,
+Windows' WSL display layer is wedged -- `wsl --shutdown` from cmd and
+reopen, or reboot once.
+
+## Updating
+
+    git pull
+    ./build.sh baserom.us.z64
+
+(or Fetch/Pull in GitHub Desktop, then the build line). The build reuses
+everything already compiled and re-stages only what changed. `third_party/`
+and `out/` are yours -- git never touches them.
 
 ## Building (manual, transitional)
 
