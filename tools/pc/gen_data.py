@@ -446,6 +446,15 @@ SUPPRESS_BSS = {
     # (one s32 array split at the interior label; writers use the C6AC name,
     # readers index from C6A8, and split objects broke the aliasing).
     'D_8015C6A8_ovl4', 'D_8015C6AC_ovl4',
+    # The save buffers and every named address inside them, defined whole in
+    # src/pc/pc_save_bss.c. Splintered-and-doubled emission made writers
+    # (struct EEPROM at native offsets) and readers (splinter names) see
+    # different memory; the mixed half-real save records that bricked the
+    # world map came from exactly this.
+    'gSaveBuffer1', 'gSaveBuffer2',
+    'D_800EC9FC', 'D_800ECA00', 'D_800ECA04', 'D_800ECA08', 'D_800ECA14',
+    'D_800ECA5C', 'D_800ECA60', 'D_800ECAB8', 'D_800ECB00', 'D_800ECB10',
+    'D_800ECBA8', 'D_800ECBAC', 'D_800ECBC0',
 }
 
 
