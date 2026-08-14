@@ -17,7 +17,7 @@
 #              The default is PC_LUS=1: libultraship is linked in and the
 #              display list reaches Fast3D.
 set -e
-cd /home/user/kirby64_decomp
+cd "$(dirname "$0")/../.."
 
 OUT=build/pc/kirby64
 # -no-pie is load-bearing, not a preference. See the low-memory note in

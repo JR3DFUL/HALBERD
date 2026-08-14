@@ -7,7 +7,7 @@
 # for the reason spelled out at the top of the file (both define u8, size_t,
 # OSContPad and Gfx, and they cannot meet).
 set -e
-cd /home/user/kirby64_decomp
+cd "$(dirname "$0")/../.."
 
 LUS_BUILD=${LUS_BUILD:-/workspace/lus-build}
 

@@ -15,7 +15,7 @@
 # Game assets are separate and go in port/o2r/ -- see the archive_paths() note
 # in src/pc/pc_backend_lus.cpp for why they must NOT share a directory.
 set -e
-cd /home/user/kirby64_decomp
+cd "$(dirname "$0")/../.."
 
 LUS_ROOT=${LUS_ROOT:-/workspace/jr3dful/libultraship}
 
