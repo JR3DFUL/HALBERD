@@ -1,5 +1,17 @@
+diff --git a/include/fast/interpreter.h b/include/fast/interpreter.h
+index 4e81ca7..4c5312d 100644
+--- a/include/fast/interpreter.h
++++ b/include/fast/interpreter.h
+@@ -564,6 +564,7 @@ class Interpreter {
+     void Gfxs2dexBgCopy(F3DuObjBg* bg);
+     void Gfxs2dexBg1cyc(F3DuObjBg* bg);
+     void Gfxs2dexRecyCopy(F3DuObjSprite* spr);
++    void Gfxs2dexRectR(F3DuObjSprite* spr, int16_t mtxX, int16_t mtxY, uint16_t baseScaleX, uint16_t baseScaleY);
+ 
+     void AdjustWidthHeightForScale(uint32_t& width, uint32_t& height, uint32_t nativeWidth,
+                                    uint32_t nativeHeight) const;
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..3045480 100644
+index 6aad126..44cc176 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
 @@ -1463,6 +1463,32 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
@@ -403,7 +415,7 @@ index 6aad126..3045480 100644
  
      uint32_t texFlags = 0;
      RawTexMetadata rawTexMetadata = {};
-@@ -4828,8 +5067,27 @@ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
+@@ -4828,11 +5067,69 @@ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
      int testX = (realX + (realW / realSW));
      int testY = (realY + (realH / realSH));
  
@@ -432,7 +444,49 @@ index 6aad126..3045480 100644
                            (float)(1 << 10) * realSW, (float)(1 << 10) * realSH, false);
  }
  
-@@ -5102,6 +5360,16 @@ bool gfx_movemem_handler_f3dex2(F3DGfx** cmd0) {
++/* PORT (Kirby 64): G_OBJ_RECTANGLE_R -- the uObjSprite draw that goes through
++ * the current 2D object matrix. Same texture staging as Gfxs2dexRecyCopy;
++ * the matrix contributes a screen-space translate (s10.2) and a base scale
++ * (u5.10, 1024 = 1.0) on top of the sprite's own scale. HAL never uses the
++ * rotation terms for these, so they are intentionally not applied. */
++void Interpreter::Gfxs2dexRectR(F3DuObjSprite* spr, int16_t mtxX, int16_t mtxY, uint16_t baseScaleX,
++                                uint16_t baseScaleY) {
++    int realW = spr->s.imageW >> 5;
++    int realH = spr->s.imageH >> 5;
++    if (realW <= 0 || realH <= 0) {
++        return;
++    }
++    float bsx = baseScaleX / 1024.0f;
++    float bsy = baseScaleY / 1024.0f;
++    if (bsx <= 0.0f) {
++        bsx = 1.0f;
++    }
++    if (bsy <= 0.0f) {
++        bsy = 1.0f;
++    }
++    float sclX = (spr->s.scaleW / 1024.0f) * bsx;
++    float sclY = (spr->s.scaleH / 1024.0f) * bsy;
++    if (sclX <= 0.0f || sclY <= 0.0f) {
++        return;
++    }
++    float x0 = (mtxX + spr->s.objX) / 4.0f;
++    float y0 = (mtxY + spr->s.objY) / 4.0f;
++    float x1 = x0 + realW / sclX;
++    float y1 = y0 + realH / sclY;
++
++    int tsW = realW > 0 ? realW : 1;
++    int tsH = realH > 0 ? realH : 1;
++    GfxDpSetTile(spr->s.imageFmt, spr->s.imageSiz, spr->s.imageStride, spr->s.imageAdrs, G_TX_RENDERTILE,
++                 spr->s.imagePal, G_TX_CLAMP, G_TX_NOMASK, G_TX_NOLOD, G_TX_CLAMP, G_TX_NOMASK, G_TX_NOLOD);
++    GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, (tsW - 1) << G_TEXTURE_IMAGE_FRAC, (tsH - 1) << G_TEXTURE_IMAGE_FRAC);
++    GfxDpTextureRectangle((int32_t)(x0 * 4.0f), (int32_t)(y0 * 4.0f), (int32_t)(x1 * 4.0f), (int32_t)(y1 * 4.0f),
++                          G_TX_RENDERTILE, 0, 0, 1024.0f * sclX, 1024.0f * sclY, false);
++}
++
+ void* Interpreter::SegAddr(uintptr_t w1) {
+     if (w1 <= UINT32_MAX) {
+         void* relocPtr = portRelocTryResolvePointer((uint32_t)w1);
+@@ -5102,6 +5399,16 @@ bool gfx_movemem_handler_f3dex2(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *cmd0;
  
@@ -449,7 +503,7 @@ index 6aad126..3045480 100644
      gfx->GfxSpMovememF3dex2(C0(0, 8), C0(8, 8) * 8, gfx->SegAddr(cmd->words.w1));
  
      return false;
-@@ -6292,6 +6560,41 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
+@@ -6292,6 +6599,88 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
      return false;
  }
  
@@ -488,10 +542,57 @@ index 6aad126..3045480 100644
 +    return false;
 +}
 +
++/* PORT (Kirby 64): S2DEX 2D object matrix + G_OBJ_RECTANGLE_R.
++ * HAL's menus and cutscene overlays position scaled sprites with
++ * gSPObjMatrix/gSPObjSubMatrix (G_OBJ_MOVEMEM idx 23 = uObjMtx, idx 7 =
++ * uObjSubMtx) followed by G_OBJ_RECTANGLE_R, which draws the sprite through
++ * the current matrix. Both were stubbed, so every such sprite was simply
++ * invisible. This keeps the translate + base-scale terms (the ones HAL uses;
++ * A/B/C/D rotation terms are ignored) in a file-static slot -- single-
++ * threaded interpreter, same pattern as sPendingSelectDlAddr above. */
++static struct {
++    int16_t X, Y;                    /* s10.2 */
++    uint16_t BaseScaleX, BaseScaleY; /* u5.10 */
++} sS2DObjMtx = { 0, 0, 1 << 10, 1 << 10 };
++
++bool gfx_obj_movemem_handler_s2dex(F3DGfx** cmd0) {
++    F3DGfx* cmd = *(cmd0);
++    uint32_t idx = cmd->words.w0 & 0xFFu;
++    if (idx == 23) { /* gSPObjMatrix: uObjMtx, translate+scale in the tail */
++        F3DuObjMtx_t* m = (F3DuObjMtx_t*)cmd->words.w1;
++        if (m != nullptr) {
++            sS2DObjMtx.X = m->X;
++            sS2DObjMtx.Y = m->Y;
++            sS2DObjMtx.BaseScaleX = m->BaseScaleX;
++            sS2DObjMtx.BaseScaleY = m->BaseScaleY;
++        }
++    } else if (idx == 7) { /* gSPObjSubMatrix: uObjSubMtx */
++        F3DuObjSubMtx_t* m = (F3DuObjSubMtx_t*)cmd->words.w1;
++        if (m != nullptr) {
++            sS2DObjMtx.X = m->X;
++            sS2DObjMtx.Y = m->Y;
++            sS2DObjMtx.BaseScaleX = m->BaseScaleX;
++            sS2DObjMtx.BaseScaleY = m->BaseScaleY;
++        }
++    }
++    return false;
++}
++
++bool gfx_obj_rectangle_r_handler_s2dex(F3DGfx** cmd0) {
++    Interpreter* gfx = mInstance.lock().get();
++    F3DGfx* cmd = *(cmd0);
++    F3DuObjSprite* spr = (F3DuObjSprite*)cmd->words.w1;
++    if (spr == nullptr) {
++        return false;
++    }
++    gfx->Gfxs2dexRectR(spr, sS2DObjMtx.X, sS2DObjMtx.Y, sS2DObjMtx.BaseScaleX, sS2DObjMtx.BaseScaleY);
++    return false;
++}
++
  bool gfx_bg_copy_handler_s2dex(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6320,6 +6623,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -6320,6 +6709,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -554,7 +655,7 @@ index 6aad126..3045480 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6462,6 +6821,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
+@@ -6462,6 +6907,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
      // The RSP was already running the right ucode from task setup; on PC we handle them here.
      { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
@@ -565,9 +666,13 @@ index 6aad126..3045480 100644
  };
  
  static constexpr UcodeHandler f3dexHandlers = {
-@@ -6517,8 +6880,20 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6515,10 +6964,23 @@ static constexpr UcodeHandler s2dexHandlers = {
+     { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
+     { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
-     { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
+-    { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_stubbed_command_handler } },
++    { F3DEX2_G_OBJ_RECTANGLE_R, { "G_OBJ_RECTANGLE_R", gfx_obj_rectangle_r_handler_s2dex } },
++    { F3DEX2_G_OBJ_MOVEMEM, { "G_OBJ_MOVEMEM", gfx_obj_movemem_handler_s2dex } },
      { F3DEX2_G_OBJ_RECTANGLE, { "G_OBJ_RECTANGLE", gfx_obj_rectangle_handler_s2dex } },
 +    { F3DEX2_G_OBJ_LOADTXTR, { "G_OBJ_LOADTXTR", gfx_obj_loadtxtr_handler_s2dex } },
      { F3DEX2_G_DL, { "G_DL", gfx_dl_handler_common } },
@@ -586,7 +691,7 @@ index 6aad126..3045480 100644
  };
  
  static constexpr std::array ucode_handlers = {
-@@ -6846,6 +7221,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
+@@ -6846,6 +7308,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
      if (mForceRenderToFb) {
          return false;
      }
@@ -610,7 +715,7 @@ index 6aad126..3045480 100644
      if (mCurDimensions.width == mGameWindowViewport.width && mCurDimensions.height == mGameWindowViewport.height) {
          return true;
      }
-@@ -7003,7 +7395,28 @@ void Interpreter::RunGuiOnly() {
+@@ -7003,7 +7482,28 @@ void Interpreter::RunGuiOnly() {
      }
  }
  
