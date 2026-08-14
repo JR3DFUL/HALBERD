@@ -1,0 +1,6 @@
+# Keep Unix line endings on files the Linux build executes
+*.sh text eol=lf
+*.py text eol=lf
+Makefile* text eol=lf
+*.mk text eol=lf
+*.patch -text
