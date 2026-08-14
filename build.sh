@@ -58,6 +58,9 @@ msg "4/7 decomp sources (game code)"
 if [ ! -d "$WORK/kirby64_decomp" ]; then
     git clone --depth 1 -b decomp-clean \
         https://github.com/JR3DFUL/kirby64_decomp "$WORK/kirby64_decomp"
+    # libreultra is a submodule and the PC build compiles against its headers
+    # (include/ultra64.h pulls PR/os_cont.h from libreultra/include/2.0I).
+    git -C "$WORK/kirby64_decomp" submodule update --init --depth 1 libreultra
 fi
 # Overlay the port files onto the decomp checkout (they are gitignored there).
 cp -r "$ROOT/src/pc"    "$WORK/kirby64_decomp/src/"
