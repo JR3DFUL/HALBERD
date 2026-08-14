@@ -16,8 +16,8 @@ architecture this project follows.
 
 Runs natively on Linux (and Windows via WSL2); further platforms planned.
 
-**Early development**: the port currently boots through the intro screens and
-into the menu scene. See *Current state* below.
+**Early development**: the port currently plays from the title screen through
+the menus into level loading. See *Current state* below.
 
 ## About
 
@@ -58,8 +58,12 @@ If your dump does not match the hash, it will not build.
 
 ## Current state
 
-Boots and renders the intro screens, then loads the menu scene; menu
-rendering and game audio are in active development. A handful of game-side
+Boots, renders the intro movie and title screen, and takes input through
+the full menu flow: file select (saves persist to `kirby64.eep`), the
+opening cutscene, the world map and the planet level-select. Level loading
+runs the ported stage pipeline (config, collision, tracks, entities); the
+player-spawn chain and in-level rendering are in active development, as is
+game audio. Some sprites draw untextured and a number of game-side
 functions carry behavioral (non-matching) PORT implementations pending
 genuine matches -- see commit history for the running list.
 
