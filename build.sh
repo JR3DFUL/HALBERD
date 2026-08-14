@@ -68,8 +68,12 @@ mkdir -p "$WORK/kirby64_decomp/tools"
 cp -r "$ROOT/tools/pc"  "$WORK/kirby64_decomp/tools/"
 cp    "$ROOT/Makefile.pc" "$WORK/kirby64_decomp/"
 cp -r "$ROOT/port"      "$WORK/kirby64_decomp/"
-git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" 2>/dev/null || \
-    git -C "$WORK/kirby64_decomp" apply --reverse --check "$ROOT/patches/decomp-port.patch" 2>/dev/null || \
+# Reset the staged checkout's tracked files, then apply the current patch.
+# The old apply-or-reverse-check dance broke the moment the patch was UPDATED:
+# a tree carrying the previous patch can neither apply the new one nor
+# reverse-check it. Resetting first makes any patch version apply cleanly.
+git -C "$WORK/kirby64_decomp" checkout -- . 2>/dev/null || true
+git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" || \
     { echo "decomp-port.patch failed to apply"; exit 1; }
 cp "$ROM" "$WORK/kirby64_decomp/baserom.us.z64"
 cp "$ROM" "$OUT/baserom.us.z64"
