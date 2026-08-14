@@ -93,7 +93,12 @@ the build.
 ROM in the repo folder named `baserom.us.z64`, then from a WSL/Linux
 terminal inside the repo folder:
 
-    cd /mnt/c/path/to/HALBERD       # your repo folder; drive C:\ is /mnt/c in WSL
+Go to your repo folder (drive C:\ is `/mnt/c` in WSL, D:\ is `/mnt/d`, ...):
+
+    cd /mnt/c/path/to/HALBERD
+
+then build:
+
     ./build.sh baserom.us.z64
 
 The script installs the compiler packages itself (asks for your password
@@ -128,21 +133,13 @@ reopen, or reboot once.
 
 ## Updating
 
+Pull the latest (Fetch/Pull in GitHub Desktop, or):
+
     git pull
+
+then rebuild:
+
     ./build.sh baserom.us.z64
 
-(or Fetch/Pull in GitHub Desktop, then the build line). The build reuses
-everything already compiled and re-stages only what changed. `third_party/`
-and `out/` are yours -- git never touches them.
-
-## Building (manual, transitional)
-
-The build currently expects to run from a `kirby64_decomp` checkout with this
-repo's files overlaid at the same relative paths (that is how they were
-developed this session). After the submodule restructure this section will be
-replaced by the standard `cmake` flow.
-
-1. `make -f Makefile.pc` — compiles game + host objects, generates stubs/data
-2. `tools/pc/link.sh` — links `build/pc/kirby64` against the patched LUS fork
-3. `torch o2r baserom.us.z64 -s port/yamls -d build/pc` then
-   `tools/pc/stage_assets.sh` — builds and stages `kirby64.o2r` + shaders
+The build reuses everything already compiled and re-stages only what
+changed. `third_party/` and `out/` are yours -- git never touches them.
