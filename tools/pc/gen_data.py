@@ -170,6 +170,57 @@ def resolve_scalar_pointer(val):
     return name
 
 
+# Widened-block registry, filled by main() before rendering starts. Interior
+# pointer resolution needs it: an N64 byte offset into a widened block is a
+# HOST offset of twice that (each 4-byte word became an 8-byte cell).
+_WIDENED_REGISTRY = set()
+_VRAM_SORTED = None
+
+
+def resolve_vram_interior(val, refs):
+    """C expression for a raw VRAM word that points INSIDE a data block.
+
+    splat leaves a cross-overlay reference as a bare number when the target
+    segment is not the one being disassembled, and the enemy kind tables are
+    full of them (ovl7 tables pointing at ovl8/ovl10 descriptors). An exact
+    symbol hit is `&name`; an address strictly inside a D_* data block becomes
+    base + offset, with the offset doubled when the target block is widened.
+    Only pointer-bearing contexts call this -- in a pure scalar table a number
+    that looks like an address IS a number, and stays one.
+    """
+    global _VRAM_SORTED
+    try:
+        addr = int(val, 0)
+    except ValueError:
+        return None
+    if addr < 0x80000000 or addr > 0x807FFFFF:
+        return None
+    syms = vram_symbols()
+    name = syms.get(addr)
+    if name:
+        refs.add(name)
+        return f'&{name}'
+    if _VRAM_SORTED is None:
+        _VRAM_SORTED = sorted(syms)
+    import bisect
+    i = bisect.bisect_right(_VRAM_SORTED, addr) - 1
+    if i < 0:
+        return None
+    base_addr = _VRAM_SORTED[i]
+    base = syms[base_addr]
+    off = addr - base_addr
+    # Data blocks only: an address inside a function is not a data pointer,
+    # and pretending otherwise would silently corrupt a genuine constant.
+    if not base.startswith('D_') or off >= 0x8000:
+        return None
+    if off % 4:
+        return None
+    if base in _WIDENED_REGISTRY:
+        off *= 2
+    refs.add(base)
+    return f'(void *)((u8 *)&{base} + {off})'
+
+
 # Tables that game code reads through a 4-byte-per-field overlay struct
 # (struct Ovl1CameraSetup, src/ovl1/ovl1_2.c). The normal pointer-array
 # emission makes every slot 8 bytes, so the overlay shears: the entry's
@@ -201,7 +252,173 @@ FORCE_WIDEN = {
     'D_8015B780_ovl4', 'D_8015BB48_ovl4',   # world map, via D_8015C360
     'D_80186960_ovl5',                      # ovl5_4 scene camera
     'D_8018A530_ovl5',                      # ovl5_13 scene camera
+    # Enemy descriptor read through struct Sub800E1B50_Unk88 (whose PORT
+    # overlay assumes 8-byte cells) but emitted as scalar u32[] because none
+    # of its words happen to be relocations. Every sibling descriptor is a
+    # pointer block or a mixed block and widens on its own.
+    'D_801C5130_ovl7',
 }
+
+# The one mixed pointer-bearing block that really IS a string table: 632
+# entries of sound-name text next to pointer words. Widening would fragment
+# every string across 8-byte cells; it keeps the packed-struct emission.
+# All other mixed pointer-bearing blocks are enemy descriptors whose leading
+# float parsed as a 1-2 char "string" (0x3F/0x40 bytes read as '?','@'), and
+# those MUST widen -- see render_mixed_widened.
+MIXED_KEEP_PACKED = {'sSoundNames'}
+
+
+def is_mixed_ref_block(sym, entries):
+    """A block mixing .asciz/.short/etc with at least one pointer .word."""
+    entries = [e for e in entries if e[0] != 'incbin']
+    if not entries or sym in MIXED_KEEP_PACKED:
+        return False
+    kinds = {k for k, _ in entries}
+    return (len(kinds) > 1
+            and any(_is_ref(v) for k, v in entries if k == 'word'))
+
+
+def is_widened_block(sym, entries):
+    """Does this block emit as 8-byte cells? (gen_defsyms scales by this.)"""
+    entries = [e for e in entries if e[0] != 'incbin']
+    if not entries:
+        return False
+    kinds = {k for k, _ in entries}
+    if sym in FORCE_WIDEN and kinds == {'word'}:
+        return True
+    return is_pointer_block(entries) or is_mixed_ref_block(sym, entries)
+
+
+def _asciz_bytes(lit):
+    """Raw bytes of one .asciz literal, terminator included."""
+    s = lit.strip()
+    body = s[1:-1] if len(s) >= 2 and s[0] == '"' and s[-1] == '"' else s
+    out, i = bytearray(), 0
+    esc = {'n': 10, 't': 9, 'r': 13, '0': 0, '\\': 92, '"': 34,
+           'f': 12, 'b': 8, 'v': 11, 'a': 7}
+    while i < len(body):
+        c = body[i]
+        if c != '\\':
+            out.append(ord(c) & 0xFF)
+            i += 1
+            continue
+        i += 1
+        e = body[i]
+        if e in 'xX':
+            j = i + 1
+            while j < len(body) and body[j] in '0123456789abcdefABCDEF':
+                j += 1
+            out.append(int(body[i + 1:j], 16) & 0xFF)
+            i = j
+        elif e.isdigit():
+            j = i
+            while j < len(body) and body[j].isdigit() and j < i + 3:
+                j += 1
+            out.append(int(body[i:j], 8) & 0xFF)
+            i = j
+        else:
+            out.append(esc.get(e, ord(e)))
+            i += 1
+    out.append(0)
+    return bytes(out)
+
+
+def _ref_word_expr(v, refs):
+    """C expression for one relocated .word, host-offset-scaled."""
+    if re.fullmatch(r'\w+', v):
+        refs.add(v)
+        return f'&{v}'
+    m = re.match(r'(\w+)\s*([+-])\s*(\S+)', v)
+    if m:
+        base, sign, off = m.group(1), m.group(2), m.group(3)
+        refs.add(base)
+        try:
+            n = int(off, 0)
+            if base in _WIDENED_REGISTRY:
+                n *= 2
+            return f'(void *)((u8 *)&{base} {sign} {n})'
+        except ValueError:
+            return f'(void *)((u8 *)&{base} {sign} ({off}))'
+    return '(void *)0'
+
+
+def render_mixed_widened(sym, section, entries, refs):
+    """A descriptor block splat mis-parsed as strings+words: emit 8-byte cells.
+
+    The game reads these through LP64 structs (struct Sub800E1B50_Unk88 and
+    friends) whose PORT overlays assume one 8-byte cell per N64 word. The old
+    packed-struct emission was wrong twice over: it dropped the .align padding
+    after each .asciz (splat writes a float word 0x3F000000 as `.asciz "?"`
+    plus alignment, and the padding IS data here), and packed pointers at
+    byte offsets no reader struct has. Rebuild the exact N64 byte stream,
+    then cut it into big-endian words, one cell each; relocated words stay
+    native pointers. Sub-word fields are read back with the same big-endian
+    extraction idiom every other widened reader in src/ uses.
+    """
+    import struct as _struct
+    const = 'const ' if section == '.rodata' else ''
+    stream, n = [], 0            # ('b', bytes) | ('r', expr), N64 offset
+
+    def pad_to(align):
+        nonlocal n
+        if n % align:
+            k = align - n % align
+            stream.append(('b', b'\0' * k))
+            n += k
+
+    for k, v in entries:
+        if k == 'asciz':
+            b = _asciz_bytes(v)
+            stream.append(('b', b))
+            n += len(b)
+            pad_to(4)            # splat always aligns back to word here
+        elif k == 'word':
+            pad_to(4)
+            if _is_ref(v):
+                stream.append(('r', _ref_word_expr(v, refs)))
+            else:
+                stream.append(('b', _struct.pack('>I', int(v, 0) & 0xFFFFFFFF)))
+            n += 4
+        elif k == 'float':
+            pad_to(4)
+            stream.append(('b', _struct.pack('>f', float(v))))
+            n += 4
+        elif k == 'double':
+            pad_to(4)
+            stream.append(('b', _struct.pack('>d', float(v))))
+            n += 8
+        elif k == 'short':
+            pad_to(2)
+            stream.append(('b', _struct.pack('>H', int(v, 0) & 0xFFFF)))
+            n += 2
+        elif k == 'byte':
+            stream.append(('b', _struct.pack('B', int(v, 0) & 0xFF)))
+            n += 1
+        elif k == 'space':
+            z = int(v, 0)
+            stream.append(('b', b'\0' * z))
+            n += z
+    pad_to(4)
+
+    cells, buf = [], b''
+    for kind, x in stream:
+        if kind == 'b':
+            buf += x
+            while len(buf) >= 4:
+                w, buf = buf[:4], buf[4:]
+                word = int.from_bytes(w, 'big')
+                expr = resolve_vram_interior(hex(word), refs)
+                cells.append(expr or '(void *)(u32)(0x%08X)' % word)
+        else:
+            if buf:
+                raise SystemExit(f'{sym}: relocation not word-aligned')
+            cells.append(x)
+    if buf:
+        raise SystemExit(f'{sym}: trailing sub-word bytes')
+
+    body = ',\n    '.join(cells)
+    return (f'extern {const}void *{sym}[];\n',
+            f'{const}void *{c_ident(sym)}[] = {{\n    {body}\n}};\n')
 
 
 def render_widened(sym, section, entries):
@@ -321,6 +538,8 @@ def render(sym, section, entries, refs):
     # form, and it also beats byte-serialisation for the 41 mixed-width blocks
     # with no pointers, since it keeps the pointers and the values both.
     has_ref = any(_is_ref(v) for k, v in entries if k == 'word')
+    if is_mixed_ref_block(sym, entries):
+        return render_mixed_widened(sym, section, entries, refs)
     if len(kinds) > 1:
         fields, inits = [], []
         for i, (k, v) in enumerate(entries):
@@ -354,23 +573,10 @@ def render(sym, section, entries, refs):
         body = []
         for k, v in entries:
             if not _is_ref(v):
-                name = resolve_scalar_pointer(v)
-                if name:
-                    refs.add(name)
-                    body.append(f'&{name}')
-                else:
-                    body.append(f'(void *)(u32)({v})')
-            elif re.fullmatch(r'\w+', v):
-                refs.add(v)
-                body.append(f'&{v}')
-            else:                                   # `sym + 0x10`
-                m = re.match(r'(\w+)\s*([+-])\s*(\S+)', v)
-                if m:
-                    refs.add(m.group(1))
-                    body.append(f'(void *)((u8 *)&{m.group(1)} '
-                                f'{m.group(2)} ({m.group(3)}))')
-                else:
-                    body.append('(void *)0')
+                expr = resolve_vram_interior(v, refs)
+                body.append(expr or f'(void *)(u32)({v})')
+            else:
+                body.append(_ref_word_expr(v, refs))
         return (f'extern {const}void *{sym}[];\n',
                 f'{const}void *{c_ident(sym)}[] = {{\n    ' +
                 ',\n    '.join(body) + '\n};\n')
@@ -450,23 +656,10 @@ def render_pointer_run(run, refs):
                            ' + ' + str(offset) + '\\n");\n')
         for k, v in entries:
             if not _is_ref(v):
-                name = resolve_scalar_pointer(v)
-                if name:
-                    refs.add(name)
-                    body.append(f'&{name}')
-                else:
-                    body.append(f'(void *)(u32)({v})')
-            elif re.fullmatch(r'\w+', v):
-                refs.add(v)
-                body.append(f'&{v}')
-            else:                                   # `sym + 0x10`
-                m = re.match(r'(\w+)\s*([+-])\s*(\S+)', v)
-                if m:
-                    refs.add(m.group(1))
-                    body.append(f'(void *)((u8 *)&{m.group(1)} '
-                                f'{m.group(2)} ({m.group(3)}))')
-                else:
-                    body.append('(void *)0')
+                expr = resolve_vram_interior(v, refs)
+                body.append(expr or f'(void *)(u32)({v})')
+            else:
+                body.append(_ref_word_expr(v, refs))
             offset += 8
 
     fwd = f'extern {const}void *{base}[];\n' + ''.join(fwds)
@@ -550,6 +743,19 @@ def main():
         live = set(re.findall(r'build/asm/data/(\S+?)\.o', ld))
         if not live:
             live = None
+
+    # Pre-pass: every block that will emit as 8-byte cells, across ALL files.
+    # Interior pointer resolution consults this to scale offsets, and it must
+    # be complete before the first file renders -- ovl7 tables point into
+    # ovl8/ovl10 blocks that render later.
+    global _WIDENED_REGISTRY
+    for path in sorted(glob.glob('asm/data/**/*.s', recursive=True)):
+        if live is not None and path[len('asm/data/'):-2] not in live:
+            continue
+        for sym, _sec, entries in parse(path):
+            if sym not in defined and sym not in SUPPRESS_BSS \
+                    and is_widened_block(sym, entries):
+                _WIDENED_REGISTRY.add(sym)
 
     nfiles = nsyms = skipped = nmerged = 0
     for path in sorted(glob.glob('asm/data/**/*.s', recursive=True)):

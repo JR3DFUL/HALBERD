@@ -74,10 +74,11 @@ def _widened_blocks():
         for sym, _sec, entries in gen_data.parse(f):
             if sym in gen_data.FORCE_WORD32 or sym in gen_data.SUPPRESS_BSS:
                 continue
-            if (gen_data.is_pointer_block(entries)
-                    or (sym in gen_data.FORCE_WIDEN
-                        and {k for k, _ in entries
-                             if k != 'incbin'} == {'word'})):
+            # One predicate, owned by gen_data, so the two tools can never
+            # disagree about a block's host layout (mixed descriptor blocks
+            # joined pointer blocks and FORCE_WIDEN when render_mixed_widened
+            # landed).
+            if gen_data.is_widened_block(sym, entries):
                 widened.add(sym)
     return widened
 
