@@ -25,7 +25,7 @@ got=$(sha1sum "$ROM" | cut -c1-40)
 [ "$got" = "$ROM_SHA" ] || { echo "ROM sha1 $got != $ROM_SHA (need US 1.0 dump)"; exit 1; }
 
 msg "1/7 host dependencies"
-need="git cmake ninja-build build-essential pkg-config libudev-dev libgl1-mesa-dev libx11-dev python3"
+need="git cmake ninja-build build-essential pkg-config libudev-dev libgl1-mesa-dev libx11-dev libxext-dev libasound2-dev libpulse-dev python3"
 if command -v apt-get >/dev/null; then
     sudo apt-get install -y $need || apt-get install -y $need
 else
