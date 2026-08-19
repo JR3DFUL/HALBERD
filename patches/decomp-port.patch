@@ -7753,10 +7753,90 @@
  void *func_80100AC8(void *arg0);
  f32 func_80100EE4(s32 arg0);
  
-@@ -166,7 +175,131 @@ void func_800FF71C(struct UnkStruct800AC954 *arg0, u8 arg1, u8 arg2) {
+@@ -164,9 +173,211 @@ void func_800FF71C(struct UnkStruct800AC954 *arg0, u8 arg1, u8 arg2) {
  
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_6/func_800FF9B4.s")
+ 
++#ifdef PORT
++/* PORT: skybox-layer draw callback (behavioral). The ROM walks the GObj's
++ * SPObj chain, culls each layer against the D_8012BB98 screen rect, and
++ * emits it as rows of RDP tile rectangles (asm func_800FF9B4, a 900-insn
++ * per-format emitter). Here each visible layer is emitted as ONE S2DEX
++ * BG_1CYC command over its clipped span: the bg block already carries the
++ * image setup from creation, the frame rect is set to the span, and 1:1
++ * scale lets the bg pipeline wrap the image across the frame -- the same
++ * path the compiled generic sprite draw (sprite.c func_800AD1A0 case 1)
++ * uses. Mode/color setup and TLUT handling mirror that function exactly.
++ * Block access is by raw PC offsets (+0x48, 0x70 stride), the same layout
++ * PC_SPOBJ_FLIP below documents against include/SPObj.h's asserts. */
++void func_80100790(struct GObj *gobj) {
++    extern Gfx *gDisplayListHeads[];
++    s32 func_800ACE1C(u8, u16 *);
++    extern f32 D_8012BB98[];
++    struct UnkStruct800AC954 *sp = (struct UnkStruct800AC954 *) (uintptr_t) gobj->unk4C;
++    f32 *rect = &D_8012BB98[gobj->objId * 6];
++
++    while (sp != NULL) {
++        struct UNK_D_8012BBF8 *slot = (struct UNK_D_8012BBF8 *) (uintptr_t) sp->unk3C;
++        u16 out = slot != NULL ? ((u16 *) &slot->unkC)[1] : 0;
++        f32 x0 = sp->xOffset;
++        f32 y0 = sp->yOffset;
++        f32 spanW = (f32) sp->width * sp->unk28;
++        f32 spanH = (f32) sp->height * sp->unk2C;
++        f32 x1 = (out & 4) ? rect[4] : x0 + spanW;
++        f32 y1 = (out & 8) ? rect[5] : y0 + spanH;
++
++        if (rect[4] < x0 || rect[5] < y0 || x1 < rect[2] || y1 < rect[3]) {
++            sp = (struct UnkStruct800AC954 *) (uintptr_t) sp->unk8;
++            continue;
++        }
++        if (x0 < rect[2]) {
++            x0 = rect[2];
++        }
++        if (y0 < rect[3]) {
++            y0 = rect[3];
++        }
++        if (rect[4] < x1) {
++            x1 = rect[4];
++        }
++        if (rect[5] < y1) {
++            y1 = rect[5];
++        }
++        if (x1 > x0 && y1 > y0) {
++            u8 buf = (sp->unk12 ^= 1);
++            uObjBg *bg = (uObjBg *) ((u8 *) sp + 0x48 + buf * 0x70);
++            u16 *tlut = (u16 *) ((u8 *) bg + sizeof(uObjBg));
++            s32 loadedTlut;
++            Gfx *g;
++
++            bg->s.frameX = (s16) (s32) (x0 * 4.0f) & ~3;
++            bg->s.frameY = (s16) (s32) (y0 * 4.0f) & ~3;
++            bg->s.frameW = (u16) (s32) ((x1 - x0) * 4.0f);
++            bg->s.frameH = (u16) (s32) ((y1 - y0) * 4.0f);
++            bg->s.scaleW = 1 << 10;
++            bg->s.scaleH = 1 << 10;
++            bg->s.imageX = 0;
++            bg->s.imageY = 0;
++
++            gDPPipeSync(gDisplayListHeads[0]++);
++            func_800FF71C(sp, 0, (u8) out);
++            loadedTlut = func_800ACE1C(bg->s.imageFmt, tlut);
++            g = gDisplayListHeads[0]++;
++            g->words.w0 = 0x09000000;
++            g->words.w1 = (u32) (uintptr_t) bg;
++            if (loadedTlut != 0) {
++                g = gDisplayListHeads[0]++;
++                g->words.w0 = 0xE3001001;
++                g->words.w1 = 0;
++            }
++        }
++        sp = (struct UnkStruct800AC954 *) (uintptr_t) sp->unk8;
++    }
++}
++#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_6/func_80100790.s")
- 
++#endif
++
 +#ifdef PORT
 +/* PORT: skybox-layer GObj init, from asm/nonmatchings/ovl2/ovl2_6/
 + * func_80100AC8.s. One GObj per skybox camera link (D_80124740[objId] in
@@ -7827,7 +7907,7 @@
 +        SPObj *sprite;
 +        u16 flags;
 +        u16 out;
-+
+ 
 +        if (code != rec->unk4) {
 +            continue;
 +        }
@@ -7885,7 +7965,7 @@
  
  u32 func_80100DF8(s32 arg0) {
      u32 phi_v0;
-@@ -198,7 +331,124 @@ u32 func_80100E7C(f32 arg0) {
+@@ -198,7 +409,124 @@ u32 func_80100E7C(f32 arg0) {
      return 2;
  }
  
@@ -10302,3 +10382,27 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl7/enelib/func_8019B834_ovl7.s")
  #endif
+--- a/src/ovl7/ovl7_2.c
++++ b/src/ovl7/ovl7_2.c
+@@ -24,10 +24,21 @@ struct Ovl7AnimHdrSub {
+     s32 unk4;
+ };
+ 
++#ifdef PORT
++/* The anim headers (D_801CA004_ovl7 family) are pointer-bearing data blocks,
++ * emitted widened on PC: one 8-byte cell per N64 word, pointers native. The
++ * N64 offsets shear (unk8 landed on cell 1, the constant 1, and got
++ * dereferenced); cells 0-1 are the two leading words, unk8 is cell 2. */
++struct Ovl7AnimHdr {
++    u8 filler0[16];
++    struct Ovl7AnimHdrSub *unk8;
++};
++#else
+ struct Ovl7AnimHdr {
+     u8 filler0[8];
+     struct Ovl7AnimHdrSub *unk8;
+ };
++#endif
+ 
+ struct Ovl7AnimObj {
+     u8 filler0[0x24];
