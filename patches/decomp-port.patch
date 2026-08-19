@@ -8196,6 +8196,53 @@
  
  void func_8010133C(void) {
      u32 i;
+--- a/src/ovl2/ovl2_7.c
++++ b/src/ovl2/ovl2_7.c
+@@ -1288,6 +1288,44 @@ s32 func_80103B58(f32 *arg0, ? arg1, ? arg2, ? arg3, u32 *arg4) {
+     }
+     return var_v0;
+ }
++#elif defined(PORT)
++/* The collision raycast core (draft above, completed): cast against the
++ * static level mesh, then against every active dynamic collider, keeping
++ * the nearest t in sp54. The draft's only gap was dropping the out slots on
++ * the first func_80103004 call. Sentinel 0x14 in *arg4 means the static
++ * mesh won the cast; otherwise it is the dynamic collider index. */
++s32 func_80103B58(f32 *arg0, Vector *arg1, struct Normal **arg2, struct CollisionTriangle **arg3, u32 *arg4) {
++    extern struct struct8011BA10_temp D_8012D948[];
++    extern u32 D_8012D940;
++    f32 sp54 = 1.1f;
++    u32 var_fp = 0x14;
++    u32 i;
++    s32 ret = 0;
++
++    gCollisionState->unk30 = D_80129410;
++    func_80103004(&sp54, arg1, arg2, arg3);
++    for (i = 0; i < D_8012D940; i++) {
++        struct struct8011BA10_temp *rec = &D_8012D948[i];
++
++        if (!(rec->unk2 & 1)) {
++            gCollisionState->unk30 = rec->unk4;
++            if (func_801033A8(rec, &gCollisionState->currPos, &gCollisionState->nextPos) != 0 &&
++                func_80103004(&sp54, arg1, arg2, arg3) != 0) {
++                var_fp = i;
++            }
++        }
++    }
++    if (sp54 != 1.1f) {
++        if (arg0 != NULL) {
++            *arg0 = sp54;
++        }
++        if (arg4 != NULL) {
++            *arg4 = var_fp;
++        }
++        ret = 1;
++    }
++    return ret;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_80103B58.s")
+ #endif
 --- a/src/ovl2/plylib.c
 +++ b/src/ovl2/plylib.c
 @@ -735,6 +735,133 @@ void func_8011C8F8(void) {
