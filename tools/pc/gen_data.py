@@ -533,6 +533,11 @@ SUPPRESS_BSS = {
     # indexes D_800ED510 as u16[] far past the first splinter and the HUD
     # frame fill walks the region row-wise.
     'D_800ED510', 'D_800EDA10', 'D_800EDA24', 'D_800EDA60', 'D_800F03C5',
+    # Collision result block + water annex, whole in pc_bss_whole.c; the
+    # LP64 struct has pointers so splinter aliases sit at LP64 offsets.
+    'D_8012BCA0', 'D_8012BCA4', 'D_8012BCA8', 'D_8012BCB4', 'D_8012BCBC',
+    'D_8012BCC0', 'D_8012BCC4', 'D_8012BCC8', 'D_8012BCCC', 'D_8012BCD0',
+    'D_8012BCD4', 'D_8012BCD8', 'D_8012BCDC', 'D_8012BCE0',
 }
 
 

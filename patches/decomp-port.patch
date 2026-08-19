@@ -8198,7 +8198,22 @@
      u32 i;
 --- a/src/ovl2/ovl2_7.c
 +++ b/src/ovl2/ovl2_7.c
-@@ -1288,6 +1288,44 @@ s32 func_80103B58(f32 *arg0, ? arg1, ? arg2, ? arg3, u32 *arg4) {
+@@ -50,6 +50,14 @@ struct UnkBCA0 {
+         } f;
+     } flags;
+     /* 0x04 */ struct ColRecord rec[5];
++#ifdef PORT
++    /* The water annex the C never declared: the ROM stores up to 3 water-
++     * volume hits after rec[] (N64 +0x40 record pointers, +0x4C source ids;
++     * func_8010DDA4 writes them, the ovl3 landing scan reads them). On PC
++     * the whole object lives in src/pc/pc_bss_whole.c. */
++    struct WaterData *waterRec[3];
++    u32 waterSrc[3];
++#endif
+ };
+ 
+ extern struct UnkBCA0 D_8012BCA0;
+@@ -1288,6 +1296,44 @@ s32 func_80103B58(f32 *arg0, ? arg1, ? arg2, ? arg3, u32 *arg4) {
      }
      return var_v0;
  }
@@ -8243,7 +8258,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_80103B58.s")
  #endif
-@@ -2299,6 +2337,12 @@ s32 func_801063F0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
+@@ -2299,6 +2345,12 @@ s32 func_801063F0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
      Vector *sp30;
  
      sp78 = 1.1f;
@@ -8256,6 +8271,72 @@
      sp54.x = BD00.unk1C;
      sp54.y = 0.0f;
      sp54.z = BD00.unk20;
+@@ -5537,6 +5589,65 @@ loop_17:
+         }
+     }
+ }
++#elif defined(PORT)
++/* Water-volume lookup (draft above). Upper-bound binary search over the
++ * WaterData records (sorted by X start), then per candidate an X-max and
++ * Y-range check and an all-planes inside test against Water_Normals; a hit
++ * appends the record and its source id (0x14 = static mesh, else dynamic
++ * collider index) to the result block's water annex, 3 slots. All data is
++ * the loaded collision asset at native struct layout. */
++void func_8010DDA4(void *arg0, s32 arg1) {
++    f32 *pos = arg0;
++    struct vCollisionHeader *hdr = D_8012BD48->unk0;
++    struct WaterData *water = hdr->header.WaterData;
++    u32 count = hdr->header.Len_WaterData;
++    u32 n, i;
++
++    if (water == NULL || count == 0 || pos[0] < water[0].Pos1) {
++        return;
++    }
++    if (water[count - 1].Pos1 <= pos[0]) {
++        n = count;
++    } else {
++        u32 lo = 0, hi = count;
++
++        for (;;) {
++            u32 mid = (lo + hi) >> 1;
++
++            if (water[mid].Pos1 <= pos[0]) {
++                if (pos[0] < water[mid + 1].Pos1) {
++                    n = mid + 1;
++                    break;
++                }
++                lo = mid;
++            } else {
++                hi = mid;
++            }
++        }
++    }
++    for (i = 0; i < n; i++) {
++        struct WaterData *rec = &water[i];
++
++        if (pos[0] <= rec->Pos2 && rec->Pos3 <= pos[1] && pos[1] <= rec->Pos4) {
++            struct Normal *pl = &hdr->header.Water_Normals[rec->Norm_Array_Index];
++            u32 nplanes = rec->Num_Normals;
++            u32 inside = 0;
++
++            while (inside < nplanes) {
++                if (pl->x * pos[0] + pl->y * pos[1] + pl->z * pos[2] + pl->originOffset > 0.0f) {
++                    break;
++                }
++                inside++;
++                pl++;
++            }
++            if (inside == nplanes && D_8012BD48->unk4 < 3) {
++                D_8012BCA0.waterRec[D_8012BD48->unk4] = rec;
++                D_8012BCA0.waterSrc[D_8012BD48->unk4] = arg1;
++                D_8012BD48->unk4++;
++            }
++        }
++    }
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_8010DDA4.s")
+ #endif
 --- a/src/ovl2/plylib.c
 +++ b/src/ovl2/plylib.c
 @@ -735,6 +735,133 @@ void func_8011C8F8(void) {
@@ -9225,7 +9306,7 @@
 +#endif
 --- a/src/ovl3/ovl3_1.c
 +++ b/src/ovl3/ovl3_1.c
-@@ -93,7 +93,108 @@ s32 func_8015229C_ovl3(f32 (*arg0)[4], f32 (*arg1)[4], u8 arg2, f32 arg3) {
+@@ -93,7 +93,125 @@ s32 func_8015229C_ovl3(f32 (*arg0)[4], f32 (*arg1)[4], u8 arg2, f32 arg3) {
      return 1;
  }
  
@@ -9263,6 +9344,8 @@
 +    struct PositionState *st = &gPositionState;
 +    f32 dx;
 +    f32 dz;
++    s32 hits;
++    u32 wi;
 +    f32 probe[3];
 +
 +    (void) arg0;
@@ -9317,8 +9400,23 @@
 +    probe[0] = gEntitiesNextPosXArray[id];
 +    probe[1] = gEntitiesNextPosYArray[id] - fr[0];
 +    probe[2] = gEntitiesNextPosZArray[id];
-+    func_8010DF9C(probe);
++    hits = func_8010DF9C(probe);
 +    D_800E8AE0[id] = 0;
++    /* Spawn-into-water: any active water volume under the spawn point sets
++     * the surface flag. The annex (filled by func_8010DDA4) lives at byte
++     * 128 of the result block; +4 in the record is Water_Box_Active. Both
++     * offsets are locked by static asserts in src/pc/pc_bss_whole.c. */
++    {
++        extern u8 D_8012BCA0[];
++
++        for (wi = 0; wi < (u32) hits && wi < 3; wi++) {
++            u8 *w = *(u8 **) (D_8012BCA0 + 128 + wi * 8);
++
++            if (w != NULL && w[4] == 1) {
++                D_800E8AE0[id] = 7;
++            }
++        }
++    }
 +    D_8012E948[3] = gEntitiesNextPosXArray[id];
 +    D_8012E948[0] = D_8012E948[3];
 +    D_8012E948[4] = gEntitiesNextPosYArray[id];
