@@ -8243,6 +8243,19 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_80103B58.s")
  #endif
+@@ -2299,6 +2337,12 @@ s32 func_801063F0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
+     Vector *sp30;
+ 
+     sp78 = 1.1f;
++#ifdef PORT
++    /* The match note above: the target keeps &arg0->scale[0] in this pointer
++     * temp, and this C body reads sp30->y/z without ever assigning it -- UB
++     * that IDO's folding made harmless on N64 and the PC crashes on. */
++    sp30 = (Vector *) &arg0->scale[0];
++#endif
+     sp54.x = BD00.unk1C;
+     sp54.y = 0.0f;
+     sp54.z = BD00.unk20;
 --- a/src/ovl2/plylib.c
 +++ b/src/ovl2/plylib.c
 @@ -735,6 +735,133 @@ void func_8011C8F8(void) {
@@ -9210,6 +9223,117 @@
 +#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/ovl3/func_80151E94_ovl3.s")
 +#endif
+--- a/src/ovl3/ovl3_1.c
++++ b/src/ovl3/ovl3_1.c
+@@ -93,7 +93,108 @@ s32 func_8015229C_ovl3(f32 (*arg0)[4], f32 (*arg1)[4], u8 arg2, f32 arg3) {
+     return 1;
+ }
+ 
++#ifdef PORT
++/* PORT: player landing snap. Clears the per-frame collision state on
++ * gKirbyState, seats gPositionState from the entity's next position and its
++ * spawn record, runs the ground pass (func_80109DD8, falling back to the
++ * ledge pass func_8010D668), re-derives track progress when the snap moved
++ * the player in X/Z, commits the snapped position, and refreshes the
++ * position-history block at D_8012E948.
++ *
++ * The spawn record: D_800E0490[objId] points into widened ovl3 data (one
++ * 8-byte cell per N64 word), and the float record pointer is CELL 1; the
++ * record itself is a native scalar float block. The ROM's tail also scans
++ * the collision result blocks to flag water surfaces into D_800E8AE0
++ * (value 7); that scan's block layout is draft-only so far, so the flag
++ * stays 0 here -- spawn-into-water reactions are the one deferred piece. */
++void func_80105180(struct PositionState *);
++void func_801051DC(struct PositionState *);
++void func_801051AC(struct PositionState *);
++s32 func_80109DD8(struct PositionState *);
++s32 func_8010D668(struct PositionState *);
++s32 func_8010DF9C(f32 *);
++f32 func_800F8728(s32, f32, f32);
++
++void func_80152348_ovl3(f32 arg0) {
++    extern struct PositionState gPositionState;
++    extern f32 D_800E6A10[];
++    extern f32 D_800E17D0[];
++    extern s32 D_800E8920[];
++    extern s32 D_800E8AE0[];
++    extern f32 D_8012E948[];
++    s32 id = omCurrentObj->objId;
++    f32 *fr = (f32 *) (uintptr_t) D_800E0490[id][1];
++    struct PositionState *st = &gPositionState;
++    f32 dx;
++    f32 dz;
++    f32 probe[3];
++
++    (void) arg0;
++    gKirbyState.unk13C = 0;
++    gKirbyState.unk138 = 0;
++    gKirbyState.unk134 = 0;
++    gKirbyState.ceilingCollisionNext = 0;
++    gKirbyState.floorCollisionNext = 0;
++    gKirbyState.rightCollisionNext = 0;
++    gKirbyState.leftCollisionNext = 0;
++    gKirbyState.levelCollisionFlags = 0;
++    gKirbyState.verticalCollision = 0;
++    gKirbyState.horizontalCollision = 0;
++    gKirbyState.ceilingType = 0;
++    gKirbyState.floorType = 0;
++    gKirbyState.unk104 = 0;
++    gKirbyState.unk106 = 0;
++    gKirbyState.unk108 = 0;
++    gKirbyState.unk10A = 0;
++    gKirbyState.unk10C = 0;
++    gKirbyState.unk140 = 0;
++    gKirbyState.unk152 = 0;
++    func_80105180(st);
++    st->kirbyFootPos[0] = gEntitiesNextPosXArray[id];
++    st->kirbyFootPos[1] = gEntitiesNextPosYArray[id];
++    st->kirbyFootPos[2] = gEntitiesNextPosZArray[id];
++    st->scale[0] = fr[0];
++    st->scale[1] = fr[1] + fr[0];
++    st->scale[2] = fr[2] + fr[0];
++    if (D_800E6A10[id] == 1.0f) {
++        st->faceAngle[0] = fr[3];
++        st->faceAngle[1] = fr[4];
++    } else {
++        st->faceAngle[0] = fr[4];
++        st->faceAngle[1] = fr[3];
++    }
++    st->faceAngle[2] = D_800E17D0[id];
++    func_801051DC(st);
++    D_800E8920[id] = func_80109DD8(st);
++    if (D_800E8920[id] == 0) {
++        D_800E8920[id] = func_8010D668(st);
++    }
++    dx = st->kirbyFootPos[0] - gEntitiesNextPosXArray[id];
++    dz = st->kirbyFootPos[2] - gEntitiesNextPosZArray[id];
++    if (dx != 0.0f || dz != 0.0f) {
++        func_800F8728(id, dx, dz);
++    }
++    gEntitiesNextPosXArray[id] = st->kirbyFootPos[0];
++    gEntitiesNextPosZArray[id] = st->kirbyFootPos[2];
++    gEntitiesNextPosYArray[id] = st->kirbyFootPos[1];
++    func_801051AC(st);
++    probe[0] = gEntitiesNextPosXArray[id];
++    probe[1] = gEntitiesNextPosYArray[id] - fr[0];
++    probe[2] = gEntitiesNextPosZArray[id];
++    func_8010DF9C(probe);
++    D_800E8AE0[id] = 0;
++    D_8012E948[3] = gEntitiesNextPosXArray[id];
++    D_8012E948[0] = D_8012E948[3];
++    D_8012E948[4] = gEntitiesNextPosYArray[id];
++    D_8012E948[1] = D_8012E948[4];
++    D_8012E948[5] = gEntitiesNextPosZArray[id];
++    D_8012E948[2] = D_8012E948[5];
++    D_8012E948[6] = D_800E17D0[id];
++    D_8012E948[7] = 0;
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/ovl3_1/func_80152348_ovl3.s")
++#endif
+ 
+ s32 func_80152828_ovl3(f32 *arg0, f32 *arg1) {
+     s32 ret;
 --- a/src/ovl4/ovl4_2.c
 +++ b/src/ovl4/ovl4_2.c
 @@ -246,7 +246,92 @@ s32 func_801524E4_ovl4(void) {
