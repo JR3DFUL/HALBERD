@@ -7521,7 +7521,113 @@
      D_80129210.unk4 = cam->unk20;
 --- a/src/ovl2/ovl2_5.c
 +++ b/src/ovl2/ovl2_5.c
-@@ -219,6 +219,44 @@ struct UnkFunc800FEE6C {
+@@ -202,7 +202,105 @@ void func_800FE0AC(f32 arg0, f32 arg1) {
+     gDPSetPrimColor(gDisplayListHeads[0]++, 0, 0, 0, 0, 0, (s32) ((val / max) * 255));
+ }
+ 
++#ifdef PORT
++/* PORT (behavioral): the particle ground-shadow renderer. The ROM raycasts
++ * the quad's two side columns straight down (arg2 is func_80104958/A08, the
++ * collision casts writing hit point / floor plane / triangle through the
++ * out slots), validates the floor with func_80101920, seats the DObj with
++ * func_800FDF88, picks CLD render mode when the floor is a moving platform
++ * (collisionType 0x14), fades alpha by height with func_800FE0AC, and
++ * patches the hit heights into the particle's prebuilt double-buffered Vtx
++ * block (+0x28 / +0xA8) via func_800FDA40. When only one column hits, the
++ * found floor plane is extended under the other column; the ROM's sloped-
++ * floor subdivision (func_800FDBB0/FDCB0 splits) is approximated by the
++ * same plane extension -- shadows on a floor seam are a straight quad
++ * instead of a bent one, everything else is exact. The line-particle
++ * variant (unk21 == 1) mirrors the ROM directly. */
++void func_800FE154(void *arg0, s32 *flagOut, void *castFn) {
++    extern u8 D_8012B9A0[];
++    void (*cast)(Vector *, Vector *, void *, void *, void *) =
++        (void (*)(Vector *, Vector *, void *, void *, void *)) castFn;
++    DObj *dobj = arg0;
++    struct Ovl2Particle *ent = (struct Ovl2Particle *) (uintptr_t) dobj->unk84;
++    struct CollisionTriangle *triA;
++    struct CollisionTriangle *triB;
++    f32 *planeA;
++    f32 *planeB;
++    Vector hitA;
++    Vector hitB;
++    Vtx *buf;
++    Vector *q;
++    s32 visA;
++    s32 visB;
++
++    if (ent->unk20 & 4) {
++        return;
++    }
++    buf = (Vtx *) ((u8 *) ent + (gtlCurrentContextID ? 0xA8 : 0x28));
++
++    if (ent->unk21 == 1) {
++        Vector a;
++        Vector b;
++        f32 d0;
++        f32 d1;
++
++        a = ent->unk4;
++        a.y += ent->unk14;
++        b = ent->unk4;
++        b.y += ent->unk18;
++        triA = NULL;
++        planeA = NULL;
++        cast(&a, &b, &hitA, &planeA, &triA);
++        if (triA == NULL) {
++            return;
++        }
++        if (func_80101920((void *) triA, (void *) planeA, 0, &D_8012B9A0) == 0) {
++            return;
++        }
++        func_800FDE6C(ent);
++        func_800FDF88(dobj, ent, flagOut);
++        q = D_8012B9AC->unk0;
++        d0 = -(q[0].x * planeA[0] + q[0].z * planeA[2] + planeA[3]) / planeA[1];
++        d1 = -(q[2].x * planeA[0] + q[2].z * planeA[2] + planeA[3]) / planeA[1];
++        func_800FE0AC(b.y, (d0 + d1) * 0.5f);
++        func_800FDA40(buf, d0, d1);
++        return;
++    }
++
++    func_800FDE6C(ent);
++    q = D_8012B9AC->unk0;
++    triA = NULL;
++    planeA = NULL;
++    cast(&q[0], &q[1], &hitA, &planeA, &triA);
++    visA = triA != NULL;
++    if (visA && func_80101920((void *) triA, (void *) planeA, 0, &D_8012B9A0) == 0) {
++        return;
++    }
++    triB = NULL;
++    planeB = NULL;
++    cast(&q[2], &q[3], &hitB, &planeB, &triB);
++    visB = triB != NULL;
++    if (visB && func_80101920((void *) triB, (void *) planeB, 0, &D_8012B9A0) == 0) {
++        return;
++    }
++    if (!visA && !visB) {
++        return;
++    }
++    func_800FDF88(dobj, ent, flagOut);
++    func_800FDFF4((visA && triA->collisionType == 0x14) ||
++                  (visB && triB->collisionType == 0x14));
++    if (!visA) {
++        hitA.y = -(q[0].x * planeB[0] + q[0].z * planeB[2] + planeB[3]) / planeB[1];
++    }
++    if (!visB) {
++        hitB.y = -(q[2].x * planeA[0] + q[2].z * planeA[2] + planeA[3]) / planeA[1];
++    }
++    func_800FE0AC(q[1].y, (hitA.y + hitB.y) * 0.5f);
++    func_800FDA40(buf, hitA.y, hitB.y);
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_5/func_800FE154.s")
++#endif
+ 
+ struct UnkFunc800FEE6C_2 {
+     u8 filler[0x20];
+@@ -219,6 +317,44 @@ struct UnkFunc800FEE6C {
      struct UnkFunc800FEE6C_2 *unk84;
  };
  
@@ -7566,7 +7672,7 @@
  void func_800FEE6C(struct UnkFunc800FEE6C *arg0) {
      s32 sp34;
      void *phi_a2;
-@@ -248,12 +286,67 @@ void func_800FEE6C(struct UnkFunc800FEE6C *arg0) {
+@@ -248,12 +384,67 @@ void func_800FEE6C(struct UnkFunc800FEE6C *arg0) {
          }
      }
  }
@@ -7634,7 +7740,7 @@
  void func_800FEF44(struct UnkFunc800FEF44 *arg0) {
      struct UnkD_8012B9AC sp3C;
  
-@@ -274,6 +367,7 @@ void func_800FEF44(struct UnkFunc800FEF44 *arg0) {
+@@ -274,6 +465,7 @@ void func_800FEF44(struct UnkFunc800FEF44 *arg0) {
          gSPDisplayList(gDisplayListHeads[0]++, D_80124708);
      }
  }
@@ -7642,7 +7748,7 @@
  
  void func_800FF0A8(struct Sub800E1B50_80 *arg0) {
      if (arg0 != NULL) {
-@@ -373,4 +467,90 @@ void func_800FF200(struct Ovl2Particle *arg0) {
+@@ -373,4 +565,90 @@ void func_800FF200(struct Ovl2Particle *arg0) {
      }
  }
  
