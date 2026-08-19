@@ -529,6 +529,10 @@ SUPPRESS_BSS = {
     'D_800EC9FC', 'D_800ECA00', 'D_800ECA04', 'D_800ECA08', 'D_800ECA14',
     'D_800ECA5C', 'D_800ECA60', 'D_800ECAB8', 'D_800ECB00', 'D_800ECB10',
     'D_800ECBA8', 'D_800ECBAC', 'D_800ECBC0',
+    # HUD texture arena, defined whole in src/pc/pc_bss_whole.c: ovl1_13.c
+    # indexes D_800ED510 as u16[] far past the first splinter and the HUD
+    # frame fill walks the region row-wise.
+    'D_800ED510', 'D_800EDA10', 'D_800EDA24', 'D_800EDA60', 'D_800F03C5',
 }
 
 

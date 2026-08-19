@@ -2640,7 +2640,57 @@
  // TU's trailing alignment padding, which C does not emit
 --- a/src/ovl1/ovl1_13.c
 +++ b/src/ovl1/ovl1_13.c
-@@ -881,6 +881,82 @@ loop_2:
+@@ -765,6 +765,49 @@ loop_4:
+     }
+     func_800BDD08();
+ }
++#elif defined(PORT)
++/* HUD frame service: on first-dirty either clears the HUD arena rows to the
++ * fill value (pause/transition path) or reloads the themed HUD texture bank,
++ * then draws lives/health/stars. Row geometry from the ROM draft above: 42
++ * rows of 0x280 bytes from D_800EDA10 (until &D_800F4324); per row two u16
++ * at +0x14 and the span +0x18..+0x1B0 get the fill halfword at D_800EDA60.
++ * Fixed counts here: the arena is one whole PC object (pc_bss_whole.c) and
++ * D_800F4324 is a separate one, so the end-pointer compare cannot be used. */
++void func_800BDE0C(s32 arg0) {
++    extern u16 D_800EDA10[], D_800EDA60[];
++    extern s32 D_800F4D14, D_800F6198, D_800D6F50;
++    extern u32 D_800D52FC[];
++    extern void *D_800D6F58;
++
++    D_800D6F58 = (void *) &D_800ED510;
++    if (D_800F4D14 != 0) {
++        if (D_800F6198 != 0) {
++            u16 fill = D_800EDA60[0];
++            s32 r, off;
++
++            func_800A8934(0x50002, 0x10, 0, &D_800ED510);
++            for (r = 0; r < 42; r++) {
++                u8 *row = (u8 *) D_800EDA10 + r * 0x280;
++
++                *(u16 *) (row + 0x14) = fill;
++                *(u16 *) (row + 0x16) = fill;
++                for (off = 0x18; off < 0x1B0; off += 2) {
++                    *(u16 *) (row + off) = fill;
++                }
++            }
++        } else {
++            D_800D6F50 = 0;
++            func_800A8934(D_800D52FC[saveHUDTheme], 0x10, 0, &D_800ED510);
++            func_800BDB18();
++        }
++        D_800F4D14 = 0;
++    }
++    if (D_800F6198 != 0) {
++        func_800BDD68();
++        return;
++    }
++    func_800BDD08();
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_13/func_800BDE0C.s")
+ #endif
+@@ -881,6 +924,82 @@ loop_2:
      scSetPostProcessFunc(func_800BDE0C);
      return sp18;
  }
@@ -4631,7 +4681,53 @@
      gobj = D_800DE350[track];
      func_800A9D64(track);
      func_800A99E4(track);
-@@ -1338,6 +1457,53 @@ void func_800B26D8(Vector *vec, struct DObj *node, u32 track) {
+@@ -1144,6 +1263,45 @@ void func_800B1FD0(GObj *arg0, s32 arg1, ? arg2, s32 arg3, f32 arg4) {
+         } while (var_s0 != NULL);
+     }
+ }
++#elif defined(PORT)
++/* Subtree anim-set walker (draft above): walks the DObj tree from arg0,
++ * handing each node its slot of the anim-script table (N64 stride 4) and of
++ * the 0x2C-byte parameter records. On PC the script table is a widened
++ * void*[] -- one 8-byte cell per N64 word -- so that stride is 8; the
++ * parameter records are scalar structs at native layout, stride unchanged.
++ * Pointers arrive as u32 (the N64 signature); lossless under the -no-pie
++ * low-memory invariant. */
++void func_800B1FD0(GObj *arg0, u32 arg1, f32 arg2, u32 arg3, f32 arg4) {
++    DObj *root = omCurrentObj->data.dobj;
++    uintptr_t script = arg1;
++    uintptr_t params = arg3;
++    DObj *node;
++
++    if ((DObj *) arg0 != root) {
++        do {
++            if (script != 0) {
++                script += 8;
++            }
++            if (params != 0) {
++                params += 0x2C;
++            }
++            root = animModelTreeNextNode(root);
++        } while ((DObj *) arg0 != root);
++    }
++    node = root;
++    if (root != NULL) {
++        do {
++            func_8000EC98(node, script, arg2, params, 0, arg4, 0.0f, 0.0f, 0.0f);
++            node = func_800B1F70(node, root);
++            if (script != 0) {
++                script += 8;
++            }
++            if (params != 0) {
++                params += 0x2C;
++            }
++        } while (node != NULL);
++    }
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1_7/func_800B1FD0.s")
+ #endif
+@@ -1338,6 +1496,53 @@ void func_800B26D8(Vector *vec, struct DObj *node, u32 track) {
      }
      utilWrapRotation(vec);
  }
