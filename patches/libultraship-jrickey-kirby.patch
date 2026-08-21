@@ -11,7 +11,7 @@ index 4e81ca7..4c5312d 100644
      void AdjustWidthHeightForScale(uint32_t& width, uint32_t& height, uint32_t nativeWidth,
                                     uint32_t nativeHeight) const;
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..44cc176 100644
+index 6aad126..d7529cb 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
 @@ -1463,6 +1463,32 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
@@ -503,7 +503,29 @@ index 6aad126..44cc176 100644
      gfx->GfxSpMovememF3dex2(C0(0, 8), C0(8, 8) * 8, gfx->SegAddr(cmd->words.w1));
  
      return false;
-@@ -6292,6 +6599,88 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
+@@ -5251,7 +5558,20 @@ static inline bool gfx_vtx_addr_is_unresolved(const void* addr) {
+         return false;
+     }
+ #endif
+-    return !gfxPointerInLoadedModule(addr);
++    if (gfxPointerInLoadedModule(addr)) {
++        return false;
++    }
++    // Kirby port: the non-PIE game keeps real Vtx arrays in low-VA bss/heap
++    // (e.g. cutscene and menu models), which the module check deliberately
++    // excludes. Accept a low pointer when the memory is actually mapped and
++    // 8-byte aligned like a Vtx: legitimate static/heap vertex data renders,
++    // while a stale N64-segment decode that lands in an unmapped hole is
++    // still skipped (one landing in mapped bss now draws garbage instead of
++    // silently hiding a model -- the better failure to debug).
++    if ((i & 7) == 0 && gfxPointerHasReadableBytes(addr, 16)) {
++        return false;
++    }
++    return true;
+ }
+ 
+ // Almost all versions of the microcode have their own version of this opcode
+@@ -6292,6 +6612,88 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
      return false;
  }
  
@@ -592,7 +614,7 @@ index 6aad126..44cc176 100644
  bool gfx_bg_copy_handler_s2dex(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6320,6 +6709,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -6320,6 +6722,62 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -655,7 +677,7 @@ index 6aad126..44cc176 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6462,6 +6907,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
+@@ -6462,6 +6920,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
      // The RSP was already running the right ucode from task setup; on PC we handle them here.
      { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
@@ -666,7 +688,7 @@ index 6aad126..44cc176 100644
  };
  
  static constexpr UcodeHandler f3dexHandlers = {
-@@ -6515,10 +6964,23 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6515,10 +6977,23 @@ static constexpr UcodeHandler s2dexHandlers = {
      { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
      { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
@@ -691,7 +713,7 @@ index 6aad126..44cc176 100644
  };
  
  static constexpr std::array ucode_handlers = {
-@@ -6846,6 +7308,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
+@@ -6846,6 +7321,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
      if (mForceRenderToFb) {
          return false;
      }
@@ -715,7 +737,7 @@ index 6aad126..44cc176 100644
      if (mCurDimensions.width == mGameWindowViewport.width && mCurDimensions.height == mGameWindowViewport.height) {
          return true;
      }
-@@ -7003,7 +7482,28 @@ void Interpreter::RunGuiOnly() {
+@@ -7003,7 +7495,28 @@ void Interpreter::RunGuiOnly() {
      }
  }
  
