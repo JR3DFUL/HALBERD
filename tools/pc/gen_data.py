@@ -541,6 +541,35 @@ SUPPRESS_BSS = {
 }
 
 
+# Adjacent scalar data blocks that compiled code indexes ACROSS the label
+# (N64 adjacency): follower -> leader. The leader's native u32 array absorbs
+# the follower's words and the follower becomes an asm alias at its N64 byte
+# offset, so records that span the boundary (e.g. func_801634D4_ovl3 reading
+# {id, effect} pairs from D_80196848+4) stay contiguous on PC.
+FUSE_INTO = {
+    'D_8019684C_ovl3': 'D_80196848_ovl3',
+}
+
+
+def fuse_adjacent(seg):
+    """Merge FUSE_INTO followers into their leader block; return
+    (blocks, aliases) where aliases is [(follower, leader, byte_off)]."""
+    out, aliases = [], []
+    for b in seg:
+        sym, sec, entries = b
+        if (out and sym in FUSE_INTO and FUSE_INTO[sym] == out[-1][0]):
+            lsym, lsec, lent = out[-1]
+            ent = [e for e in entries if e[0] != 'incbin']
+            if (lsec == sec and ent
+                    and {k for k, _ in ent} == {'word'}
+                    and {k for k, _ in lent} == {'word'}):
+                aliases.append((sym, lsym, 4 * len(lent)))
+                out[-1] = (lsym, lsec, lent + ent)
+                continue
+        out.append(b)
+    return out, aliases
+
+
 def render_word32_asm(sym, section, entries, refs):
     """A FORCE_WORD32 block: N64-shaped 4-byte words, pointers included."""
     # pushsection/popsection, NOT .section/.text: GCC does not parse the asm,
@@ -874,6 +903,13 @@ def main():
                 seg.append(b)
         if seg:
             segments.append(seg)
+        fuse_aliases = []
+        fused_segments = []
+        for sgm in segments:
+            sgm2, als = fuse_adjacent(sgm)
+            fused_segments.append(sgm2)
+            fuse_aliases.extend(als)
+        segments = fused_segments
         blocks = [b for s in segments for b in s]
         if not blocks:
             continue
@@ -899,12 +935,18 @@ def main():
             # must carry the SAME type as its definition, because `extern u8 X;`
             # against a `u32 X[]` definition is a hard type conflict, not a
             # warning. Symbols from other files get the opaque `extern u8`.
-            local = {b[0] for b in blocks}
+            local = {b[0] for b in blocks} | {a[0] for a in fuse_aliases}
             f.writelines(fwds)
+            for fol, lead, off in fuse_aliases:
+                f.write(f'extern u32 {fol}[];\n')
             for s in sorted(refs - local):
                 f.write(f'extern u8 {s};\n')
             f.write('\n')
             f.writelines(bodies)
+            for fol, lead, off in fuse_aliases:
+                f.write('__asm__("   .globl ' + fol + '\\n"\n'
+                        '        "   .set ' + fol + ', ' + lead
+                        + ' + ' + str(off) + '\\n");\n')
         nfiles += 1
     print(f'{nsyms} data symbols -> {nfiles} C files in {outdir}'
           + (f' ({skipped} stale listing(s) skipped)' if skipped else '')
