@@ -1478,7 +1478,7 @@
      D_800D6E54 = 0;
 --- a/src/ovl1/ovl1.c
 +++ b/src/ovl1/ovl1.c
-@@ -147,6 +147,44 @@ typedef struct UnkScript {
+@@ -147,6 +147,48 @@ typedef struct UnkScript {
      u8 bytecode[1];
  } UnkScript;
  
@@ -1519,11 +1519,15 @@
 +static inline u16 pc_be16(u16 v) { return (u16)__builtin_bswap16(v); }
 +/* Bank slots hold host addresses as u32 after relocation. */
 +#define PC_BANKPTR(x) ((void *)(uintptr_t)(x))
++/* LP64 size of the generator/emitter free-list node (N64: 0x78). The two
++ * widened pointers at N64 +0x48/+0x4C push the +0x50..+0x77 tail to
++ * +0x60..+0x87; struct PcGenNode (func_800A19EC's arm) asserts this. */
++#define PC_GENNODE_SIZE 0x88
 +#else
  typedef struct UnkScriptDesc {
      s32 scripts_num;
      UnkScript *scripts[1];
-@@ -167,6 +205,7 @@ typedef struct UnkTextureDesc {
+@@ -167,6 +209,7 @@ typedef struct UnkTextureDesc {
      s32 textures_num;
      UnkTexture *textures[1];
  } UnkTextureDesc;
@@ -1531,7 +1535,7 @@
  
  void *gtlMalloc(u32 size, u32 alignment);
  void func_8009E834(GObj *arg0);
-@@ -259,6 +298,91 @@ void func_8009B72C(void *arg0, u8 arg1) {
+@@ -259,6 +302,91 @@ void func_8009B72C(void *arg0, u8 arg1) {
      *(UnkEmitter **)((u8 *)arg0 + 0x4C) = func_8009B5E8(arg1, *(u16 *)((u8 *)arg0 + 4));
  }
  
@@ -1623,7 +1627,7 @@
  void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *texture_desc) {
      s32 i, j;
  
-@@ -297,6 +421,7 @@ void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *text
+@@ -297,6 +425,7 @@ void func_8009B768(s32 bank_id, UnkScriptDesc *script_desc, UnkTextureDesc *text
          }
      }
  }
@@ -1631,7 +1635,7 @@
  
  GObj *func_8009B99C(s32 num) {
      s32 i;
-@@ -2663,6 +2788,618 @@ block_146:
+@@ -2663,6 +2792,618 @@ block_146:
      temp_s1_39->unk4 = 0;
      *arg2 = temp_s1_39 + 8;
  }
@@ -2250,7 +2254,21 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_8009E8F4.s")
  #endif
-@@ -3275,6 +4012,16 @@ block_105:
+@@ -2699,7 +3440,13 @@ GObj *func_800A04B8(s32 arg0) {
+ 
+     D_800D6A08 = (UnkParticle *) (D_800D6A0C = NULL);
+     for (i = arg0 - 1; i >= 0; i--) {
++#ifdef PORT
++        /* The LP64 node no longer fits the N64's 0x78 bytes (see
++         * PC_GENNODE_SIZE / struct PcGenNode at func_800A19EC). */
++        p = gtlMalloc(PC_GENNODE_SIZE, 8);
++#else
+         p = gtlMalloc(0x78, 4);
++#endif
+         if (p == NULL) {
+             return NULL;
+         }
+@@ -3275,6 +4022,16 @@ block_105:
          } while (var_s0 != NULL);
      }
  }
@@ -2267,27 +2285,211 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A09AC.s")
  #endif
-@@ -3461,6 +4208,19 @@ void *func_800A19EC(s32 arg0, s32 arg1) {
+@@ -3461,6 +4218,203 @@ void *func_800A19EC(s32 arg0, s32 arg1) {
      }
      return temp_v0;
  }
 +#elif defined(PORT)
-+/* PORT: still assembly on the matching build and the m2c sketch above is
-+ * not compilable; the particle/emitter object it would build also leans on
-+ * script tables whose LP64 layout is still unresolved. Scene setup calls
-+ * this per placed emitter (func_800A2550), so a weak abort stub would end
-+ * the run on the first scene with emitters; a NULL return is the
-+ * documented "emitter did not spawn" result every caller already checks
-+ * for. Effects stay absent until this is genuinely ported. */
++/* PORT: the generator/emitter spawner, from asm/nonmatchings/ovl1/ovl1/
++ * func_800A19EC.s (the sketch above is close, but the asm fixes the call
++ * shapes -- func_800A194C takes nothing, the D_800D6ADC callback only gets
++ * the node in $a0 -- and the store widths: sh at +0x54 for kind 2, sh at
++ * +0x74 for kind 5's sign flags). Pops a node off the free list via
++ * func_800A194C and fills it from bank (arg0 & 7)'s script record arg1.
++ *
++ * Node layout: struct PcGenNode is the SAME LP64 shape struct Pc2550Obj
++ * (func_800A2550's arm below) and struct Ovl1PNode already use -- the
++ * 8-byte `next` shifts the scalar block by +4, the two pointers at N64
++ * +0x48/+0x4C widen, and the N64 +0x50..+0x77 tail lands at +0x60..+0x87.
++ * The asserts pin the shared offsets; func_800A04B8's PORT branch sizes
++ * the pool nodes at PC_GENNODE_SIZE so the widened tail fits.
++ *
++ * Data: D_800D6A38/D_800D6A78/D_800D6A98 are native tables and the
++ * UnkTexture header is normalized in place (func_8009B768's arm), but by
++ * that arm's contract UnkScript interiors stay RAW BIG-ENDIAN ("converted
++ * at their own read sites"), so every script field is decoded here. The
++ * bytecode address is kept as a u32 like the bank tables (arena below
++ * 4 GB). unk48 is NULLed by the ROM itself; unk4C is NULLed here because
++ * the N64 relied on func_800A194C's word clear at +0x4C, which on LP64
++ * covers only half the widened slot. Kind 8's pitch term multiplies
++ * position X (just zeroed) by velocity X instead of velX*velX -- ROM
++ * quirk, kept. */
++struct PcGenNode {
++    /* 0x00 */ struct PcGenNode *next;
++    /* 0x08 */ u16 unk4;                 /* generator id (func_800A194C) */
++    /* 0x0A */ u16 unk6;                 /* flags (N64 +0x06) */
++    /* 0x0C */ u8 unk8;
++    /* 0x0D */ u8 unk9;                  /* kind */
++    /* 0x0E */ u8 unkA;
++    /* 0x0F */ u8 unkB;                  /* texture id byte */
++    /* 0x10 */ u16 unkC;                 /* particle lifetime */
++    /* 0x12 */ u16 unkE;                 /* generator lifetime */
++    /* 0x14 */ u32 unk10;                /* bytecode, host address as u32 */
++    /* 0x18 */ f32 unk14, unk18, unk1C;  /* position (N64 +0x14..) */
++    /* 0x24 */ f32 unk20, unk24, unk28;  /* velocity */
++    /* 0x30 */ f32 unk2C, unk30, unk34;  /* gravity, friction, size */
++    /* 0x3C */ f32 unk38, unk3C;
++    /* 0x44 */ f32 unk40;                /* update rate */
++    /* 0x48 */ f32 unk44;                /* frame */
++    /* 0x50 */ struct DObj *unk48;
++    /* 0x58 */ UnkEmitter *unk4C;
++    /* 0x60 */ f32 unk50;
++    /* 0x64 */ union { f32 f; u16 hw; } unk54; /* kind 2 (vortex) stores the
++                                                * u16 -- Ovl1PNode.unk54 */
++    /* 0x68 */ f32 unk58, unk5C, unk60, unk64, unk68, unk6C, unk70;
++    /* 0x84 */ u16 unk74;                /* kind 5 sign flags */
++};
++typedef char pc_gennode_check[
++    (__builtin_offsetof(struct PcGenNode, unk4) == 8 &&
++     __builtin_offsetof(struct PcGenNode, unk9) == 13 &&
++     __builtin_offsetof(struct PcGenNode, unkE) == 18 &&
++     __builtin_offsetof(struct PcGenNode, unk14) == 24 &&
++     __builtin_offsetof(struct PcGenNode, unk40) == 68 &&
++     __builtin_offsetof(struct PcGenNode, unk48) == 80 &&
++     __builtin_offsetof(struct PcGenNode, unk4C) == 88 &&
++     __builtin_offsetof(struct PcGenNode, unk50) == 96 &&
++     __builtin_offsetof(struct PcGenNode, unk54) == 100 &&
++     __builtin_offsetof(struct PcGenNode, unk74) == 132 &&
++     sizeof(struct PcGenNode) == PC_GENNODE_SIZE) ? 1 : -1];
++
++/* Raw big-endian UnkScript field reads (2/4-aligned inside the bank blob). */
++static u16 pc19ec_su16(const UnkScript *s, u32 off) {
++    u16 v;
++    __builtin_memcpy(&v, (const u8 *)s + off, 2);
++    return pc_be16(v);
++}
++static f32 pc19ec_sf32(const UnkScript *s, u32 off) {
++    union { u32 w; f32 f; } c;
++    __builtin_memcpy(&c.w, (const u8 *)s + off, 4);
++    c.w = pc_be32(c.w);
++    return c.f;
++}
++
 +void *func_800A19EC(s32 arg0, s32 arg1) {
-+    (void)arg0;
-+    (void)arg1;
-+    return NULL;
++    extern void (*D_800D6ADC)();
++    s32 bank = arg0 & 7;
++    struct PcGenNode *gn;
++    const UnkScript *script;
++    f32 s30, s34, s38;
++
++    if (bank >= 8) { /* dead check, kept from the ROM */
++        return NULL;
++    }
++    if (arg1 >= D_800D6A38[bank]) {
++        return NULL;
++    }
++    gn = (struct PcGenNode *) func_800A194C();
++    if (gn != NULL) {
++        script = D_800D6A78[bank][arg1];
++        gn->unkA = (u8) arg0;
++        gn->unk9 = (u8) pc19ec_su16(script, 0x00);   /* kind */
++        gn->unk6 = pc19ec_su16(script, 0x0A);        /* flags */
++        gn->unk8 = (u8) pc19ec_su16(script, 0x08);
++        gn->unkB = (u8) pc19ec_su16(script, 0x02);   /* texture id */
++        gn->unkC = pc19ec_su16(script, 0x06);        /* particle lifetime */
++        gn->unk14 = gn->unk18 = gn->unk1C = 0.0f;
++        gn->unkE = pc19ec_su16(script, 0x04);        /* generator lifetime */
++        gn->unk20 = pc19ec_sf32(script, 0x14);       /* velX */
++        gn->unk24 = pc19ec_sf32(script, 0x18);       /* velY */
++        gn->unk28 = pc19ec_sf32(script, 0x1C);       /* velZ */
++        gn->unk2C = pc19ec_sf32(script, 0x0C);       /* gravity */
++        gn->unk30 = pc19ec_sf32(script, 0x10);       /* friction */
++        gn->unk34 = pc19ec_sf32(script, 0x2C);       /* size */
++        gn->unk10 = (u32) (uintptr_t) ((const u8 *) script + 0x3C); /* bytecode */
++        gn->unk38 = pc19ec_sf32(script, 0x20);
++        gn->unk3C = pc19ec_sf32(script, 0x24);
++        gn->unk44 = 0.0f;
++        gn->unk40 = pc19ec_sf32(script, 0x28);
++        if (D_800D6A98[bank][pc19ec_su16(script, 0x02)]->flags != 0) {
++            gn->unk6 |= 0x10;
++        }
++        gn->unk48 = NULL;
++        gn->unk4C = NULL; /* N64: func_800A194C's word clear at +0x4C */
++        s30 = pc19ec_sf32(script, 0x30);
++        s34 = pc19ec_sf32(script, 0x34);
++        s38 = pc19ec_sf32(script, 0x38);
++        switch (gn->unk9) {
++        case 0:
++        case 3:
++        case 4:
++            if ((s30 == 0.0f) && (s34 == 0.0f)) {
++                gn->unk50 = 0.0f;
++                gn->unk54.f = 6.2831855f;
++            } else {
++                gn->unk50 = s30;
++                gn->unk54.f = s34;
++            }
++            break;
++        case 1:
++            gn->unk50 = s30;
++            gn->unk54.f = s34;
++            gn->unk58 = s38;
++            break;
++        case 2:
++            gn->unk54.hw = 0;
++            break;
++        case 6:
++        case 7:
++            if ((s30 == 0.0f) && (s34 == 0.0f)) {
++                gn->unk50 = 0.0f;
++                gn->unk54.f = 6.2831855f;
++            } else {
++                gn->unk50 = s30;
++                gn->unk54.f = s34;
++            }
++            gn->unk58 = s38;
++            break;
++        case 5:
++            gn->unk50 = s30;
++            gn->unk60 = s34;
++            gn->unk54.f = 0.0f;
++            gn->unk58 = 0.0f;
++            gn->unk5C = 0.0f;
++            gn->unk64 = 0.0f;
++            gn->unk68 = 0.0f;
++            gn->unk6C = 0.0f;
++            gn->unk74 = 0;
++            gn->unk70 = s38;
++            if (s30 < 0.0f) {
++                gn->unk74 = 1;
++            }
++            if (s34 < 0.0f) {
++                gn->unk74 |= 2;
++            }
++            if (s38 < 0.0f) {
++                gn->unk74 |= 4;
++            }
++            break;
++        case 8:
++            gn->unk50 = sqrtf((gn->unk20 * gn->unk20) + (gn->unk24 * gn->unk24)
++                              + (gn->unk28 * gn->unk28));
++            gn->unk54.f = atan2f(gn->unk24, sqrtf((gn->unk14 * gn->unk20)
++                                                  + (gn->unk28 * gn->unk28)));
++            gn->unk5C = atan2f(gn->unk28, gn->unk20);
++            gn->unk58 = s30;
++            gn->unk60 = s34;
++            break;
++        default:
++            if (D_800D6ADC != NULL) {
++                D_800D6ADC(gn);
++            }
++            break;
++        }
++        if (gn->unk8 & 2) {
++            UnkEmitter *xf = func_8009B5E8(0, gn->unk4);
++
++            gn->unk4C = xf;
++            if (xf != NULL) {
++                xf->unkBA = 1;
++            }
++        }
++    }
++    return gn;
 +}
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A19EC.s")
  #endif
-@@ -3863,6 +4623,167 @@ void func_800A2550(void *arg0) {
+@@ -3863,6 +4817,166 @@ void func_800A2550(void *arg0) {
          } while (!(temp_t9 & 0x80000000));
      }
  }
@@ -2316,11 +2518,10 @@
 + *
 + * The emitter object layout mirrors struct Ovl1PNode's LP64 shape (the
 + * 8-byte `next` shifts the scalar block by +4; the two pointers at N64
-+ * +0x48/+0x4C widen, putting the N64 +0x50.. block at +0x60). TODAY
-+ * func_800A19EC is still a weak NULL stub on this build, so the transform
-+ * body is exercised only once emitters exist; if kind-5 emitters ever
-+ * spawn, the free-list node size (0x78 on the N64) must be re-checked
-+ * against this widened layout. */
++ * +0x48/+0x4C widen, putting the N64 +0x50.. block at +0x60) -- the same
++ * layout struct PcGenNode (func_800A19EC's arm above) pins with asserts.
++ * func_800A19EC is now ported, and func_800A04B8 sizes the free-list nodes
++ * at PC_GENNODE_SIZE so the widened kind-5 tail fits. */
 +
 +struct Pc2550Obj {                       /* LP64 mirror of struct Ovl1PNode */
 +    /* 0x00 */ void *next;
@@ -6894,7 +7095,99 @@
  
  
  
-@@ -1036,6 +2008,32 @@ f32 func_800F8728(s32 arg0, f32 arg1, f32 arg2) {
+@@ -999,6 +1971,91 @@ block_21:
+         *temp_v1 = var_f0 + *(temp_a3_2->unk10 + (var_v0->unk3 * 4));
+     }
+ }
++#elif defined(PORT)
++/* PORT: track-parameter overflow handler (draft above, verified against
++ * asm/nonmatchings/ovl2/ovl2_2/func_800F8570.s). When D_800E6BD0[arg0]
++ * leaves [0,1], scan the current node's connector records for the exit at
++ * that end -- forward for connectors whose point index is 0 (underflow),
++ * backward for the ones at pointCount-1 (overflow) -- skipping connectors
++ * flagged 0xF0; a connector at the wrong point index (or no connectors at
++ * all) clamps the parameter to 0.0001/0.9999 instead. On a transition the
++ * node switches to the connector's target and the leftover distance is
++ * rescaled by the two track lengths around the target's keyframe value.
++ * Node record fields follow the func_800F8B1C precedent (ovl2_3.c): the
++ * connector count is the big-endian s16 kept as raw bytes (unkC<<8|unkD),
++ * connectors are untouched byte records behind the u32 unk8 slot, and the
++ * footer is this file's native PcTrackFooter. The ROM's exhausted scans
++ * fall out with the cursor one record past the run (forward) or one before
++ * it (backward) and still consume that record's bytes 2/3 -- replicated
++ * as-is, the reads stay inside the level blob. */
++void func_800F8570(s32 arg0) {
++    f32 *pT = &D_800E6BD0[arg0];
++    f32 t = *pT;
++    s32 *pNode = &D_800E5F90[arg0];
++    struct Unk80129114_4 *node;
++    struct PcTrackFooter *footer;
++    struct PcTrackFooter *newFooter;
++    u8 *conn;
++    u8 *c;
++    s32 n;
++    s32 i;
++    s32 dir;
++    f32 frac;
++    f32 f;
++
++    if (t >= 0.0f && t <= 1.0f) {
++        return;
++    }
++    node = &D_80129114->unk4[*pNode];
++    footer = (struct PcTrackFooter *) node->unk4;
++    n = (s16) ((node->unkC << 8) | node->unkD);
++    if (t < 0.0f) {
++        if (n == 0) {
++            *pT = 0.0001f;
++            return;
++        }
++        c = conn = (u8 *) (uintptr_t) node->unk8;
++        for (i = 0; i < n; i++, c += 4) {
++            if (c[0] != 0) {
++                *pT = 0.0001f;
++                return;
++            }
++            if (!(c[1] & 0xF0)) {
++                break;
++            }
++        }
++        dir = 0;
++        frac = -t;
++    } else {
++        s32 last;
++
++        if (n == 0) {
++            *pT = 0.9999f;
++            return;
++        }
++        conn = (u8 *) (uintptr_t) node->unk8;
++        last = footer->n - 1;
++        c = conn + (n - 1) * 4;
++        for (i = n - 1; i >= 0; i--, c -= 4) {
++            if (c[0] != last) {
++                *pT = 0.9999f;
++                return;
++            }
++            if (!(c[1] & 0xF0)) {
++                break;
++            }
++        }
++        dir = 1;
++        frac = t - 1.0f;
++    }
++    *pNode = c[2];
++    newFooter = (struct PcTrackFooter *) D_80129114->unk4[c[2]].unk4;
++    f = (footer->length * frac) / newFooter->length;
++    if (dir == 0) {
++        f = -f;
++    }
++    *pT = f + newFooter->keyframes[c[3]];
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_2/func_800F8570.s")
+ #endif
+@@ -1036,6 +2093,32 @@ f32 func_800F8728(s32 arg0, f32 arg1, f32 arg2) {
      func_800F8570(temp_f12, arg0);
      return sp20;
  }
@@ -7108,7 +7401,91 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800F8E6C.s")
  #endif
-@@ -618,7 +760,12 @@ s32 func_800F9438(s32 arg0) {
+@@ -594,6 +736,83 @@ block_9:
+     sp3F = 0;
+     func_800A5404(temp_f14_2, (bitwise void *) arg1, &sp34, var_a2_2, &sp3D);
+ }
++#elif defined(PORT)
++/* PORT: blend two 12-byte D_800D478C color records and hand the result to
++ * func_800A5404, from asm/nonmatchings/ovl2/ovl2_3/func_800F90C0.s (the m2c
++ * sketch above garbles the byte loops and the call args). Record selection:
++ * a kirby node flagged 0x10 blends by the entity's next Y between the
++ * node's unk10/unk12 heights, clamping to record unk9 above and unkA below;
++ * otherwise the track parameter D_800E6BD0 picks unk9->unkA on the first
++ * half and unkA->unkB on the second. D_800D478C is emitted as native u32
++ * words on this build, so the N64 byte reads become word shifts ((w >> 24)
++ * is the N64 byte 0) -- same rule as func_800F6830's PORT arm -- and the
++ * blended record is built in N64 byte order because func_800A5404 reads
++ * r,g,b BYTES. Bytes 0-5 blend unsigned, 6-8 blend as signed offsets biased
++ * by +100 (ROM truncates each the same way: first loop through the u32
++ * convert, second through trunc.w.s), bytes 9-11 are zeroed. */
++static void pc_read_478c(u8 *dst, u32 idx) {
++    extern u32 D_800D478C[];
++    s32 j;
++
++    for (j = 0; j < 12; j++) {
++        dst[j] = (u8) (D_800D478C[idx * 3 + (j / 4)] >> (24 - 8 * (j % 4)));
++    }
++}
++
++void func_800F90C0(s32 arg0, u8 *arg1) {
++    void func_800A5404(u8 *, u8 *);
++    struct TrackKirbyNode *node =
++        (struct TrackKirbyNode *) D_80129114->unk4[D_800E5F90[arg0]].unk0;
++    u8 recA[12];
++    u8 recB[12];
++    u8 out[12];
++    u32 idxA, idxB;
++    f32 t;
++    s32 j;
++
++    if (node->unkE & 0x10) {
++        s16 y = (s16) gEntitiesNextPosYArray[arg0];
++
++        idxA = node->unk9;
++        idxB = node->unkA;
++        if (y >= node->unk10) {
++            pc_read_478c(recA, idxA);
++            func_800A5404(arg1, recA);
++            return;
++        }
++        if (node->unk12 >= y) {
++            pc_read_478c(recA, idxB);
++            func_800A5404(arg1, recA);
++            return;
++        }
++        t = (f32) (node->unk10 - y) / (f32) (node->unk10 - node->unk12);
++    } else {
++        f32 par = D_800E6BD0[arg0];
++
++        if (par <= 0.5f) {
++            idxA = node->unk9;
++            idxB = node->unkA;
++            t = 2.0f * par;
++        } else {
++            idxA = node->unkA;
++            idxB = node->unkB;
++            t = (par - 0.5f) * 2.0f;
++        }
++    }
++    pc_read_478c(recA, idxA);
++    pc_read_478c(recB, idxB);
++    for (j = 0; j < 6; j++) {
++        out[j] = (u8) (u32) (((f32) (recB[j] - recA[j]) * t) + (f32) recA[j]);
++    }
++    for (j = 6; j < 9; j++) {
++        s32 a = (s8) recA[j] + 100;
++        s32 b = (s8) recB[j] + 100;
++
++        out[j] = (u8) (s32) (((f32) a + ((f32) (b - a) * t)) - 100.0f);
++    }
++    out[9] = out[10] = out[11] = 0;
++    func_800A5404(arg1, out);
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800F90C0.s")
+ #endif
+@@ -618,7 +837,12 @@ s32 func_800F9438(s32 arg0) {
      if (D_800BE4F8 != 1) {
          return 0;
      }
@@ -7121,7 +7498,7 @@
      if (!(node->unkE & 1)) {
          return 0;
      }
-@@ -725,6 +872,77 @@ f32 func_800F951C(s32 arg0, f32 arg1, s32 arg2, f32 arg3) {
+@@ -725,6 +949,77 @@ f32 func_800F951C(s32 arg0, f32 arg1, s32 arg2, f32 arg3) {
      }
      return var_f2;
  }
@@ -7199,7 +7576,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800F951C.s")
  #endif
-@@ -1025,6 +1243,73 @@ block_10:
+@@ -1025,6 +1320,73 @@ block_10:
      }
      return var_f20;
  }
@@ -7273,7 +7650,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800F9C94.s")
  #endif
-@@ -1121,6 +1406,72 @@ void func_800F9FDC(void *arg0, Vector *arg1, s32 arg2, s32 arg3) {
+@@ -1121,6 +1483,72 @@ void func_800F9FDC(void *arg0, Vector *arg1, s32 arg2, s32 arg3) {
      }
      func_800F9C94(var_f12, sp8C, arg0, arg1, var_f2_2, 0x3CA3D70A, arg3);
  }
@@ -7346,7 +7723,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800F9FDC.s")
  #endif
-@@ -1198,7 +1549,23 @@ void func_800FA438(s32 arg0, struct Ovl2CamState *arg1) {
+@@ -1198,7 +1626,23 @@ void func_800FA438(s32 arg0, struct Ovl2CamState *arg1) {
      f32 t;
  
      t = D_800E6BD0[arg0];
@@ -7370,7 +7747,7 @@
      arg1->unk0 = cam->unk0;
      arg1->unk2 = cam->unk1;
      arg1->unk4 = ((cam->unk24 - cam->unk20) * t) + cam->unk20;
-@@ -1273,6 +1640,45 @@ void func_800FA608(s32 arg0, void *arg1, void *arg2) {
+@@ -1273,6 +1717,45 @@ void func_800FA608(s32 arg0, void *arg1, void *arg2) {
      arg2->unk10 = arg2->unk4 - sp30;
      arg2->unk14 = arg2->unk8 - sp34;
  }
@@ -7416,7 +7793,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800FA608.s")
  #endif
-@@ -1430,6 +1836,87 @@ void func_800FA92C(s32 arg0, void *arg1, void *arg2) {
+@@ -1430,6 +1913,87 @@ void func_800FA92C(s32 arg0, void *arg1, void *arg2) {
          }
      }
  }
@@ -7504,7 +7881,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800FA92C.s")
  #endif
-@@ -1559,6 +2046,127 @@ block_31:
+@@ -1559,6 +2123,127 @@ block_31:
          D_801293D8 += 1;
      }
  }
@@ -7632,7 +8009,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_3/func_800FAC74.s")
  #endif
-@@ -1836,6 +2444,37 @@ s32 func_800FB914(s32 arg0) {
+@@ -1836,6 +2521,37 @@ s32 func_800FB914(s32 arg0) {
     from 21 to 5 -- it is what frees $a0 for var_a0; do not reintroduce a named temp. */
  #ifdef MIPS_TO_C
  
@@ -7670,7 +8047,7 @@
  void func_800FB9B4(void) {
      f32 *var_a0;
      f32 var_f0;
-@@ -1961,7 +2600,12 @@ void func_800FBE1C(void) {
+@@ -1961,7 +2677,12 @@ void func_800FBE1C(void) {
  void func_800FBF18(s32 arg0) {
      struct TrackCameraNode *cam;
  
@@ -8362,8 +8739,34 @@
      u32 i;
 --- a/src/ovl2/ovl2_7.c
 +++ b/src/ovl2/ovl2_7.c
-@@ -50,6 +50,14 @@ struct UnkBCA0 {
+@@ -42,14 +42,40 @@ struct ColRecord {
+ struct UnkBCA0 {
+     /* 0x00 */ union {
+         u32 w;
++#ifdef PORT
++        /* Little-endian: the N64's flag halfword and bitfields live in the
++         * TOP of the word. The anonymous struct makes .hw alias the upper
++         * u16 (what every `(hw & 7)` / halfword-store site means), and the
++         * reversed bitfield order puts a at bits 19-31 and b at 16-18 --
++         * the bits every `w >> 0x13` reader expects. Without this, writers
++         * and readers touched disjoint bits and all class checks read 0. */
++        struct {
++            u16 hwpad_;
++            u16 hw;
++        };
++        struct {
++            u32 rest : 16;
++            u32 b : 3;
++            u32 a : 13;
++        } f;
++#else
+         u16 hw;
+         struct {
+             u32 a : 13;
+             u32 b : 3;
+             u32 rest : 16;
          } f;
++#endif
      } flags;
      /* 0x04 */ struct ColRecord rec[5];
 +#ifdef PORT
@@ -8377,7 +8780,7 @@
  };
  
  extern struct UnkBCA0 D_8012BCA0;
-@@ -1288,6 +1296,44 @@ s32 func_80103B58(f32 *arg0, ? arg1, ? arg2, ? arg3, u32 *arg4) {
+@@ -1288,6 +1314,44 @@ s32 func_80103B58(f32 *arg0, ? arg1, ? arg2, ? arg3, u32 *arg4) {
      }
      return var_v0;
  }
@@ -8422,7 +8825,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_80103B58.s")
  #endif
-@@ -1742,8 +1788,37 @@ void func_80104FB8(void *arg0) {
+@@ -1742,8 +1806,37 @@ void func_80104FB8(void *arg0) {
      D_8012BD00.unk30 = (D_8012BD00.unk20 * 0.1f) + D_8012BD00.unk10;
  }
  #else
@@ -8460,7 +8863,7 @@
  
  void func_801050E0(struct PositionState *arg0) {
      f32 *temp_v0 = arg0->kirbyHeadPos;
-@@ -2299,6 +2374,12 @@ s32 func_801063F0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
+@@ -2299,6 +2392,12 @@ s32 func_801063F0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
      Vector *sp30;
  
      sp78 = 1.1f;
@@ -8473,7 +8876,7 @@
      sp54.x = BD00.unk1C;
      sp54.y = 0.0f;
      sp54.z = BD00.unk20;
-@@ -3011,6 +3092,145 @@ block_35:
+@@ -3011,6 +3110,145 @@ block_35:
      }
      return var_v0;
  }
@@ -8619,7 +9022,239 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_801078A0.s")
  #endif
-@@ -5298,8 +5518,58 @@ block_5:
+@@ -4428,7 +4666,11 @@ s32 func_8010B284(struct PositionState *arg0) {
+     sp40.x = sp4C.x;
+     sp40.z = sp4C.z;
+     if (func_80103EA0(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x1000;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x1000;
++#endif
+         return 1;
+     }
+     sp4C.x = BD00.unk4 + arg0->kirbyFootPos[0];
+@@ -4437,7 +4679,11 @@ s32 func_8010B284(struct PositionState *arg0) {
+     sp4C.z = BD00.unk8 + arg0->kirbyFootPos[2];
+     sp40.z = sp4C.z;
+     if (func_80103EA0(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x4000;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x4000;
++#endif
+         return 1;
+     }
+     sp4C.x = BD00.unkC + arg0->kirbyFootPos[0];
+@@ -4445,7 +4691,11 @@ s32 func_8010B284(struct PositionState *arg0) {
+     sp40.x = sp4C.x;
+     sp40.z = sp4C.z;
+     if (func_80103EA0(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x2000;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x2000;
++#endif
+         return 1;
+     }
+     return 0;
+@@ -4532,7 +4782,11 @@ s32 func_8010B67C(struct PositionState *arg0) {
+     sp40.z = sp4C.z + BD00.unk8;
+     sp40.y = sp4C.y;
+     if (func_8010423C(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 8;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 8;
++#endif
+         return 1;
+     }
+     sp4C.x = sp4C.x + BD00.unkC;
+@@ -4540,13 +4794,21 @@ s32 func_8010B67C(struct PositionState *arg0) {
+     sp4C.y = arg0->scale[2] + arg0->kirbyFootPos[1];
+     sp40.y = sp4C.y;
+     if (func_8010423C(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x20;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x20;
++#endif
+         return 1;
+     }
+     sp40.y = arg0->scale[1] + arg0->kirbyFootPos[1];
+     sp4C.y = sp40.y;
+     if (func_8010423C(&sp4C, &sp40, &sp34, 0, 0, 0, 0, 0) != 0) {
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x10;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x10;
++#endif
+         return 1;
+     }
+     return 0;
+@@ -4809,7 +5071,11 @@ s32 func_8010C184(struct PositionState *arg0) {
+     sp34.z = arg0->kirbyFootPos[2];
+     if (func_80103930(&sp40, &sp34, NULL, 0, arg0->kirbyFootPos, &D_8012BCDC, &D_8012BCD8, &D_8012BCD4) != 0) {
+         arg0->kirbyFootPos[1] -= arg0->scale[0];
++#ifdef PORT
++        D_8012BCA0.flags.hw = (D_8012BCA0.flags.hw & 7) | 0x8000;
++#else
+         D_8012BCA0.flags.hw = (*(u16 *) &D_8012BCA4[-1] & 7) | 0x8000;
++#endif
+     }
+     arg0->VI_Timer = D_8012BD40;
+     return 0;
+@@ -4939,6 +5205,29 @@ void func_8010C608(void *arg0) {
+     D_8012BD00.unk1C = -D_8012BD00.unk14;
+     D_8012BD00.unk20 = -D_8012BD00.unk18;
+ }
++#elif defined(PORT)
++/* Lateral probe basis with the 0.13 widening bias (draft above, named
++ * fields): feeds the BD00 offsets the wall-grab and ledge probes read. */
++void func_8010C608(struct PositionState *arg0) {
++    f32 c = cosf(arg0->faceAngle[2]);
++    f32 sn = sinf(arg0->faceAngle[2]);
++    f32 f0 = arg0->faceAngle[0] + (arg0->faceAngle[0] < 0.0f ? -0.13f : 0.13f);
++    f32 f1 = arg0->faceAngle[1] + (arg0->faceAngle[1] < 0.0f ? -0.13f : 0.13f);
++
++    BD00.unk4 = f0 * sn;
++    BD00.unk8 = f0 * c;
++    BD00.unkC = f1 * sn;
++    BD00.unk10 = f1 * c;
++    if (arg0->faceAngle[0] > 0.0f) {
++        BD00.unk14 = sn;
++        BD00.unk18 = c;
++    } else {
++        BD00.unk14 = -sn;
++        BD00.unk18 = -c;
++    }
++    BD00.unk1C = -BD00.unk14;
++    BD00.unk20 = -BD00.unk18;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_8010C608.s")
+ #endif
+@@ -5000,6 +5289,62 @@ s32 func_8010C734(void *arg0) {
+     }
+     return var_v0;
+ }
++#elif defined(PORT)
++/* PORT: six lateral wall probes from the entity position (draft above,
++ * verified against asm/nonmatchings/ovl2/ovl2_7/func_8010C734.s): after
++ * func_8010C608 refreshes the BD00 direction basis, probe from the foot
++ * X/Z at three heights (scale[0], scale[2], scale[1] -- ROM order) toward
++ * the primary offset (BD00 +4/+8, bits 1/4/2) and the secondary offset
++ * (BD00 +C/+10, bits 8/0x20/0x10), recording each hit in rec[2] resp.
++ * rec[3] of D_8012BCA0 and folding the bit into the flags word with the
++ * ROM's halfword store (sh keeps flags.f.rest). Returns 1 when any of the
++ * six bits landed. */
++/* func_801047F0's C is void: the N64 return was its tail call's $v0. This
++ * wrapper is its body with the func_80103B58 result kept (same pattern as
++ * pc_probe_f58 above). */
++static s32 pc_probe_47f0(Vector *a, Vector *b, f32 *tOut, Vector *hitOut,
++                         struct Normal **nOut, struct CollisionTriangle **triOut,
++                         s32 *typeOut) {
++    struct CollisionState newColState;
++
++    gCollisionState = &newColState;
++    newColState.currPos = *a;
++    newColState.nextPos = *b;
++    newColState.someNormal = NULL;
++    newColState.unk44 = func_801023FC;
++    newColState.unk40 = func_8010217C;
++    newColState.unk34 = NULL;
++    newColState.unk38 = NULL;
++    newColState.unk3C = NULL;
++    return func_80103B58(tOut, hitOut, nOut, triOut, (u32 *) typeOut);
++}
++
++s32 func_8010C734(struct PositionState *arg0) {
++    static const u8 heightIdx[3] = { 0, 2, 1 };
++    static const u16 hitBit[2][3] = { { 1, 4, 2 }, { 8, 0x20, 0x10 } };
++    Vector a, b;
++    s32 pass, k;
++
++    func_80105218(&D_8012BCA0);
++    func_8010C608(arg0);
++    for (pass = 0; pass < 2; pass++) {
++        struct ColRecord *rec = &D_8012BCA0.rec[pass == 0 ? 2 : 3];
++
++        a.x = arg0->kirbyFootPos[0];
++        a.z = arg0->kirbyFootPos[2];
++        b.x = a.x + (pass == 0 ? BD00.unk4 : BD00.unkC);
++        b.z = a.z + (pass == 0 ? BD00.unk8 : BD00.unk10);
++        for (k = 0; k < 3; k++) {
++            a.y = arg0->kirbyFootPos[1] + arg0->scale[heightIdx[k]];
++            b.y = a.y;
++            if (pc_probe_47f0(&a, &b, NULL, NULL, &rec->norm, &rec->tri, &rec->type) != 0) {
++                D_8012BCA0.flags.hw = ((((u32) D_8012BCA0.flags.w >> 0x13) | hitBit[pass][k]) * 8)
++                                    | (D_8012BCA0.flags.hw & 7);
++            }
++        }
++    }
++    return ((D_8012BCA0.flags.w >> 0x13) & 0x3F) ? 1 : 0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_8010C734.s")
+ #endif
+@@ -5061,6 +5406,56 @@ s32 func_8010CABC(void *arg0) {
+     }
+     return var_v0;
+ }
++#elif defined(PORT)
++/* PORT: identical to func_8010C734's arm above (verified against
++ * asm/nonmatchings/ovl2/ovl2_7/func_8010CABC.s), except the probes run
++ * through func_801048A4's collision predicates (func_801021BC) instead of
++ * func_801047F0's. */
++/* func_801048A4's C is void: the N64 return was its tail call's $v0. This
++ * wrapper is its body with the func_80103B58 result kept. */
++static s32 pc_probe_48a4(Vector *a, Vector *b, f32 *tOut, Vector *hitOut,
++                         struct Normal **nOut, struct CollisionTriangle **triOut,
++                         s32 *typeOut) {
++    struct CollisionState newColState;
++
++    gCollisionState = &newColState;
++    newColState.currPos = *a;
++    newColState.nextPos = *b;
++    newColState.someNormal = NULL;
++    newColState.unk44 = func_801023FC;
++    newColState.unk40 = func_801021BC;
++    newColState.unk34 = NULL;
++    newColState.unk38 = NULL;
++    newColState.unk3C = NULL;
++    return func_80103B58(tOut, hitOut, nOut, triOut, (u32 *) typeOut);
++}
++
++s32 func_8010CABC(struct PositionState *arg0) {
++    static const u8 heightIdx[3] = { 0, 2, 1 };
++    static const u16 hitBit[2][3] = { { 1, 4, 2 }, { 8, 0x20, 0x10 } };
++    Vector a, b;
++    s32 pass, k;
++
++    func_80105218(&D_8012BCA0);
++    func_8010C608(arg0);
++    for (pass = 0; pass < 2; pass++) {
++        struct ColRecord *rec = &D_8012BCA0.rec[pass == 0 ? 2 : 3];
++
++        a.x = arg0->kirbyFootPos[0];
++        a.z = arg0->kirbyFootPos[2];
++        b.x = a.x + (pass == 0 ? BD00.unk4 : BD00.unkC);
++        b.z = a.z + (pass == 0 ? BD00.unk8 : BD00.unk10);
++        for (k = 0; k < 3; k++) {
++            a.y = arg0->kirbyFootPos[1] + arg0->scale[heightIdx[k]];
++            b.y = a.y;
++            if (pc_probe_48a4(&a, &b, NULL, NULL, &rec->norm, &rec->tri, &rec->type) != 0) {
++                D_8012BCA0.flags.hw = ((((u32) D_8012BCA0.flags.w >> 0x13) | hitBit[pass][k]) * 8)
++                                    | (D_8012BCA0.flags.hw & 7);
++            }
++        }
++    }
++    return ((D_8012BCA0.flags.w >> 0x13) & 0x3F) ? 1 : 0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_8010CABC.s")
+ #endif
+@@ -5298,8 +5693,58 @@ block_5:
      return 0;
  }
  #else
@@ -8678,7 +9313,7 @@
  
  #ifdef MIPS_TO_C
  
-@@ -5537,6 +5807,65 @@ loop_17:
+@@ -5537,6 +5982,65 @@ loop_17:
          }
      }
  }
@@ -8744,6 +9379,52 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_8010DDA4.s")
  #endif
+--- a/src/ovl2/ovl2_8.c
++++ b/src/ovl2/ovl2_8.c
+@@ -366,6 +366,35 @@ s32 func_8010F9AC(struct UnkF9AC *arg0, struct UnkF9AC *arg1, struct UnkF9AC *ar
+     }
+ }
+ 
++#ifdef PORT
++/* These are views over the HOST PlySlot/CollSlot arenas (ovl2_9.c), whose
++ * LP64 layouts put the shape head/count/list at 32/40/48 in both (PlySlot's
++ * EntryInfo is 20 bytes + pad, CollSlot's CollInfo is 24). The N64-offset
++ * views read half of the info block as the head pointer and crashed the
++ * ply-vs-enemy sweep the moment an enemy entered a slot. Sizes must equal
++ * the host slot (56) because the sweep strides the arenas with these. */
++struct UnkFC30A {
++    s32 unk0;
++    s32 unk0hi_;
++    char pad4[24];
++    struct UnkF9AC *unk18;
++    s32 unk1C;
++    struct UnkF9AC *unk20;
++};
++
++struct UnkFC30B {
++    s32 unk0;
++    s32 unk0hi_;
++    char pad4[24];
++    struct UnkF9AC *unk1C;
++    s32 unk20;
++    struct UnkF9AC *unk24;
++};
++_Static_assert(sizeof(struct UnkFC30A) == 56, "PlySlot view size");
++_Static_assert(sizeof(struct UnkFC30B) == 56, "CollSlot view size");
++_Static_assert(__builtin_offsetof(struct UnkFC30A, unk18) == 32, "A head");
++_Static_assert(__builtin_offsetof(struct UnkFC30B, unk1C) == 32, "B head");
++#else
+ struct UnkFC30A {
+     /* 0x00 */ s32 unk0;
+     /* 0x04 */ char pad4[0x14];
+@@ -381,6 +410,7 @@ struct UnkFC30B {
+     /* 0x20 */ s32 unk20;
+     /* 0x24 */ struct UnkF9AC *unk24;
+ };
++#endif
+ 
+ /* The definition above takes `struct Unk8010E740 *`. This second, later
+  * declaration named a different tag, which gcc rejects outright and which
 --- a/src/ovl2/plylib.c
 +++ b/src/ovl2/plylib.c
 @@ -131,7 +131,18 @@ void animSetModelAnimation(struct DObj *dobj, union AnimCmd *animList, f32 time)
@@ -8931,7 +9612,7 @@
      }
  }
  
-@@ -947,6 +1105,119 @@ void func_8011D0FC(struct DObj *arg0, s32 kind, int arg2) {
+@@ -947,6 +1105,128 @@ void func_8011D0FC(struct DObj *arg0, s32 kind, int arg2) {
              break;
      }
  }
@@ -8950,25 +9631,34 @@
 + * base 0x8012844E vs columns 0x80128444/6 + r*0x1C); the blob is a
 + * halfword-for-halfword image of the ROM, so u16 reads are exact.
 + *
-+ * Case 13's generator objects come from func_800A19EC, still a weak
-+ * abort-on-call stub on this build; the GObj/OMMtxFloat3 field spelling
-+ * mirrors func_800B0F28's compiled PC code so it stays correct when that
-+ * system lands. PcOMMtxFloat3 is a local mirror of OMMtxFloat3
-+ * (include/DObj.h, not included by this TU): pointer then Vector, so the
-+ * Vector sits at +8 on LP64. */
++ * Case 13's generator objects come from func_800A19EC (ported in
++ * src/ovl1/ovl1.c). On the N64 their +0x48/+0x4C fields coincide with
++ * GObj's onAnimate/unk4C, which is why the ROM (and func_800B0F28's
++ * compiled PC code, which handles real GObjs) share the spelling; on LP64
++ * they do NOT -- the node's two pointers sit at +0x50/+0x58 (struct
++ * PcGenNode / Pc2550Obj in ovl1.c), so PcGenNodeRef mirrors just those two
++ * slots. PcOMMtxFloat3 is a local mirror of OMMtxFloat3 (include/DObj.h,
++ * not included by this TU): pointer then Vector, so the Vector sits at +8
++ * on LP64 -- the same shape as UnkEmitter's next pointer followed by its
++ * +4/+8/+C position floats, which is what the node's unk4C really is. */
 +void func_8011D0FC(struct DObj *arg0, s32 arg1, f32 arg2) {
-+    GObj *func_800A19EC(s32, s32);
++    void *func_800A19EC(s32, s32);
 +    void func_800BB468(u32, s32);
 +    struct PcOMMtxFloat3 {
 +        void *mtx;
 +        Vector v;
++    };
++    struct PcGenNodeRef { /* generator node: N64 +0x48/+0x4C on LP64 */
++        u8 pad[80];
++        struct DObj *unk48;
++        void *unk4C;
 +    };
 +    union {
 +        f32 f;
 +        s32 w;
 +    } bits;
 +    Vector sp20;
-+    GObj *gen;
++    struct PcGenNodeRef *gen;
 +    s32 snd;
 +    s32 idx;
 +
@@ -9030,7 +9720,7 @@
 +                    ((struct PcOMMtxFloat3 *) gen->unk4C)->v.z = sp20.z;
 +                    return;
 +                }
-+                gen->onAnimate = (void (*)(struct DObj *, s32, f32)) arg0;
++                gen->unk48 = arg0;
 +                return;
 +            }
 +        }
@@ -9051,7 +9741,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_8011D0FC.s")
  #endif
-@@ -1290,6 +1561,109 @@ block_42:
+@@ -1290,6 +1570,109 @@ block_42:
          func_800BB468(var_f12, 0, 0xB, 0x3C, var_a2);
      }
  }
@@ -9161,7 +9851,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_8011DD5C.s")
  #endif
-@@ -1537,6 +1911,100 @@ block_35:
+@@ -1537,6 +1920,100 @@ block_35:
          }
      }
  }
@@ -9262,7 +9952,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_8011E548.s")
  #endif
-@@ -1894,6 +2362,127 @@ block_82:
+@@ -1894,6 +2371,127 @@ block_82:
      case 3:                                         /* switch 2 */
      }
  }
@@ -9390,7 +10080,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_8011ED68.s")
  #endif
-@@ -2502,6 +3091,133 @@ block_14:
+@@ -2502,6 +3100,133 @@ block_14:
      }
      func_800A5404(&D_800D7010, (gKirbyState.damagePaletteIndex * 0x10) + temp_a2, temp_a2);
  }
@@ -9524,7 +10214,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_80120E74.s")
  #endif
-@@ -2953,6 +3669,99 @@ s32 func_8012209C(void) {
+@@ -2953,6 +3678,99 @@ s32 func_8012209C(void) {
  block_33:
      return 1;
  }
@@ -9624,7 +10314,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_8012209C.s")
  #endif
-@@ -3006,6 +3815,53 @@ s32 func_80122558(void) {
+@@ -3006,6 +3824,53 @@ s32 func_80122558(void) {
  block_13:
      return 0;
  }
@@ -9678,7 +10368,7 @@
  #else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/plylib/func_80122558.s")
  #endif
-@@ -3066,6 +3922,72 @@ s32 func_801226FC(void) {
+@@ -3066,6 +3931,72 @@ s32 func_801226FC(void) {
  block_16:
      return 0;
  }
@@ -10130,7 +10820,7 @@
 +#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/kirby/func_8016C558_ovl3.s")
 +#endif
- 
++
 +#ifdef PORT
 +/* PORT: the idle action coroutine (D_80196990_ovl3[0], run on the player's
 + * action thread process), from asm/nonmatchings/ovl3/kirby/
@@ -10310,7 +11000,7 @@
 +        D_800E9720[objId] = 0xF;
 +        for (;;) {
 +            s32 t = D_800E9720[objId];
-+
+ 
 +            D_800E9720[objId] = t - 1;
 +            if (t == 0) {
 +                break;
@@ -10332,7 +11022,119 @@
  
  typedef struct Unk80196C4C {
      u8 unk0[5];
-@@ -728,7 +1274,9 @@ void func_8016EF5C_ovl3(GObj *arg0) {
+@@ -460,7 +1006,111 @@ void func_8016DDE8_ovl3(GObj *arg0) {
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/kirby/func_8016DDE8_ovl3.s")
+ #endif
+ 
++#ifdef PORT
++/* Airborne action handler (via m2c, deps all compiled): the predicate list
++ * is D_80196C64_ovl3's big-endian bytes {1,5,9,8,7,6,0xF} (the PC data emits
++ * the two native words, same treatment as D_80196C6C_ovl3); the collision
++ * flags word clear is whole-word and endian-neutral; the ability-anim call
++ * follows the compiled sibling's (list, firstChild, 1.0f) convention. */
++void func_8016E15C_ovl3(GObj *arg0) {
++    extern u8 D_801903E0_ovl3[];
++    extern s32 D_800E8AE0[];
++    extern f32 D_800E6690[], D_800E64D0[], D_800E6850[];
++    extern f32 D_800E3750[], D_800E3210[], D_800E3C90[];
++    extern u8 D_8019395C_ovl3[];
++    s32 func_80122460(void);
++    s32 func_80179130_ovl3(void);
++    void func_8011EBD4(void);
++    void func_800BB468(s32, s32);
++    s32 func_8016854C_ovl3(s32, s32, f32);
++    u8 list[8] = { 1, 5, 9, 8, 7, 6, 0xF, 0 };
++    s32 id;
++
++    func_80153984_ovl3();
++    if (func_80151E94_ovl3(list) != 0) {
++        if (gKirbyState.unk4 == 1) {
++            gKirbyState.unk15C = (u32) (uintptr_t) D_801903E0_ovl3;
++        } else {
++            gKirbyState.unk15C = (u32) (uintptr_t) D_80190358_ovl3;
++        }
++        return;
++    }
++    if (gKirbyState.ceilingCollisionNext != 0) {
++        if (func_80122460() != 0) {
++            id = omCurrentObj->objId;
++            D_800E6690[id] = 0.0f;
++            D_800E64D0[id] = 0.0f;
++            D_800E6850[id] = 65535.0f;
++            D_800E3750[id] = 0.0f;
++            D_800E3210[id] = 0.0f;
++            D_800E3C90[id] = 65535.0f;
++            *(u32 *) D_8012BCA0 &= 7;
++            if (gKirbyState.unk4 == 1) {
++                gKirbyState.unk15C = (u32) (uintptr_t) D_801903E0_ovl3;
++            } else {
++                gKirbyState.unk15C = (u32) (uintptr_t) D_80190358_ovl3;
++            }
++            set_kirby_action_1(0xA, 0xD);
++            if (gKirbyState.unk4 == 2) {
++                gKirbyState.unk4 = 0;
++                gKirbyState.unkD = -3;
++            }
++            return;
++        }
++        id = omCurrentObj->objId;
++        if (!(D_800E8AE0[id] & 6) && gKirbyState.unk68 == 0
++            && ((s32 (*)(void *, s32)) func_8015449C_ovl3)(D_8019395C_ovl3, 0) != 0
++            && gKirbyState.unkD == 2) {
++            gKirbyState.unk4 = 0;
++            gKirbyState.unkD = -3;
++        }
++        D_800E3210[id] = 0.0f;
++        func_800BB468(0xB, 0xA);
++        if (func_80179130_ovl3() == 0) {
++            set_kirby_action_1(6, 6);
++        }
++    } else if (gKirbyState.unk30 != 0) {
++        if (func_80179130_ovl3() == 0) {
++            set_kirby_action_1(6, 6);
++        }
++    } else {
++        if (gKirbyState.isFullJump == 0) {
++            func_8011EBD4();
++        }
++        id = omCurrentObj->objId;
++        if ((D_800E83E0[id] & 0xFFFF) == 2) {
++            D_800E3750[id] = 0.0f;
++            D_800E3210[id] = 0.0f;
++            D_800E3C90[id] = 65535.0f;
++            func_800BB468(0xB, 0xA);
++            if (func_80179130_ovl3() == 0) {
++                set_kirby_action_1(6, 6);
++            }
++        } else if (!(D_800E8AE0[id] & 6) && !(gKirbyState.unk9 & 1)
++                   && gKirbyState.unkCC < D_800E3210[id] && gKirbyState.unk4 == 0) {
++            func_8016854C_ovl3((s32) (uintptr_t) D_80190F2C_ovl3,
++                               (s32) (uintptr_t) arg0->data.dobj->firstChild, 1.0f);
++        }
++    }
++    id = omCurrentObj->objId;
++    if (gKirbyState.horizontalCollision == 0) {
++        func_8011ED68();
++    } else {
++        D_800E6690[id] = 0.0f;
++        D_800E64D0[id] = 0.0f;
++        D_800E6850[id] = 65535.0f;
++    }
++    if (D_800E8AE0[id] & 6) {
++        func_800AECC0(1.0f);
++        func_800AED20(1.0f);
++        return;
++    }
++    func_800AECC0(2.0f);
++    func_800AED20(2.0f);
++}
++#else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/kirby/func_8016E15C_ovl3.s")
++#endif
+ 
+ #ifdef NON_MATCHING
+ /* 46/154: instruction-for-instruction exact, same length, same branches; every
+@@ -728,7 +1378,9 @@ void func_8016EF5C_ovl3(GObj *arg0) {
      curObjSleepForever();
  }
  
@@ -10342,7 +11144,7 @@
  
  void func_8016F6DC_ovl3(GObj *arg0) {
      *(s32 *) ((u8 *) &D_8012E7E8 + 8) = 0;
-@@ -995,6 +1543,128 @@ void func_8016FFF8_ovl3(GObj *arg0) {
+@@ -995,6 +1647,128 @@ void func_8016FFF8_ovl3(GObj *arg0) {
      }
  }
  
@@ -10832,7 +11634,7 @@
  
  s32 func_80152828_ovl3(f32 *arg0, f32 *arg1) {
      s32 ret;
-@@ -129,7 +247,217 @@ s32 func_80152828_ovl3(f32 *arg0, f32 *arg1) {
+@@ -129,9 +247,352 @@ s32 func_80152828_ovl3(f32 *arg0, f32 *arg1) {
      return ret;
  }
  
@@ -10865,7 +11667,11 @@
 + * from func_80103B58 (the C in ovl2_7.c declares it void). */
 +struct PortColRec3 { s32 type; struct CollisionTriangle *tri; void *norm; };
 +struct PortColBlock3 {
++#ifdef PORT
++    union { u32 w; struct { u16 hwpad_; u16 hw; }; } flags;  /* hw = top half, see ovl2_7.c */
++#else
 +    union { u32 w; u16 hw; } flags;
++#endif
 +    struct PortColRec3 rec[5];
 +    void *waterRec[3];
 +    u32 waterSrc[3];
@@ -11048,8 +11854,139 @@
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/ovl3_1/func_801529C0_ovl3.s")
 +#endif
  
++#ifdef PORT
++/* Swim-state watcher (via m2c): probes the water annex at foot, foot+h1 and
++ * foot+h1+h2, snapshotting the annex between probes (each func_8010DF9C
++ * call rewrites it), derives the in/entering/leaving state bits with the
++ * splash triggers, the water-flow push (direction * 22.5 degrees, speed as
++ * unsigned float), and the crossing velocity via func_8010E048 when only
++ * the foot is submerged. Annex offsets 128/152 are locked by the asserts in
++ * src/pc/pc_bss_whole.c; record fields are the native WaterData layout. */
++void func_801530BC_ovl3(f32 *h) {
++    extern u8 D_8012BCA0[];
++    extern s32 D_800E8AE0[];
++    s32 id = omCurrentObj->objId;
++    f32 probe[3];
++    f32 prev3[3];
++    f32 cur3[3];
++    f32 outN[24 / 4];
++    u8 *snap0rec[3], *snap1rec[3];
++    u32 snap0src[3], snap1src[3];
++    s32 idx0 = -1, idx1 = -1, idxIn = -1, idx2 = -1, chosen = -1;
++    u32 n, i;
++    s32 v;
++
++    probe[0] = gEntitiesNextPosXArray[id];
++    probe[1] = gEntitiesNextPosYArray[id];
++    probe[2] = gEntitiesNextPosZArray[id];
++    n = func_8010DF9C(probe);
++    for (i = 0; i < n && i < 3; i++) {
++        u8 *rec = *(u8 **) (D_8012BCA0 + 128 + i * 8);
++
++        if (rec != NULL && rec[4] == 1) {
++            idx0 = i;
++            for (n = 0; n < 3; n++) {
++                snap0rec[n] = *(u8 **) (D_8012BCA0 + 128 + n * 8);
++                snap0src[n] = *(u32 *) (D_8012BCA0 + 152 + n * 4);
++            }
++            break;
++        }
++    }
++    probe[1] = gEntitiesNextPosYArray[id] + h[0];
++    n = func_8010DF9C(probe);
++    for (i = 0; i < n && i < 3; i++) {
++        u8 *rec = *(u8 **) (D_8012BCA0 + 128 + i * 8);
++        u32 k;
++
++        if (rec == NULL) {
++            continue;
++        }
++        if (rec[4] == 1) {
++            idx1 = i;
++            idxIn = -1;
++            for (k = 0; k < 3; k++) {
++                snap1rec[k] = *(u8 **) (D_8012BCA0 + 128 + k * 8);
++                snap1src[k] = *(u32 *) (D_8012BCA0 + 152 + k * 4);
++            }
++            break;
++        }
++        if (rec[4] == 0 && idxIn == -1) {
++            idxIn = i;
++            for (k = 0; k < 3; k++) {
++                snap1rec[k] = *(u8 **) (D_8012BCA0 + 128 + k * 8);
++                snap1src[k] = *(u32 *) (D_8012BCA0 + 152 + k * 4);
++            }
++        }
++    }
++    probe[1] = gEntitiesNextPosYArray[id] + h[0] + h[1];
++    n = func_8010DF9C(probe);
++    for (i = 0; i < n && i < 3; i++) {
++        u8 *rec = *(u8 **) (D_8012BCA0 + 128 + i * 8);
++
++        if (rec != NULL && rec[4] == 1) {
++            idx2 = i;
++            break;
++        }
++    }
++    if (idx1 != -1 && snap1rec[idx1][5] == 1) {
++        chosen = idx1;
++    } else if (idxIn != -1 && snap1rec[idxIn][5] == 1) {
++        chosen = idxIn;
++    }
++    gKirbyState.unk152 = 0;
++    if (chosen != -1) {
++        u8 *rec = snap1rec[chosen];
++
++        if (rec[6] != 0) {
++            gKirbyState.unk152 = 1;
++            *(f32 *) &gKirbyState.unk134 = (f32) rec[7];
++            *(f32 *) &gKirbyState.unk130 = (f32) (rec[6] - 1) * 0.3926991f;
++        }
++    }
++    if (idx2 == -1 && idx1 == -1 && idx0 == -1) {
++        gKirbyState.unk14C = 0.0f;
++        gKirbyState.unk148 = 0.0f;
++        gKirbyState.unk144 = 0.0f;
++        D_800E8AE0[id] = 0;
++        return;
++    }
++    if (idx2 != -1 && idx1 != -1 && idx0 != -1) {
++        v = 7;
++        probe[0] = 0.0f;
++        probe[1] = 0.0f;
++        probe[2] = 0.0f;
++    } else {
++        if (idx2 == -1 && idx0 != -1) {
++            prev3[0] = gEntitiesPosXArray[id];
++            prev3[1] = gEntitiesNextPosYArray[id] + h[0] + h[1];
++            prev3[2] = gEntitiesPosZArray[id];
++            cur3[0] = gEntitiesNextPosXArray[id];
++            cur3[1] = gEntitiesNextPosYArray[id];
++            cur3[2] = gEntitiesNextPosZArray[id];
++            func_8010E048(snap0rec[idx0], snap0src[idx0], prev3, cur3, outN, probe);
++        }
++        v = (idx1 != -1) ? 3 : 1;
++    }
++    {
++        s32 was = D_800E8AE0[id] & 2;
++
++        if (was == 0 && (v & 2)) {
++            v |= 0xC0;
++        } else if (was != 0 && !(v & 2)) {
++            v |= 0xA0;
++        }
++    }
++    D_800E8AE0[id] = v;
++    gKirbyState.unk144 = probe[0];
++    gKirbyState.unk148 = probe[1];
++    gKirbyState.unk14C = probe[2];
++}
++#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl3/ovl3_1/func_801530BC_ovl3.s")
++#endif
  
+ #ifdef NON_MATCHING
+ void func_80153668_ovl3(void) {
 --- a/src/ovl4/ovl4_2.c
 +++ b/src/ovl4/ovl4_2.c
 @@ -246,7 +246,92 @@ s32 func_801524E4_ovl4(void) {
