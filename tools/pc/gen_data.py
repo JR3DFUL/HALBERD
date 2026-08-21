@@ -538,6 +538,11 @@ SUPPRESS_BSS = {
     'D_8012BCA0', 'D_8012BCA4', 'D_8012BCA8', 'D_8012BCB4', 'D_8012BCBC',
     'D_8012BCC0', 'D_8012BCC4', 'D_8012BCC8', 'D_8012BCCC', 'D_8012BCD0',
     'D_8012BCD4', 'D_8012BCD8', 'D_8012BCDC', 'D_8012BCE0',
+    # Camera free-look config (struct Ovl2CamOut, 0x3C bytes), whole in
+    # pc_bss_whole.c: func_800FBBB8/func_800F9974 memcpy the full struct
+    # and write past the first splinter.
+    'D_801292B0', 'D_801292C8', 'D_801292CC', 'D_801292D0', 'D_801292D4',
+    'D_801292D8', 'D_801292DC', 'D_801292E0',
 }
 
 

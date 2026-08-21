@@ -58,3 +58,22 @@ ALIAS(D_8012BCD4, D_8012BCA0, 104)   /* rec[4].type */
 ALIAS(D_8012BCD8, D_8012BCA0, 112)   /* rec[4].tri */
 ALIAS(D_8012BCDC, D_8012BCA0, 120)   /* rec[4].norm */
 ALIAS(D_8012BCE0, D_8012BCA0, 128)   /* water annex */
+
+/* Camera free-look config D_801292B0: one N64 object of 0x3C bytes (struct
+ * Ovl2CamOut in ovl2_3.c -- twelve f32 then three u32, scalar-only so the
+ * LP64 layout equals the N64 one), splintered by splat into a 0x18 head,
+ * six f32 scalars and the 0x10 D_801292E0 block. func_800FBBB8 and
+ * func_800F9974 (ovl2_3.c) memcpy the whole 0x3C to/from the D_80129270
+ * save area and write fields unk18..unk2C across the splinter boundary, and
+ * compiled code indexes D_801292C8 as f32[6] spanning C8..DF. Defined whole
+ * here (0x40 to absorb D_801292E0's full N64 extent); each splinter name is
+ * an alias at its NATIVE offset. */
+u8 D_801292B0[0x40] __attribute__((aligned(8)));
+
+ALIAS(D_801292C8, D_801292B0, 0x18)
+ALIAS(D_801292CC, D_801292B0, 0x1C)
+ALIAS(D_801292D0, D_801292B0, 0x20)
+ALIAS(D_801292D4, D_801292B0, 0x24)
+ALIAS(D_801292D8, D_801292B0, 0x28)
+ALIAS(D_801292DC, D_801292B0, 0x2C)
+ALIAS(D_801292E0, D_801292B0, 0x30)

@@ -164,9 +164,15 @@ static void ensure_registry(void) {
  * that reset yet; if some overlay turns out to depend on it, this is the
  * function that has to learn which spans are genuinely scratch. */
 int pc_overlay_intercept_load(struct Overlay *ovl) {
+    extern void pc_ovl_dispatch_note_load(void *);
+
     if (ovl == NULL) {
         return 1;
     }
+    /* Even though nothing is copied, RECORD the load: the cross-overlay VA
+     * dispatcher (src/pc/pc_ovl_dispatch.c) keys on which member of the
+     * ovl10..ovl17 VRAM window the game believes is mapped. */
+    pc_ovl_dispatch_note_load(ovl);
     pc_trace(PC_TR_DMA,
              "[dma] SKIP overlay load: rom %p..%p -> ram %p, bss %p..%p\n",
              ovl->startAddr, ovl->endAddr, ovl->RAMStart, ovl->bssStart,
