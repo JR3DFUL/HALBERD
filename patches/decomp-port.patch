@@ -5470,9 +5470,187 @@
  #endif
 --- a/src/ovl2/ovl2_10.c
 +++ b/src/ovl2/ovl2_10.c
-@@ -636,7 +636,177 @@ void func_80113300(struct GObj *arg0, s32 arg1) {
+@@ -634,9 +634,341 @@ void func_80113300(struct GObj *arg0, s32 arg1) {
+     }
+ }
  
++#ifdef PORT
++/* PORT: steady-state per-frame update of every dynamic-collision record,
++ * from asm/nonmatchings/ovl2/ovl2_10/func_801133C8.s. Same record walk,
++ * field map and vertex/plane retransform as func_80113F08 below (see its
++ * comment), with two differences: a translation-only record is refreshed
++ * only when its dirty flag is set (unk2 & 4) or the owning entity actually
++ * moved this frame (nonzero per-frame delta in D_800E3050/D_800E3210/
++ * D_800E33D0 -- the deltas func_80112B4C writes); and the process is not
++ * retargeted at the end -- func_80113F08 retargets itself HERE after the
++ * first frame, so this is the updater that keeps moving platforms
++ * animating. The ROM's translation-path plane loop copies the old D-term
++ * before overwriting it with the recomputed one; that dead store is
++ * dropped, as in F08's arm. */
++struct PcF08Model {
++    /* scalar mirror of Unk80114A14Model (defined further down this file) */
++    s32 unk0;
++    s32 unk4;  /* poly table, 0x14 stride, truncated host ptr */
++    s32 unk8;  /* poly count */
++    s32 unkC;  /* f32 point array (realloc'd), truncated host ptr */
++    s32 unk10; /* point count */
++    s32 unk14; /* plane table (realloc'd), 0x10 stride, truncated host ptr */
++    s32 unk18; /* plane count */
++};
++
++void func_8010DD8C(void);
++
++void func_801133C8(struct GObj *arg0) {
++    u32 i;
++    u32 g;
++    u32 k;
++    u32 c;
++
++    (void) arg0;
++    for (i = 0; i < (u32) D_8012D940; i++) {
++        struct struct8011BA10_temp *rec = &D_8012D948[i];
++        struct PcF08Model *m = (struct PcF08Model *) rec->unk4;
++        s32 slot = rec->unk1;
++        u8 *vflags = (u8 *) (uintptr_t) rec->unk10;
++        f32 *pts = (f32 *) (uintptr_t) m->unkC;
++        s16 *orig = (s16 *) (uintptr_t) rec->unkC;
++        u32 *ptrefs = (u32 *) (uintptr_t) rec->unk14;
++        f32 mn[3];
++        f32 mx[3];
++
++        if (rec->unk2 & 2) {
++            f32(*world)[4] = (f32(*)[4]) & rec->unk58;
++
++            for (k = 0; k < (u32) m->unk10; k++) {
++                vflags[k] = 0;
++            }
++            mn[0] = mn[1] = mn[2] = 30000.0f;
++            mx[0] = mx[1] = mx[2] = -30000.0f;
++            func_80113028((f32(*)[4]) & rec->unk18, world);
++            func_80112CD4(slot, world);
++            for (g = 1; g < (u32) m->unk8; g++) {
++                u16 *poly = (u16 *) (uintptr_t) (m->unk4 + (g * 0x14));
++
++                for (c = 0; c < 3; c++) {
++                    u32 vi = poly[c];
++
++                    if (vflags[vi] == 0) {
++                        f32 *out = &pts[vi * 3];
++
++                        func_80112F70(world, out, &orig[vi * 3]);
++                        vflags[vi] = 1;
++                        if (out[0] < mn[0]) {
++                            mn[0] = out[0];
++                        }
++                        if (out[1] < mn[1]) {
++                            mn[1] = out[1];
++                        }
++                        if (out[2] < mn[2]) {
++                            mn[2] = out[2];
++                        }
++                        if (mx[0] < out[0]) {
++                            mx[0] = out[0];
++                        }
++                        if (mx[1] < out[1]) {
++                            mx[1] = out[1];
++                        }
++                        if (mx[2] < out[2]) {
++                            mx[2] = out[2];
++                        }
++                    }
++                }
++            }
++            for (k = 1; k < (u32) m->unk18; k++) {
++                f32 *src = (f32 *) (uintptr_t) (rec->unk8 + (k * 0x10));
++                f32 *dst = (f32 *) (uintptr_t) (m->unk14 + (k * 0x10));
++                f32 *pt = (f32 *) (uintptr_t) ptrefs[k];
++                f32 x = src[0];
++                f32 y = src[1];
++                f32 z = src[2];
++
++                dst[0] = (world[0][0] * x) + (world[1][0] * y) +
++                         (world[2][0] * z);
++                dst[1] = (world[0][1] * x) + (world[1][1] * y) +
++                         (world[2][1] * z);
++                dst[2] = (world[0][2] * x) + (world[1][2] * y) +
++                         (world[2][2] * z);
++                dst[3] = -((dst[0] * pt[0]) + (dst[1] * pt[1]) +
++                           (dst[2] * pt[2]));
++            }
++        } else if ((rec->unk2 & 4) || (D_800E3050[slot] != 0.0f) ||
++                   (D_800E3210[slot] != 0.0f) || (D_800E33D0[slot] != 0.0f)) {
++            f32 px = gEntitiesNextPosXArray[slot];
++            f32 py = gEntitiesNextPosYArray[slot];
++            f32 pz = gEntitiesNextPosZArray[slot];
++
++            for (k = 0; k < (u32) m->unk10; k++) {
++                vflags[k] = 0;
++            }
++            mn[0] = mn[1] = mn[2] = 30000.0f;
++            mx[0] = mx[1] = mx[2] = -30000.0f;
++            for (g = 1; g < (u32) m->unk8; g++) {
++                u16 *poly = (u16 *) (uintptr_t) (m->unk4 + (g * 0x14));
++
++                for (c = 0; c < 3; c++) {
++                    u32 vi = poly[c];
++
++                    if (vflags[vi] == 0) {
++                        s16 *in = &orig[vi * 3];
++                        f32 *out = &pts[vi * 3];
++
++                        out[0] = (f32) in[0] + px;
++                        out[1] = (f32) in[1] + py;
++                        out[2] = (f32) in[2] + pz;
++                        vflags[vi] = 1;
++                        if (out[0] < mn[0]) {
++                            mn[0] = out[0];
++                        }
++                        if (out[1] < mn[1]) {
++                            mn[1] = out[1];
++                        }
++                        if (out[2] < mn[2]) {
++                            mn[2] = out[2];
++                        }
++                        if (mx[0] < out[0]) {
++                            mx[0] = out[0];
++                        }
++                        if (mx[1] < out[1]) {
++                            mx[1] = out[1];
++                        }
++                        if (mx[2] < out[2]) {
++                            mx[2] = out[2];
++                        }
++                    }
++                }
++            }
++            for (k = 1; k < (u32) m->unk18; k++) {
++                f32 *src = (f32 *) (uintptr_t) (rec->unk8 + (k * 0x10));
++                f32 *dst = (f32 *) (uintptr_t) (m->unk14 + (k * 0x10));
++                f32 *pt = (f32 *) (uintptr_t) ptrefs[k];
++
++                dst[0] = src[0];
++                dst[1] = src[1];
++                dst[2] = src[2];
++                dst[3] = -((src[0] * pt[0]) + (src[1] * pt[1]) +
++                           (src[2] * pt[2]));
++            }
++        } else {
++            /* Static record that has not moved this frame: the ROM skips
++             * the retransform AND the bounding-box store. */
++            continue;
++        }
++        rec->unkA0 = mn[0];
++        rec->unkA4 = mn[1];
++        rec->unkA8 = mn[2];
++        rec->unkAC = mx[0];
++        rec->unkB0 = mx[1];
++        rec->unkB4 = mx[2];
++    }
++    func_8010DD8C();
++}
++#else
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_10/func_801133C8.s")
++#endif
  
 +#ifdef PORT
 +/* PORT: first-frame refresh of every dynamic-collision record, from
@@ -5487,21 +5665,7 @@
 + * pointers in rec->unk14 are the truncated host pointers func_80114A14's
 + * NON_MATCHING body stores, so they widen back through uintptr_t. The
 + * process then retargets itself at func_801133C8 (the steady-state
-+ * updater, still asm-only; its weak stub logs once under KIRBY_PC_TRACE,
-+ * so moving platforms hold their first-frame pose instead of animating). */
-+struct PcF08Model {
-+    /* scalar mirror of Unk80114A14Model (defined further down this file) */
-+    s32 unk0;
-+    s32 unk4;  /* poly table, 0x14 stride, truncated host ptr */
-+    s32 unk8;  /* poly count */
-+    s32 unkC;  /* f32 point array (realloc'd), truncated host ptr */
-+    s32 unk10; /* point count */
-+    s32 unk14; /* plane table (realloc'd), 0x10 stride, truncated host ptr */
-+    s32 unk18; /* plane count */
-+};
-+
-+void func_801133C8(struct GObj *);
-+
++ * updater, ported above). struct PcF08Model is defined in that block. */
 +void func_80113F08(struct GObj *arg0) {
 +    u32 i;
 +    u32 g;
@@ -5648,7 +5812,7 @@
  
  void func_80114974(void) {
      struct GObj *sp1C;
-@@ -768,6 +938,18 @@ s32 func_80114DBC(s32 arg0, s32 arg1) {
+@@ -768,6 +1100,18 @@ s32 func_80114DBC(s32 arg0, s32 arg1) {
      void *temp;
      struct Unk80124E14 *p;
  
@@ -8271,7 +8435,153 @@
      sp54.x = BD00.unk1C;
      sp54.y = 0.0f;
      sp54.z = BD00.unk20;
-@@ -5537,6 +5589,65 @@ loop_17:
+@@ -3011,6 +3063,145 @@ block_35:
+     }
+     return var_v0;
+ }
++#elif defined(PORT)
++/* Ceiling/head probe pass (draft above, via m2c): four upward probes (center,
++ * two lateral offsets from the BD00 direction basis, and when the center
++ * missed, two short foot-height probes), keeping the nearest ceiling in
++ * rec[0] and D_8012BD34, then folding the hit class into the flags word. */
++/* func_80103F58's C is void: the N64 return was its tail call's $v0. This
++ * wrapper is its body with the func_80103B58 result kept. */
++static s32 pc_probe_f58(Vector *a, Vector *b, struct Normal *dir2,
++                        f32 *tOut, Vector *hitOut, struct Normal **nOut,
++                        struct CollisionTriangle **triOut, s32 *typeOut) {
++    struct CollisionState newColState;
++
++    gCollisionState = &newColState;
++    newColState.currPos = *a;
++    newColState.nextPos = *b;
++    newColState.someNormal = NULL;
++    newColState.unk44 = func_80102364;
++    newColState.unk40 = func_80101D50;
++    newColState.unk34 = NULL;
++    newColState.unk38 = NULL;
++    newColState.unk3C = dir2;
++    return func_80103B58(tOut, hitOut, nOut, triOut, (u32 *) typeOut);
++}
++
++s32 func_801078A0(struct PositionState *arg0, struct UnkBCA0 *arg1) {
++    Vector head, foot, dir, hit;
++    struct Normal *n;
++    struct CollisionTriangle *tri;
++    s32 type;
++    s32 cls = 0;
++    s32 centerHit;
++    f32 best = 0.0f;
++    s32 got;
++
++    dir.x = 0.0f;
++    dir.y = -1.0f;
++    dir.z = 0.0f;
++    head.x = arg0->kirbyHeadPos[0];
++    head.y = arg0->kirbyHeight[1];
++    head.z = arg0->kirbyHeadPos[2];
++    foot.x = arg0->kirbyFootPos[0];
++    foot.y = arg0->kirbyFootPos[1] + arg0->scale[2];
++    foot.z = arg0->kirbyFootPos[2];
++    if (func_801039E8(&head, &foot, &dir, 0, (s32) &D_8012BD34, (s32) &arg1->rec[0].norm,
++                      (s32) &arg1->rec[0].tri, (s32) &arg1->rec[0].type) != 0) {
++        cls = 0x200;
++        centerHit = 1;
++        best = BD00.unk38;
++    } else {
++        centerHit = 0;
++    }
++    head.x = arg0->kirbyGroundPath[0];
++    head.z = arg0->kirbyGroundPath[1];
++    foot.x = arg0->kirbyFootPos[0] + BD00.unk4;
++    foot.z = arg0->kirbyFootPos[2] + BD00.unk8;
++    if (func_801039E8(&head, &foot, &dir, 0, (s32) &hit, (s32) &n, (s32) &tri, (s32) &type) != 0) {
++        got = 0;
++        if (cls == 0) {
++            got = 1;
++            best = -((n->x * (hit.x - BD00.unk4)) + (n->z * (hit.z - BD00.unk8)) + n->originOffset) / n->y;
++        } else if (n != arg1->rec[0].norm) {
++            f32 t = -((n->x * (hit.x - BD00.unk4)) + (n->z * (hit.z - BD00.unk8)) + n->originOffset) / n->y;
++
++            if (best < t) {
++                best = t;
++                got = func_80108858(&D_8012BD34, &hit, arg1->rec[0].norm, 1.0f) != 0;
++            }
++        }
++        if (got) {
++            D_8012BD34 = hit;
++            cls = 0x800;
++            arg1->rec[0].norm = n;
++            arg1->rec[0].tri = tri;
++            arg1->rec[0].type = type;
++        }
++    }
++    head.x = arg0->kirbyHeadPath[0];
++    head.z = arg0->kirbyHeadPath[1];
++    foot.x = arg0->kirbyFootPos[0] + BD00.unkC;
++    foot.z = arg0->kirbyFootPos[2] + BD00.unk10;
++    if (func_801039E8(&head, &foot, &dir, 0, (s32) &hit, (s32) &n, (s32) &tri, (s32) &type) != 0) {
++        got = 0;
++        if (cls == 0) {
++            got = 1;
++            best = -((n->x * (hit.x - BD00.unkC)) + (n->z * (hit.z - BD00.unk10)) + n->originOffset) / n->y;
++        } else if (n != arg1->rec[0].norm) {
++            f32 t = -((n->x * (hit.x - BD00.unkC)) + (n->z * (hit.z - BD00.unk10)) + n->originOffset) / n->y;
++
++            if (best < t) {
++                best = t;
++                got = func_80108858(&D_8012BD34, &hit, arg1->rec[0].norm, 1.0f) != 0;
++            }
++        }
++        if (got) {
++            D_8012BD34 = hit;
++            cls = 0x400;
++            arg1->rec[0].norm = n;
++            arg1->rec[0].tri = tri;
++            arg1->rec[0].type = type;
++        }
++    }
++    if (centerHit == 0) {
++        head.x = foot.x = arg0->kirbyFootPos[0] + BD00.unk4;
++        head.y = arg0->kirbyFootPos[1] + arg0->scale[1];
++        foot.y = arg0->kirbyFootPos[1] + arg0->scale[2];
++        head.z = foot.z = arg0->kirbyFootPos[2] + BD00.unk8;
++        if (pc_probe_f58(&head, &foot, &dir, NULL, &hit, &n, &tri, &type) != 0) {
++            got = cls == 0
++                || (n != arg1->rec[0].norm
++                    && best < -((n->x * arg0->kirbyHeadPos[0]) + (n->z * arg0->kirbyHeadPos[2]) + n->originOffset) / n->y);
++            if (got) {
++                D_8012BD34 = hit;
++                cls = 0x800;
++                arg1->rec[0].norm = n;
++                arg1->rec[0].tri = tri;
++                arg1->rec[0].type = type;
++            }
++        }
++        head.x = foot.x = arg0->kirbyFootPos[0] + BD00.unkC;
++        head.z = foot.z = arg0->kirbyFootPos[2] + BD00.unk10;
++        if (pc_probe_f58(&head, &foot, &dir, NULL, &hit, &n, &tri, &type) != 0) {
++            got = cls == 0
++                || (n != arg1->rec[0].norm
++                    && best < -((n->x * arg0->kirbyHeadPos[0]) + (n->z * arg0->kirbyHeadPos[2]) + n->originOffset) / n->y);
++            if (got) {
++                D_8012BD34 = hit;
++                cls = 0x400;
++                arg1->rec[0].norm = n;
++                arg1->rec[0].tri = tri;
++                arg1->rec[0].type = type;
++            }
++        }
++    }
++    if (cls != 0) {
++        arg1->flags.hw = ((((u32) arg1->flags.w >> 0x13) | cls) * 8) | (arg1->flags.hw & 7);
++        return 1;
++    }
++    return 0;
++}
+ #else
+ #pragma GLOBAL_ASM("asm/nonmatchings/ovl2/ovl2_7/func_801078A0.s")
+ #endif
+@@ -5537,6 +5728,65 @@ loop_17:
          }
      }
  }
