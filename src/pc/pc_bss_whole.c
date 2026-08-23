@@ -22,7 +22,8 @@ ALIAS(D_800F03C5, D_800ED510, 0x2EB5)
 /* Collision result block D_8012BCA0: one N64 object of 0x58 bytes (flags,
  * five ColRecords, then the water annex), splintered into 14 doubled bss
  * fragments on PC while compiled code writes rec[2..4] far past the first
- * one. Defined whole here at the LP64 layout of struct UnkBCA0 (ovl2_7.c);
+ * one. Defined whole here at the LP64 layout of struct CollisionResult
+ * (ovl2_7.c, formerly spelled UnkBCA0);
  * every splinter name becomes an alias at its LP64-equivalent offset.
  * D_8012BCA4 is special: compiled code reads the flags halfword through
  * `&D_8012BCA4[-1]`, so it must sit at base+4 (N64 adjacency), not at
