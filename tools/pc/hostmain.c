@@ -11,7 +11,16 @@
 #include <stdio.h>
 
 extern void cboot(void);
-extern void pc_stub_report(void);
+
+/* The stub layer's end-of-run summary. It exists only on the tools/pc/link.sh
+ * path, which generates build/pc/stubs.c and defines this STRONGLY, so that
+ * definition wins there. The honest link (tools/pc/link.py, and the Makefile's
+ * `link` target) has no stub layer at all and there is nothing to report, so
+ * the weak do-nothing below is the whole truth for it. Without this the
+ * stub-free link failed on one undefined reference -- from the port's own
+ * entry file, which was the only thing standing between it and a binary. */
+__attribute__((weak)) void pc_stub_report(void) {
+}
 
 /* asm/entry.s does two things: zero 0x589B0 bytes of RAM starting at
    gEntryStack, then jump to cboot with $sp pointing into gIdleThread.

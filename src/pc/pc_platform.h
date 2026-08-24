@@ -137,6 +137,33 @@ void pc_trace(unsigned bit, const char *fmt, ...);
 
 void pc_stub_notice(const char *file, int line, const char *what);
 
+/* -------------------------------------------------------------------------
+ * Boot progress, src/pc/pc_progress.c.
+ *
+ * Named milestones plus a fatal-signal trap, so "how far did it get" has an
+ * answer that a make target can read. The stages are ordered and the recorded
+ * one only ever moves forward; see that file for where each name comes from.
+ * KIRBY_PC_PROGRESS=1 logs every transition, and the one-line [verdict] is
+ * printed unconditionally however the process ends.
+ * ------------------------------------------------------------------------- */
+#define PC_STAGE_START       0
+#define PC_STAGE_OSINIT      1
+#define PC_STAGE_THREAD      2
+#define PC_STAGE_RETRACE     3
+#define PC_STAGE_GFXTASK     4
+#define PC_STAGE_LOGOS       5
+#define PC_STAGE_OPENING     6
+#define PC_STAGE_TITLE       7
+#define PC_STAGE_DEMO        8
+#define PC_STAGE_MENU        9
+#define PC_STAGE_LEVELSELECT 10
+#define PC_STAGE_GAMEPLAY    11
+
+void pc_progress_init(void);
+void pc_progress_mark(int stage);
+void pc_progress_tick(void);
+void pc_progress_report(const char *outcome);
+
 /* Temporary hang instrumentation, src/pc/pc_dbg.c. KIRBY_PC_PUMPDBG=1. */
 void pc_dbg_init(void);
 extern unsigned long pc_dbg_pump_call, pc_dbg_pump_reent, pc_dbg_pump_nosched,

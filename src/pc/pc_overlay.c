@@ -52,12 +52,22 @@
  * emitted as absolute symbols with the ROM's real values, which is exactly
  * what kirby.ld does on the N64 side.
  *
- * ONLY ovl1 IS HERE, and that is a measurement rather than laziness: it is
- * the only overlay whose descriptor is built from linker symbols. The other
- * nineteen live in assembly data that is not decompiled yet, so their bounds
- * cannot be known from C at all today. src/pc/os_pi.c's second test -- refuse
- * any DMA landing in the binary's own text -- is what covers them in the
- * meantime, and it needs no table.
+ * ovl1 IS THE ONLY OVERLAY WITH A FULL SET HERE, and that is a measurement
+ * rather than laziness: it is the only overlay whose descriptor is built from
+ * linker symbols in C. The other nineteen have their descriptors in assembly
+ * data (asm/data/ovl1/ovl1_2.data.s, translated into build/pc/data), and those
+ * records name each overlay's own bss bounds. Nine of those names resolve
+ * against the translated bss listings and are emitted as --defsym by
+ * tools/pc/gen_defsyms.py; see segment_bounds() there.
+ *
+ * ovl20 IS THE ONE THAT CANNOT, and it gets a span below. Its whole segment --
+ * text, data and bss -- is still raw: no listing declares a single label in
+ * 0x80300160..0x80300220, so there is no translated symbol for a --defsym to
+ * be relative to. Its 0xC0 bytes are therefore reserved here, the same way
+ * ovl1's are.
+ *
+ * src/pc/os_pi.c's second test -- refuse any DMA landing in the binary's own
+ * text -- is what covers the remaining overlays, and it needs no table.
  */
 #include <ultra64.h>
 #include <stddef.h>
@@ -98,6 +108,30 @@ __asm__(
     "   .set   ovl1_ROM_START, 0x43790\n"
     "   .globl ovl1_ROM_END\n"
     "   .set   ovl1_ROM_END,   0x7EC10\n");
+
+/* ovl20's bss, 0x80300160..0x80300220 on N64.
+ *
+ * The tamper-check overlay is 0x160 bytes of code and data with 0xC0 bytes of
+ * bss behind it, and none of it has been disassembled into a listing -- so
+ * unlike ovl2 and ovl10..ovl17 there is no translated symbol inside the range
+ * that a --defsym could hang off. gOverlayTable's last record uses
+ * ovl20_BSS_START twice, as its dataEnd and as its bssStart, and pointed at
+ * nothing at all before this.
+ *
+ * Real .bss, at the true size, with END - START equal to the hardware value,
+ * so the record stays self-consistent for the same reason ovl1's does. Nothing
+ * writes it today: pc_overlay_intercept_load() returns 1 for every descriptor,
+ * so the bzero that would use these two never runs. */
+__asm__(
+    "   .section .bss\n"
+    "   .balign 16\n"
+    "   .globl ovl20_BSS_START\n"
+    "ovl20_BSS_START:\n"
+    "   .space 0xC0\n"          /* 0x80300160..0x80300220 */
+    "   .globl ovl20_BSS_END\n"
+    "ovl20_BSS_END:\n"
+    "   .space 4\n"
+    "   .text\n");
 
 extern u8 ovl1_VRAM[];
 extern u8 ovl1_BSS_END[];

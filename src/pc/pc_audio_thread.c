@@ -147,12 +147,32 @@ static u8 sBgmPlayerStatus[8];
 static s32 sBgmSongId[8];
 static u8 sBgmSeqData[2][0x4000];
 
-extern u8 *auSoundPriority;
-extern u8 *auSoundIdleCounter;
-extern f32 *auSoundPitch;
-extern u16 *auSoundVolume;
-extern u8 *auSoundPan;
-extern u8 *auSoundReverbAmt;
+/* THE SIX auSound* POINTERS ARE DEFINED HERE, not merely referenced, and that
+ * is a measurement rather than a choice.
+ *
+ * src/main/audio.h declares them (lines 195-200) and NOTHING ELSE IN THE TREE
+ * mentions them -- not one decompiled function, and not the matching build
+ * either: `nm build/kirby.us.elf | grep auSound` finds only auSoundQuality.
+ * They are names the audio header carries ahead of the decompilation; the
+ * per-sound arrays they will eventually stand for are still anonymous bss
+ * inside the sound player, and auCreatePlayers, the function that carves them
+ * out of auHeap, is still a #pragma.
+ *
+ * So `extern` here left six symbols that no object in the native link defines,
+ * and they were the largest single entry in `gap.py`'s "libc / other" bucket.
+ * Defining them keeps this file's stand-in intact -- the arrays below are its
+ * whole point -- and costs six pointers.
+ *
+ * WHEN THE AUDIO BSS IS NAMED, this becomes a duplicate definition and the
+ * link says so loudly, which is the outcome to want: at that moment the real
+ * storage exists and pc_au_stand_in_state() should stop inventing it. Delete
+ * these six definitions then and put the `extern`s back. */
+u8 *auSoundPriority;
+u8 *auSoundIdleCounter;
+f32 *auSoundPitch;
+u16 *auSoundVolume;
+u8 *auSoundPan;
+u8 *auSoundReverbAmt;
 extern u8 *auBGMPlayerStatus;
 extern s32 *auBGMSongId;
 extern u8 *auBGMSeqData[2];

@@ -11,6 +11,13 @@
 # Weak stubs mean a real definition always wins, so nothing here needs
 # regenerating in any particular order as functions land.
 #
+# THIS IS NOT THE BUILD'S LINK TARGET, and must not become it. A weak stub
+# lets a function that was never decompiled pass for ported, which the
+# project's rule forbids, and an abort-on-call stub makes a binary that is
+# wrong rather than one that will not link. `make -f Makefile.pc link` runs
+# tools/pc/link.py instead: no stubs at all, and it names what is missing.
+# Use this script when you want to RUN the game past a gap on purpose.
+#
 # Usage: tools/pc/link.sh [--run]
 #
 #   PC_LUS=0   link the null/SDL backend only (no libultraship, no renderer).
@@ -30,11 +37,18 @@ CC="gcc -m64 -no-pie -fno-pie"
 CXX="g++ -m64 -no-pie -fno-pie"
 
 PC_LUS=${PC_LUS:-1}
-# The JRickey fork (the BattleShip/SSB64 port's libultraship) and its CMake
-# build tree. Exported: tools/pc/build_lus_backend.sh and tools/pc/lus_flags.sh
-# read the same two variables and must agree with this link.
-LUS_ROOT=${LUS_ROOT:-/workspace/jrickey/libultraship}
-LUS_BUILD=${LUS_BUILD:-/workspace/lus2-build}
+# The libultraship fork this backend targets, and its CMake build tree.
+#
+# NEITHER IS IN THIS REPOSITORY and neither default exists in a fresh
+# checkout: they are the two knobs you set to point at a local clone, and the
+# defaults are repo-relative so that nothing here records where anyone's
+# clone happens to live. Put the clone in third_party/libultraship (it is not
+# tracked) or export LUS_ROOT and LUS_BUILD.
+#
+# Exported: tools/pc/build_lus_backend.sh and tools/pc/lus_flags.sh read the
+# same two variables and must agree with this link.
+LUS_ROOT=${LUS_ROOT:-third_party/libultraship}
+LUS_BUILD=${LUS_BUILD:-build/lus}
 export LUS_ROOT LUS_BUILD
 
 python3 tools/pc/gen_defsyms.py >/dev/null
@@ -112,8 +126,13 @@ else
     LUS_OBJ=""
 fi
 
+# -rdynamic for the same reason tools/pc/link.py uses it: it puts every global
+# into .dynsym, which is the only way the fatal-signal trap in
+# src/pc/pc_progress.c can print a function NAME rather than a bare address.
+# Both link paths need it or a crash report means something different
+# depending on which one produced the binary.
 # shellcheck disable=SC2086
-$LD -o "$OUT" $GAME_OBJS $LU_OBJS $LUS_OBJ \
+$LD -rdynamic -o "$OUT" $GAME_OBJS $LU_OBJS $LUS_OBJ \
     build/pc/stubs.o build/pc/hostmain.o $DEFSYMS -lm $LUS_LIBS
 
 echo "linked $OUT ($(stat -c%s "$OUT") bytes)"

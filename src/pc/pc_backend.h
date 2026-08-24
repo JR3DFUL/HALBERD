@@ -78,6 +78,16 @@ void pcb_frame_end(void);
  * pcb_gfx_run. */
 void pcb_gfx_set_ucode(int s2dex);
 
+/* Tell the renderer where the game's own microcode images live.
+ *
+ * gSPLoadUcode inside a display list names its target by TEXT ADDRESS, so a
+ * renderer that wants to honour a mid-list ucode switch has to be able to map
+ * those two addresses back to "F3DEX2" and "S2DEX2". src/pc/os_sp.c hands them
+ * over once per task, guarded by pcb_has_renderer(), so the two rasteriser-less
+ * backends never see this call -- but the symbol still has to exist for them,
+ * because the guard is a runtime test and not a compile-time one. */
+void pcb_gfx_set_native_ucodes(const void *f3dex2, const void *s2dex2);
+
 /* Hand an F3DEX2 display list to the renderer. Returns only once it has been
  * consumed, so the caller can then raise SP-done and DP-done in an order the
  * game's scheduler will accept. */

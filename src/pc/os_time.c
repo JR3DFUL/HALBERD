@@ -32,6 +32,28 @@ static struct timespec sEpoch;
 static u64 sTimeBias;   /* added by osSetTime */
 static int sClockReady;
 
+/* KIRBY_PC_TIMESCALE: run the game's clock N times faster than wall clock.
+ *
+ * WHY THIS AND NOT A SHORTER VI PERIOD. The two are not the same experiment.
+ * Shortening only the retrace period leaves osGetCount() running at real
+ * speed, and src/main/sched.c budgets its work by comparing raw osGetCount()
+ * deltas against constants derived from OS_CPU_COUNTER -- so a faster VI
+ * against a real-time counter tells the scheduler it is missing every
+ * deadline, and it starts dropping tasks. Scaling the COUNTER instead moves
+ * the whole simulated world together: the retrace period is expressed in
+ * these same ticks, so retraces arrive N times more often in wall-clock
+ * terms, and every deadline scales with them. Nothing in the game can tell
+ * the difference; only the host can, and the host has no deadlines here
+ * because the headless backend does no work per frame.
+ *
+ * This exists for tools/pc/smoke.py. The boot sequence is ~66 seconds of
+ * logos, opening movie and title screen before the first attract demo, and a
+ * regression check that takes over a minute is a regression check nobody
+ * runs. It is off by default (scale 1) and it is a diagnostic knob, not a
+ * speed setting: at large factors the port outruns nothing in particular but
+ * the timing relationships game code observes stay exactly as they were. */
+static u64 sTimeScale = 1;
+
 static u64 raw_ticks(void) {
     struct timespec now;
     u64 sec, nsec;
@@ -48,15 +70,32 @@ static u64 raw_ticks(void) {
     }
     /* ticks = sec*46875000 + nsec*46875000/1e9.  46875000/1e9 reduces to
      * 3/64, which is exact in 64-bit integers and avoids any float. */
-    return sec * (u64)PC_COUNTER_HZ + (nsec * 3u) / 64u;
+    return (sec * (u64)PC_COUNTER_HZ + (nsec * 3u) / 64u) * sTimeScale;
 }
 
 void pc_time_init(void) {
+    const char *scale;
+
     if (sClockReady) {
         return;
     }
     clock_gettime(CLOCK_MONOTONIC, &sEpoch);
     sTimeBias = 0;
+    scale = getenv("KIRBY_PC_TIMESCALE");
+    if (scale != NULL) {
+        long v = strtol(scale, NULL, 10);
+
+        /* Clamped rather than trusted. Above ~64 the 64-bit tick product for
+         * a long run starts to matter and the pump cannot deliver that many
+         * retraces per call anyway (pc_vi_tick fires at most four). */
+        if (v < 1) {
+            v = 1;
+        }
+        if (v > 64) {
+            v = 64;
+        }
+        sTimeScale = (u64)v;
+    }
     sClockReady = 1;
 }
 
@@ -284,6 +323,7 @@ void osInitialize(void) {
     done = 1;
 
     trace_from_env();
+    pc_progress_init();
     pc_dbg_init();
     install_quit_handler();
     pc_check_low_memory();

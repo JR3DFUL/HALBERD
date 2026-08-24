@@ -102,6 +102,7 @@ void pc_vi_init(void) {
  * happens here and nowhere else. */
 static void retrace(void) {
     pc_dbg_vi_retrace++;
+    pc_progress_mark(PC_STAGE_RETRACE);
     sRetraceCount++;
 
     /* The arm takes effect. Doing this BEFORE presenting matters: the buffer

@@ -9,16 +9,28 @@ The categories mean different things and should not be added together:
 
   func_*        un-decompiled game functions. Not porting work at all -- these
                 disappear on their own as the matching decompilation proceeds,
-                and nothing else can start until they do.
-  D_*           data symbols with no definition. Most of the data listings are
-                translated automatically (tools/pc/gen_data.py); what is left
-                here is the residue that needs a look.
+                and nothing else can start until they do. M2C_ERROR is counted
+                here too: a draft that still calls it is a draft m2c could not
+                finish, whatever its #ifdef says.
+  D_*           data symbols with no definition. Nearly all of these are
+                translated automatically now -- tools/pc/gen_data.py for the
+                listings and the in-listing constants, tools/pc/gen_defsyms.py
+                for the absolute addresses -- so anything left here is a
+                genuine residue that needs a look.
   os* / al* / gu*  the actual platform layer. This is the real port.
-  other         libc and named helpers.
+  other         named helpers with no home yet.
+
+THE HEADLINE NUMBER EXCLUDES "supplied by the host link", and that is not an
+accounting convenience. Those symbols are not missing from anything: the host
+libc and libm define them, or ld's own script does, or tools/pc/hostmain.c
+does. link_verified() proves it by handing every one of them to a real link
+before the bucket is filled, and anything that fails comes back in a WARNING
+line rather than being quietly excused. Counting them made the port look
+fifty symbols further from a binary than it was.
 
 Usage: gap.py [--list CATEGORY]
 """
-import glob, re, subprocess, sys, os
+import glob, re, subprocess, sys, os, tempfile
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(REPO)
@@ -53,13 +65,16 @@ CATS = [
     ('libultra os/io',          r'^(os|__os)'),
     ('audio library',           r'^(al|n_al)'),
     ('gu math',                 r'^gu'),
-    # Not gaps: the host libc and libm supply these at link time. Counting
-    # them as porting work overstates the platform layer.
+    # NOT GAPS, and no longer counted in the headline number. Everything in
+    # this bucket is supplied by the link itself: the host libc and libm, the
+    # symbols ld's own script defines, and tools/pc/hostmain.c's entry point.
+    # Every member is PROVED to resolve -- link_verified() links them for real
+    # before they land here, and anything that fails comes back in the WARNING
+    # line instead of being quietly excused.
     #
-    # The membership test is NOT this pattern -- see host_supplied() below,
-    # which reads the real symbol tables. The pattern is kept only as the
-    # fallback for a machine where those cannot be read.
-    ('supplied by libc/libm',
+    # The membership test is NOT this pattern; the pattern is kept only as the
+    # fallback for a machine where no symbol table can be read.
+    ('supplied by the host link',
      r'^(memcpy|memset|memmove|strlen|strcpy|bcopy|bzero|sinf|cosf|sqrtf|'
      r'sincosf|_GLOBAL_OFFSET_TABLE_|__stack_chk_fail_local)$'),
     # Linker-script segment bounds, not code. On PC these come from whatever
@@ -104,13 +119,83 @@ def host_supplied():
     # libgcc's soft-arithmetic helpers. gcc emits calls to these for 64-bit
     # division on i386 and always links them.
     names |= {'__udivdi3', '__divdi3', '__umoddi3', '__moddi3', '__udivmoddi4'}
-    # Defined by the linker, not by any object.
-    names |= {'__executable_start', '_etext', '_edata', '__bss_start', 'end',
-              '_GLOBAL_OFFSET_TABLE_'}
-    # The host entry point lives in tools/pc/hostmain.c, which is compiled by
-    # tools/pc/link.sh rather than into build/pc/src/*/ where this looks.
-    names |= {'EntryPoint', 'main'}
+    # Defined by the LINKER SCRIPT, not by any object and not by any library,
+    # so they are in no symbol table to read: ld's built-in script emits them
+    # around the output sections. src/pc/os_pi.c's own-image DMA guard reads
+    # three of them and asserts at startup that they bracket its own code.
+    # __data_start in particular was landing in "libc / other" and being
+    # counted as remaining platform work.
+    names |= {'__executable_start', '_etext', '_edata', '__data_start',
+              'data_start', '__bss_start', '__bss_start__', '_end', 'end',
+              '_GLOBAL_OFFSET_TABLE_', '_DYNAMIC'}
+    # glibc splits a few functions into libc_nonshared.a, a STATIC archive
+    # every link pulls in implicitly, so they are absent from libc.so.6's
+    # dynamic symbol table that the loop above reads. atexit is the one the
+    # platform layer uses (src/pc/pc_progress.c registers the end-of-run
+    # verdict with it); it linked the first time and still showed up as a
+    # missing symbol, which is exactly the false-positive this function
+    # exists to prevent.
+    names |= {'atexit', '__libc_csu_init', '__libc_csu_fini',
+              'stat', 'fstat', 'lstat', 'mknod'}
     return names
+
+
+def link_objects_supplied():
+    """Symbols the LINK adds that no object under build/pc/src/*/ defines.
+
+    tools/pc/hostmain.c is compiled by the link step, not by Makefile.pc's
+    object rules, so its two symbols are invisible to symbols() and were being
+    counted as missing. They are read out of the file rather than listed, so
+    renaming one cannot leave a stale entry here.
+    """
+    names = set()
+    p = 'tools/pc/hostmain.c'
+    if os.path.exists(p):
+        names |= set(re.findall(r'^(?:\w+[ \t]+)+\*?(\w+)\s*\([^;]*\)\s*\{',
+                                open(p).read(), re.M))
+    return names
+
+
+def link_verified(names, libs=('-lm',)):
+    """Split `names` into (resolved, unresolved) by actually LINKING them.
+
+    host_supplied() reads symbol tables, which answers "is this name in
+    libc.so" and not the question that matters, which is "will the link this
+    Makefile performs resolve it". The two differ in both directions: a name
+    can be in the dynamic table of a library the port does not link, and a
+    name can be absent from every table and still resolve because the linker
+    script defines it (__data_start, _etext).
+
+    So the answer is measured the only way it can be: one throwaway object
+    that references every candidate, handed to the same driver and the same
+    libraries the port links with. Anything ld cannot find comes back named,
+    in its own error message, and stays counted as a gap.
+
+    Costs one gcc invocation per run and needs no allowlist to be maintained.
+    """
+    names = sorted(names)
+    if not names:
+        return set(), set()
+    src = ''.join(f'extern char {n};\n' for n in names)
+    src += 'void *pc_gap_refs[] = {\n'
+    src += ''.join(f'  &{n},\n' for n in names)
+    src += '};\nint main(void) { return pc_gap_refs[0] != 0; }\n'
+    with tempfile.TemporaryDirectory() as d:
+        c = os.path.join(d, 'probe.c')
+        with open(c, 'w') as f:
+            f.write(src)
+        r = subprocess.run(['gcc', '-m64', '-no-pie', '-fno-pie', '-w',
+                            c, '-o', os.path.join(d, 'probe')] + list(libs),
+                           capture_output=True, text=True)
+    if r.returncode == 0:
+        return set(names), set()
+    bad = set(re.findall(r"undefined reference to [`']([^'\"]+)'", r.stderr))
+    if not bad:
+        # The link failed for a reason that is not a missing symbol (no
+        # compiler, no crt files). Say nothing rather than reclassify
+        # everything, and fall back to the symbol-table answer.
+        return set(names), set()
+    return set(names) - bad, bad & set(names)
 
 
 def pragma_names():
@@ -128,16 +213,29 @@ def pragma_names():
     return out
 
 
-def main():
-    gap, ndef = symbols()
-    want = sys.argv[sys.argv.index('--list') + 1] if '--list' in sys.argv else None
+def buckets_of(gap, host=None):
+    """[(category, [symbol])] plus the set the host link really satisfies.
 
+    Shared with tools/pc/link.sh's caller so that the link's "what is still
+    missing" answer and gap.py's are the same answer, computed once.
+    """
     prag = pragma_names()
-    host = host_supplied()
+    cand = host_supplied() if host is None else host
+    host, notreally = link_verified(cand & set(gap))
+    # Not part of the probe -- the probe links libc and libm, not the port's
+    # own host entry object -- but supplied by the same link all the same.
+    host |= link_objects_supplied()
     buckets, seen = [], set()
     for name, pat in CATS:
         if name.startswith('un-decompiled'):
-            hit = [s for s in gap if (re.match(pat, s) or s in prag)
+            # M2C_ERROR is not a libc symbol and never will be: m2c emits it
+            # where it could not recover a value ("Read from unset register
+            # $v0"), so a draft that still calls it is a draft that is NOT
+            # decompiled, whatever its #ifdef says. It belongs with the
+            # functions the decompilation still owes, and gap.py --list
+            # un-decompiled is where someone would look for it.
+            hit = [s for s in gap if (re.match(pat, s) or s in prag
+                                      or s == 'M2C_ERROR')
                    and s not in host]
         elif name.startswith('supplied by'):
             hit = [s for s in gap if (re.match(pat, s) or s in host)
@@ -148,20 +246,46 @@ def main():
         seen |= set(hit)
         buckets.append((name, hit))
     buckets.append(('libc / other', [s for s in gap if s not in seen]))
+    return buckets, host, notreally
 
-    print(f'{ndef} symbols defined, {len(gap)} still missing\n')
+
+# Categories that are NOT remaining platform-layer work. "supplied by
+# libc/libm" is in the list because the host link resolves every one of those
+# names -- link_verified() proves it by linking them -- so they are not
+# missing from anything.
+NOT_PORT = ('un-decompiled functions', 'supplied by the host link')
+
+
+def main():
+    gap, ndef = symbols()
+    want = sys.argv[sys.argv.index('--list') + 1] if '--list' in sys.argv else None
+
+    buckets, host, notreally = buckets_of(gap)
+    supplied = dict(buckets)['supplied by the host link']
+    real = [s for s in gap if s not in supplied]
+
+    print(f'{ndef} symbols defined, {len(real)} still missing '
+          f'({len(supplied)} more the host link supplies -- proved by linking '
+          f'them -- and are not counted)\n')
     for name, hit in buckets:
         print(f'  {name:26} {len(hit):5}')
         if want and want in name:
             for s in hit:
                 print(f'      {s}')
+    if notreally:
+        print('\n  WARNING: in a host symbol table but NOT resolvable by the '
+              'link:\n      ' + ', '.join(sorted(notreally)))
 
-    NOT_PORT = ('un-decompiled functions', 'unresolved data',
-                'supplied by libc/libm')
     plat = sum(len(h) for n, h in buckets if n not in NOT_PORT)
+    owed = len(buckets[0][1])
     print(f'\nplatform layer: {plat} symbols. Decompilation still owes '
-          f'{len(buckets[0][1])} functions;\nuntil those land the binary cannot '
-          f'link no matter how complete the platform layer is.')
+          f'{owed} functions;')
+    if plat == 0 and owed:
+        print('nothing but those stands between this tree and a linked '
+              'binary.')
+    else:
+        print('until those land the binary cannot link no matter how complete '
+              'the platform layer is.')
 
 
 if __name__ == '__main__':

@@ -5,8 +5,9 @@
 #   lus_flags.sh --cflags
 #   lus_flags.sh --libs
 #
-# TARGETS THE JRICKEY FORK (the BattleShip/SSB64 port's libultraship) built
-# out of tree with CMake+Ninja. Its static library pulls in ImGui, prism and
+# TARGETS THE libultraship FORK AT $LUS_ROOT, built out of tree with
+# CMake+Ninja. That clone is not part of this repository; set LUS_ROOT and
+# LUS_BUILD, or put it in the (untracked) third_party/libultraship. Its static library pulls in ImGui, prism and
 # stb (fetched into $LUS_BUILD/_deps), the post-process transpiler stack
 # (glslang + SPIRV-Cross), tinycc (libtcc/libtcc1, the mod-scripting
 # compiler), hidapi-hidraw (raphnet N64 adapters; needs libudev on Linux),
@@ -20,9 +21,14 @@
 # opcode encodings in the fork's gbi.h -- also what the game side defines).
 set -e
 
-LUS_ROOT=${LUS_ROOT:-/workspace/jrickey/libultraship}
-LUS_BUILD=${LUS_BUILD:-/workspace/lus2-build}
-SDL2_CONFIG=${SDL2_CONFIG:-${SDL2_PREFIX:-/workspace/sdl2-install}/bin/sdl2-config}
+LUS_ROOT=${LUS_ROOT:-third_party/libultraship}
+LUS_BUILD=${LUS_BUILD:-build/lus}
+# sdl2-config from PATH by default; set SDL2_PREFIX for a private SDL2.
+if [ -n "$SDL2_PREFIX" ]; then
+    SDL2_CONFIG=${SDL2_CONFIG:-$SDL2_PREFIX/bin/sdl2-config}
+else
+    SDL2_CONFIG=${SDL2_CONFIG:-sdl2-config}
+fi
 DEPS="$LUS_BUILD/_deps"
 
 case "$1" in

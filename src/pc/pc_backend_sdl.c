@@ -133,6 +133,14 @@ void pcb_gfx_run(const void *displayList) {
     (void)displayList;
 }
 
+/* Unreachable here for the same reason as in pc_backend_null.c: the call in
+ * src/pc/os_sp.c sits behind pcb_has_renderer(), which is 0 above, but the
+ * guard is a runtime test so the symbol still has to exist. */
+void pcb_gfx_set_native_ucodes(const void *f3dex2, const void *s2dex2) {
+    (void)f3dex2;
+    (void)s2dex2;
+}
+
 int pcb_alive(void) {
     return sAlive;
 }

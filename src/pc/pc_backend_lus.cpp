@@ -1,7 +1,7 @@
 /* The libultraship backend: window, renderer, input and audio.
  *
  * TARGETS THE JRICKEY FORK of libultraship (the BattleShip/SSB64 port's LUS,
- * /workspace/jrickey/libultraship), not upstream. Two things changed with the
+ * $LUS_ROOT, see tools/pc/lus_flags.sh), not upstream. Two things changed with the
  * fork and both simplified this file:
  *
  *   1. Context boot is the fork's STAGED INIT API. The old hand-assembled

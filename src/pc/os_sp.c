@@ -98,6 +98,7 @@ void osSpTaskStartGo(OSTask *task) {
     }
 
     if (task->t.type == M_GFXTASK) {
+        pc_progress_mark(PC_STAGE_GFXTASK);
         pc_gfx_trace_task(task);
 
         /* THE RENDERER SEAM. task->t.data_ptr is the head of an F3DEX2

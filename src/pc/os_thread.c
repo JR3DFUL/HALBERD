@@ -269,11 +269,13 @@ void pc_idle(void) {
     }
     if (pc_quit_requested()) {
         fprintf(stderr, "[pc] interrupted\n");
+        pc_progress_report("interrupted");
         fflush(NULL);
         _exit(0); /* not exit() -- see the termination note in os_time.c */
     }
     if (!pcb_alive()) {
         fprintf(stderr, "[pc] host asked to quit\n");
+        pc_progress_report("host-quit");
         fflush(NULL);
         pcb_video_shutdown();
         _exit(0);
@@ -305,6 +307,7 @@ static void dispatch(void) {
     __osPopThread(&__osRunQueue);
     next->state = OS_STATE_RUNNING;
     __osRunningThread = next;
+    pc_progress_mark(PC_STAGE_THREAD);
 
     np = slot_of(next);
     if (np == from) {
@@ -412,9 +415,14 @@ void pc_pump_events(void) {
      * that is always reached soon after a signal. */
     if (pc_quit_requested()) {
         fprintf(stderr, "[pc] interrupted\n");
+        /* _exit(2) skips atexit, so the verdict has to be printed here. It is
+         * the only line tools/pc/smoke.py needs and a timed-out run is the
+         * commonest way the smoke test ends. */
+        pc_progress_report("interrupted");
         fflush(NULL);
         _exit(0);
     }
+    pc_progress_tick();
     reentrant = 1;
     pc_in_event_delivery = 1;
     pcb_pump();

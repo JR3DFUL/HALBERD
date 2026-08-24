@@ -8,8 +8,27 @@
 # number IS the remaining porting work, and it moves every time a function is
 # matched.
 #
+#   make -f Makefile.pc           # everything: compile, translate, link
 #   make -f Makefile.pc gap       # what is still undefined, by category
 #   make -f Makefile.pc objs      # just compile everything
+#   make -f Makefile.pc link      # link, or name what stops the link
+#
+# THE DEFAULT TARGET LINKS NOW. It used to be `all: objs`, which compiled and
+# stopped, because the link needed tools/pc/link.sh and that script fills
+# every gap with a weak abort-on-call stub. A stub layer cannot be the build:
+# it would let a function that was never decompiled pass for ported, which the
+# project's governing rule forbids, and a stub that returns zero produces a
+# binary that is wrong rather than one that will not link.
+#
+# tools/pc/link.py is the honest version. It stubs nothing, links what exists,
+# and if the link cannot close it says which symbols are missing and which
+# category they are in -- reusing tools/pc/gap.py's classification so the two
+# can never disagree. It EXITS 0 when the only unresolved symbols are game
+# functions the decompilation has not produced yet, because that is this
+# project's normal state and not a build failure, and EXITS 1 for anything
+# else, which is a real regression in the platform layer or the data
+# translation. So a green `make -f Makefile.pc` means "the port owes nothing";
+# a red one means something here broke.
 #
 # THE BUILD IS LP64 (-m64 -DPORT). It was -m32 while the port had no renderer,
 # because at -m64 three files failed to compile and 32-bit kept every
@@ -96,7 +115,14 @@ endif
 LU_GU_SRCS := mtxcatf mtxutil normalize us2dex
 LU_IO_SRCS := vimodentsclan1 vimodempallan1 vimodefpallan1
 LU_AU_SRCS := cents2ratio copy
-LU_NA_SRCS := n_cspsetfxmix n_cspsetpriority n_event n_synsetvol
+# n_synsetpan is the sibling of n_synsetvol and was simply omitted. It
+# defines only n_alSynSetPan and calls __n_allocParam, which the
+# decompilation already supplies, so there is no overlap of the kind
+# documented below. The game has its own byte-exact copy of this function
+# (func_8002CFE4 in src/main/libn_audio_2e.c) but it is stuck behind
+# NON_MATCHING by a padding trap -- un-guarding it shortens that TU by 4
+# bytes -- so the library copy is what links today.
+LU_NA_SRCS := n_cspsetfxmix n_cspsetpriority n_event n_synsetvol n_synsetpan
 #
 # THREE MORE libreultra audio files would each supply one still-missing
 # symbol, and all three are deliberately left out because they collide with
@@ -142,23 +168,31 @@ LU_INC := -include tools/pc/lu_lp64.h \
 DATA_SRCS := $(wildcard $(PC_BUILD)/data/*.c)
 DATA_OBJS := $(patsubst %.c,%.o,$(DATA_SRCS))
 
-.PHONY: all objs data gap clean
-all: objs
+.PHONY: all objs data dataobjs defsyms gap link smoke lp64 clean
+all: link
 
 # The data translation has to run before its objects can be enumerated, so it
 # is a separate invocation rather than a prerequisite.
 data:
 	@python3 tools/pc/gen_data.py
-	@python3 tools/pc/gen_defsyms.py >/dev/null
 
-# datatodo.txt's absolute N64 addresses re-expressed against the translated C
-# symbols. Pass these to the eventual link: $(shell cat build/pc/defsyms.txt)
+# datatodo.txt's absolute N64 addresses, the overlay bss bounds and the
+# address-named orphans, all re-expressed against the translated C symbols and
+# the port's own RAM spans. The link takes them as --defsym.
+#
+# THIS RUNS AFTER dataobjs AND THAT ORDERING IS LOAD-BEARING. gen_defsyms.py
+# reads the still-undefined set out of build/pc/**/*.o to find the
+# address-named symbols datatodo.txt does not list (D_800D723C and its kind),
+# and to refuse to emit a --defsym for anything an object already defines --
+# which would be `ld: multiple definition`, not a harmless duplicate. With no
+# data objects to read it silently emits less, so `objs` sequences it last.
 defsyms:
 	@python3 tools/pc/gen_defsyms.py
 
 objs: $(GAME_OBJS) $(LU_OBJS)
 	@$(MAKE) -s -f Makefile.pc data
 	@$(MAKE) -s -f Makefile.pc dataobjs
+	@$(MAKE) -s -f Makefile.pc defsyms
 	@echo "$(words $(GAME_OBJS)) game objects built, $(words $(LU_OBJS)) reused from libreultra"
 
 dataobjs: $(DATA_OBJS)
@@ -210,6 +244,40 @@ $(PC_BUILD)/data/%.o: $(PC_BUILD)/data/%.c
 
 gap: objs
 	@python3 tools/pc/gap.py
+
+# The binary, or the reason there is not one yet. See the note at the top of
+# this file about the exit status, and tools/pc/link.py's header for why it
+# refuses to stub anything.
+link: objs
+	@python3 tools/pc/link.py
+
+# How far the binary gets, as one line, repeatably.
+#
+# `gap` measures what the port still OWES; this measures what it DOES. Since
+# the link closed, the second number is the one that moves, and it needs a
+# target so that "it boots further now" is a check and not an anecdote. The
+# run is headless, accelerated (see KIRBY_PC_TIMESCALE in src/pc/os_time.c),
+# bounded by a timeout, and it fails if the port stops short of the stage
+# tools/pc/smoke.py records as the high-water mark.
+#
+# Deliberately NOT dependent on `link`: the commonest use is to re-run the
+# binary that is already there, and rebuilding 150 objects first turns a
+# five-second check into a two-minute one. `make -f Makefile.pc && make -f
+# Makefile.pc smoke` when the sources changed.
+smoke:
+	@python3 tools/pc/smoke.py $(SMOKEFLAGS)
+
+# Where the port will crash NEXT.
+#
+# -w above silences every warning, and the one class it should never have
+# silenced is a pointer changing width: that is what actually stops this port,
+# and it stops it eight seconds later in a function that is not the one at
+# fault. This re-runs the same compile with only the four pointer-width
+# diagnostics on and turns them into a worklist grouped by the declaration
+# that is wrong. It compiles nothing into build/pc, so it cannot disturb a
+# build or another lane. See the header of tools/pc/lp64_audit.py.
+lp64:
+	@python3 tools/pc/lp64_audit.py $(LP64FLAGS)
 
 clean:
 	@rm -rf $(PC_BUILD)

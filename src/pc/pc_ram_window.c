@@ -78,6 +78,14 @@
 __asm__(
     "   .section .bss\n"
     "   .balign 64\n"
+    /* Global so that tools/pc/gen_defsyms.py can express a raw high-RAM
+     * address as `pc_ram_window_base + (addr - 0x8012C000)`. datatodo.txt's
+     * absolute symbols that fall in this range have no data block to be
+     * relative to -- that is what makes them absolute -- but they DO have a
+     * true offset inside RDRAM, and this block reproduces RDRAM's layout
+     * exactly. See segment_bounds()/PORT_SPANS there; the base address is
+     * written down in both places and they have to agree. */
+    "   .globl pc_ram_window_base\n"
     "pc_ram_window_base:\n"
     "   .space 0x002B00\n" /* 8012C000 .. 8012EB00 */
     "   .globl D_8012EB00\n"

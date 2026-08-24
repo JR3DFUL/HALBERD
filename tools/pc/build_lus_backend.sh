@@ -9,7 +9,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-LUS_BUILD=${LUS_BUILD:-/workspace/lus-build}
+LUS_BUILD=${LUS_BUILD:-build/lus}
 
 if [ ! -f "$LUS_BUILD/src/libultraship.a" ]; then
     echo "libultraship is not built at $LUS_BUILD -- run tools/pc/build_lus.sh" >&2

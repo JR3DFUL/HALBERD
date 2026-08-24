@@ -31,8 +31,8 @@
 # from github.com over git, which this environment does allow.
 set -e
 
-LUS_ROOT=${LUS_ROOT:-/workspace/jr3dful/libultraship}
-LUS_BUILD=${LUS_BUILD:-/workspace/lus-build}
+LUS_ROOT=${LUS_ROOT:-third_party/libultraship}
+LUS_BUILD=${LUS_BUILD:-build/lus}
 
 cmake -S "$LUS_ROOT" -B "$LUS_BUILD" -G Ninja \
       -DCMAKE_BUILD_TYPE=Release \

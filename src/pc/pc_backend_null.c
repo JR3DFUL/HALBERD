@@ -63,6 +63,14 @@ void pcb_gfx_run(const void *displayList) {
     (void)displayList;
 }
 
+/* Unreachable here -- os_sp.c only calls this behind pcb_has_renderer(), which
+ * is 0 above. It exists because that guard is a runtime test, so the call site
+ * is compiled either way and the linker needs the symbol. */
+void pcb_gfx_set_native_ucodes(const void *f3dex2, const void *s2dex2) {
+    (void)f3dex2;
+    (void)s2dex2;
+}
+
 int pcb_alive(void) {
     return 1;
 }

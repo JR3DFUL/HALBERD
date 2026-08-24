@@ -17,7 +17,7 @@
 set -e
 cd "$(dirname "$0")/../.."
 
-LUS_ROOT=${LUS_ROOT:-/workspace/jr3dful/libultraship}
+LUS_ROOT=${LUS_ROOT:-third_party/libultraship}
 
 mkdir -p port/assets/shaders/opengl port/o2r
 
