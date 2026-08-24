@@ -53,7 +53,19 @@ extern int func_801693C4_ovl3();
 extern void func_80198880_ovl7();
 extern void func_801DB1E0_ovl10();
 extern void func_801DB1E0_ovl11();
-extern void func_801DB1E0_ovl12();
+/* OVL12 HAS NO func_801DB1E0. 0x1EB520 is eight ZERO WORDS in that overlay --
+ * alignment fill that splat named as if it were a function -- and real code
+ * resumes at 0x1EB540 with func_801DB200_ovl12. On the N64 a jump to
+ * 0x1EB520 executes eight `sll $zero,$zero,0` and falls straight through with
+ * $a0 untouched, so calling func_801DB200_ovl12 directly is not a substitute
+ * for the entry, it IS the entry.
+ *
+ * The name existed here until kirby64.yaml gained a `pad` subsegment at
+ * 0x1EB520 and the guard block came out of src/ovl12/code_1EB520.c, at which
+ * point this file was the last reference to it in the whole tree and the port
+ * stopped linking. Fill cannot be decompiled and must not be stubbed; the
+ * fall-through is the only correct translation. */
+extern void func_801DB200_ovl12(void *);
 extern void func_801DB1E0_ovl13();
 extern void func_801DB1E0_ovl14();
 extern void func_801DB1E0_ovl15();
@@ -73,7 +85,7 @@ void func_801DB1E0(void *arg0) {
     switch (sCurWindowOvl) {
         case 10: func_801DB1E0_ovl10(arg0); break;
         case 11: func_801DB1E0_ovl11(arg0); break;
-        case 12: func_801DB1E0_ovl12(arg0); break;
+        case 12: func_801DB200_ovl12(arg0); break; /* the fall-through, above */
         case 13: func_801DB1E0_ovl13(arg0); break;
         case 14: func_801DB1E0_ovl14(arg0); break;
         case 15: func_801DB1E0_ovl15(arg0); break;

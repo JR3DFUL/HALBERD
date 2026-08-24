@@ -532,7 +532,16 @@ SUPPRESS_BSS = {
     # HUD texture arena, defined whole in src/pc/pc_bss_whole.c: ovl1_13.c
     # indexes D_800ED510 as u16[] far past the first splinter and the HUD
     # frame fill walks the region row-wise.
+    #
+    # D_800F4324 AND D_800F4D10 JOINED THIS LIST LATE, and their absence was a
+    # live memory corruption rather than an inefficiency. They are interior
+    # labels of the same arena, but the whole object stopped at the first of
+    # them, so it was 0x6E14 bytes where the region is 0x7804 -- and
+    # func_800BDE0C DMAs a 0x7800-byte HUD theme straight into the base. The
+    # 0x9F0-byte overrun landed in the platform layer's own .bss and rewrote
+    # src/pc's statics with the fill pattern. See pc_bss_whole.c.
     'D_800ED510', 'D_800EDA10', 'D_800EDA24', 'D_800EDA60', 'D_800F03C5',
+    'D_800F4324', 'D_800F4D10',
     # Collision result block + water annex, whole in pc_bss_whole.c; the
     # LP64 struct has pointers so splinter aliases sit at LP64 offsets.
     'D_8012BCA0', 'D_8012BCA4', 'D_8012BCA8', 'D_8012BCB4', 'D_8012BCBC',

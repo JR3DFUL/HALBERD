@@ -1,9 +1,17 @@
 #!/usr/bin/env python3
 """How far does the native port get? Run it headless and say so.
 
-    make -f Makefile.pc smoke          the whole thing: link if needed, run, verdict
-    python3 tools/pc/smoke.py          the same, without make
+    make -f Makefile.pc smoke          unattended: how far does it boot on its own
+    make -f Makefile.pc smoke-deep     driven: how far can it be pushed with input
     python3 tools/pc/smoke.py --real-time --timeout 120
+    python3 tools/pc/smoke.py --input "2:START,3:A,4:START"
+
+TWO QUESTIONS, TWO MODES. Left alone the port cannot leave the attract loop --
+game_tick() only does that when someone presses START -- so the default run
+measures the boot and stops at that ceiling, which is the right thing for a
+regression check. --deep adds the synthetic controller from
+src/pc/pc_input_script.c and measures how far the port can actually be driven,
+which is the right thing when you are hunting the next crash.
 
 WHY THIS EXISTS. The port links and boots, so the question stopped being
 "which symbol is missing" -- tools/pc/gap.py answers that -- and became "which
@@ -56,28 +64,67 @@ STAGES = [
     'logos',
     'opening-movie',
     'title-screen',
-    'attract-demo',
+    'attract-demo-1',
+    'title-screen-2',
+    'attract-demo-2',
+    'title-screen-3',
+    'attract-demo-3',
+    'title-screen-4',
+    'attract-loop-complete',
     'file-select-menu',
+    'world-select',
     'level-select',
+    'intro-cutscene',
     'gameplay',
 ]
 
-# THE RATCHET. Raise this only after measuring the new stage, and say in the
-# commit what changed to earn it.
+# THE RATCHET. Raise this only after MEASURING the new stage, and say what
+# changed to earn it. The history is the useful part of this comment:
 #
-#   attract-demo   the port boots through the HAL/Nintendo logos, the opening
-#                  movie and the title screen, and enters the first attract
-#                  demo, where it dies in the collision raycast. See the
-#                  boot-lane report: the trailing `s32` parameters on
-#                  src/ovl2/ovl2_7.c's CollisionState wrapper family are
-#                  pointers, and truncate under LP64.
-EXPECTED_STAGE = 'attract-demo'
+#   attract-demo-1  the port boots through the HAL/Nintendo logos, the opening
+#                   movie and the title screen, and enters the first attract
+#                   demo, where it dies in the collision raycast -- the
+#                   trailing `s32` parameters on src/ovl2/ovl2_7.c's
+#                   CollisionState wrapper family are pointers and truncate
+#                   under LP64. FIXED.
+#   attract-demo-2  demo 1 plays to the end and the title screen comes back;
+#                   demo 2 dies in func_8019F410_ovl7 reading an anim header
+#                   through EnemyKindDesc.animTable -- the PORT-widened
+#                   struct in include/unk_structs/D_800E1B50.h carries two
+#                   spurious pads after its 8-byte function-pointer fields,
+#                   so every field from unkC on is two cells out of phase.
+#
+# The next rung is attract-loop-complete, and it is MEASURED, not hoped for:
+# with those two pads deleted the port runs all three demos and wraps back to
+# the opening movie (route 0>1>2>3>4>5>6>7>8>9>2>3>4>5>6 in a 60s run, no
+# crash). Raise this the moment that header change lands.
+EXPECTED_STAGE = 'attract-demo-2'
+
+# THE SECOND RATCHET, for --deep. An unattended run cannot leave the attract
+# loop -- game_tick() only does that when someone presses START -- so
+# everything past it is measured with the synthetic controller in
+# src/pc/pc_input_script.c. Kept separate from EXPECTED_STAGE because the two
+# answer different questions: the default one is "did the port regress", this
+# one is "how deep can it be driven", and a deep run needs a ROM, input and
+# more patience.
+#
+#   intro-cutscene  MEASURED with the EnemyKindDesc pad fix applied:
+#                   title -> file select -> world select -> the world 1-1
+#                   opening cutscene (overlay 18), held for 150s / 32915
+#                   frames with no crash. It does not reach gGameState 15:
+#                   func_800A3408 replays the cutscene while
+#                   func_80227308_ovl18(1) returns 1, and it has not been
+#                   seen to stop. Without that pad fix the deep run dies in
+#                   func_8019F410_ovl7 at world select, so today this is
+#                   aspirational and --deep will FAIL until it lands.
+DEEP_EXPECTED_STAGE = 'intro-cutscene'
 
 # Beyond the expected stage there is nothing to wait for: with no controller
 # attached the game cycles the attract loop forever, so a run that gets that
 # far is a PASS that then has to be stopped. The default timeout is sized for
-# the accelerated boot with room to spare.
-DEFAULT_TIMEOUT = 45
+# the accelerated boot with room to spare -- the full unattended cycle is
+# about 42 accelerated seconds.
+DEFAULT_TIMEOUT = 60
 DEFAULT_TIMESCALE = 8
 
 VERDICT_RE = re.compile(r'^\[verdict\] (.*)$', re.M)
@@ -149,6 +196,14 @@ def main():
                     help=f'game-clock multiplier (default {DEFAULT_TIMESCALE}, 1 = real time)')
     ap.add_argument('--real-time', action='store_true',
                     help='shorthand for --timescale 1 --timeout 120')
+    ap.add_argument('--input', default=None, metavar='SPEC',
+                    help='drive a synthetic controller: "autostart", or a '
+                         'timeline like "2:START,3:A" -- see '
+                         'src/pc/pc_input_script.c. Without it the run is '
+                         'unattended and cannot leave the attract loop.')
+    ap.add_argument('--deep', action='store_true',
+                    help='shorthand for --input autostart with a longer '
+                         'timeout and the deepest reachable stage expected')
     ap.add_argument('--expect', default=EXPECTED_STAGE, choices=STAGES,
                     help=f'stage that must be reached (default {EXPECTED_STAGE})')
     ap.add_argument('--rom', default=None,
@@ -163,6 +218,14 @@ def main():
         args.timescale = 1
         if args.timeout == DEFAULT_TIMEOUT:
             args.timeout = 120
+
+    if args.deep:
+        if args.input is None:
+            args.input = 'autostart'
+        if args.timeout == DEFAULT_TIMEOUT:
+            args.timeout = 90
+        if args.expect == EXPECTED_STAGE:
+            args.expect = DEEP_EXPECTED_STAGE
 
     if not os.path.exists(BINARY):
         print(f'smoke: no {BINARY} -- run `make -f Makefile.pc` first')
@@ -182,10 +245,17 @@ def main():
         print(f'smoke: WARNING: no {rom} -- the run has no cartridge to DMA '
               'from and will stop early.')
     env['KIRBY_PC_TIMESCALE'] = str(args.timescale)
+    if args.input:
+        env['KIRBY_PC_INPUT'] = args.input
+    else:
+        # Inherited from the caller's shell it would silently change what the
+        # default smoke test measures.
+        env.pop('KIRBY_PC_INPUT', None)
     if args.verbose:
         env['KIRBY_PC_PROGRESS'] = '1'
 
-    print(f'smoke: {BINARY}  timescale={args.timescale}x  timeout={args.timeout}s')
+    print(f'smoke: {BINARY}  timescale={args.timescale}x  timeout={args.timeout}s'
+          + (f'  input={args.input}' if args.input else ''))
     try:
         proc = subprocess.Popen([BINARY], env=env, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, text=True)

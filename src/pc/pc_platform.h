@@ -103,7 +103,12 @@ void pc_check_low_memory(void);
  * note in src/pc/os_time.c -- nothing else in this process notices them. */
 int pc_quit_requested(void);
 
-/* Per-subsystem host pumping, called from pc_pump_events(). */
+/* The scripted controller (src/pc/pc_input_script.c) is declared in
+ * pc_backend.h instead of here, next to pcb_input_poll: its argument is
+ * PCPad, and PCPad is an anonymous-struct typedef that cannot be forward
+ * declared. It is not a backend function and that header says so.
+ *
+ * Per-subsystem host pumping, called from pc_pump_events(). */
 void pc_vi_tick(void);
 void pc_ai_tick(void);
 void pc_pi_tick(void);
@@ -146,18 +151,40 @@ void pc_stub_notice(const char *file, int line, const char *what);
  * KIRBY_PC_PROGRESS=1 logs every transition, and the one-line [verdict] is
  * printed unconditionally however the process ends.
  * ------------------------------------------------------------------------- */
-#define PC_STAGE_START       0
-#define PC_STAGE_OSINIT      1
-#define PC_STAGE_THREAD      2
-#define PC_STAGE_RETRACE     3
-#define PC_STAGE_GFXTASK     4
-#define PC_STAGE_LOGOS       5
-#define PC_STAGE_OPENING     6
-#define PC_STAGE_TITLE       7
-#define PC_STAGE_DEMO        8
-#define PC_STAGE_MENU        9
-#define PC_STAGE_LEVELSELECT 10
-#define PC_STAGE_GAMEPLAY    11
+/* ONE RUNG PER gGameState THROUGH THE ATTRACT LOOP, and that granularity is
+ * load-bearing rather than tidy. A single "attract-demo" rung covering states
+ * 4, 6 and 8 reported PASS both before and after the fix that carried the
+ * port from dying inside demo 2 to completing all three demos and wrapping
+ * back to the opening movie -- a ratchet that cannot see the largest single
+ * improvement the port has had is not a ratchet. */
+#define PC_STAGE_START        0
+#define PC_STAGE_OSINIT       1
+#define PC_STAGE_THREAD       2
+#define PC_STAGE_RETRACE      3
+#define PC_STAGE_GFXTASK      4
+#define PC_STAGE_LOGOS        5   /* gGameState 1  */
+#define PC_STAGE_OPENING      6   /* gGameState 2  */
+#define PC_STAGE_TITLE        7   /* gGameState 3  */
+#define PC_STAGE_DEMO1        8   /* gGameState 4  */
+#define PC_STAGE_TITLE2       9   /* gGameState 5  */
+#define PC_STAGE_DEMO2       10  /* gGameState 6  */
+#define PC_STAGE_TITLE3      11  /* gGameState 7  */
+#define PC_STAGE_DEMO3       12  /* gGameState 8  */
+#define PC_STAGE_TITLE4      13  /* gGameState 9  */
+/* game_tick()'s case 9 sets gGameState back to 2, so the unattended cycle has
+ * closed and the port will now repeat it forever. Without synthetic input
+ * this is the ceiling: every state above needs a button. */
+#define PC_STAGE_ATTRACT_LOOP 14
+/* Everything from here needs a button. */
+#define PC_STAGE_MENU        15  /* gGameState 10 -- file select */
+#define PC_STAGE_WORLDSELECT 16  /* gGameState 11 */
+#define PC_STAGE_LEVELSELECT 17  /* gGameState 12 */
+/* gGameState 14 is not a menu. src/ovl1/game.c's func_800A3408 sets 0xE and
+ * runs func_800A3150(4) in a loop for the world-1 level-1 opening cutscene
+ * (overlay 18), so reaching it means the port has left the menus and is
+ * running a real scene. */
+#define PC_STAGE_CUTSCENE    18  /* gGameState 14 */
+#define PC_STAGE_GAMEPLAY    19  /* gGameState 15 */
 
 void pc_progress_init(void);
 void pc_progress_mark(int stage);

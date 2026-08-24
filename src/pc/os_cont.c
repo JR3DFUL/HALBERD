@@ -48,6 +48,14 @@ static void snapshot(void) {
     int i;
 
     pcb_input_poll(sSnapshot, MAXCONTROLLERS);
+    /* KIRBY_PC_INPUT only -- a no-op when it is unset, which is the default.
+     * When it is set it overwrites port 0 so an unattended run can be driven
+     * past the attract loop, which needs a button press the headless backend
+     * has no way to produce. See src/pc/pc_input_script.c.
+     *
+     * AFTER the poll, so a real backend's pads are what it overrides; BEFORE
+     * sPlugged is derived, so a synthetic pad counts as connected. */
+    pc_input_script_apply(sSnapshot, MAXCONTROLLERS);
     for (i = 0; i < MAXCONTROLLERS; i++) {
         sPlugged[i] = sSnapshot[i].present;
     }

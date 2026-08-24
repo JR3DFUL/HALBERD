@@ -168,7 +168,7 @@ LU_INC := -include tools/pc/lu_lp64.h \
 DATA_SRCS := $(wildcard $(PC_BUILD)/data/*.c)
 DATA_OBJS := $(patsubst %.c,%.o,$(DATA_SRCS))
 
-.PHONY: all objs data dataobjs defsyms gap link smoke lp64 clean
+.PHONY: all objs data dataobjs defsyms gap link smoke smoke-deep lp64 clean
 all: link
 
 # The data translation has to run before its objects can be enumerated, so it
@@ -266,6 +266,17 @@ link: objs
 # Makefile.pc smoke` when the sources changed.
 smoke:
 	@python3 tools/pc/smoke.py $(SMOKEFLAGS)
+
+# The same measurement with a controller attached.
+#
+# `smoke` measures the boot and stops where an unattended run has to stop: the
+# attract loop never exits without a START press. This one supplies the press
+# (src/pc/pc_input_script.c, KIRBY_PC_INPUT=autostart) and keeps going into
+# the file select, the world map and the first cutscene, which is where the
+# crashes worth finding now are. Slower and it needs the ROM, so it is a
+# separate target rather than the default.
+smoke-deep:
+	@python3 tools/pc/smoke.py --deep $(SMOKEFLAGS)
 
 # Where the port will crash NEXT.
 #

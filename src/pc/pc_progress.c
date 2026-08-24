@@ -29,12 +29,21 @@
  *         10  file select menu            func_80158048_ovl4
  *         11  world select                func_80159A54_ovl4
  *         12  level select                func_8015531C_ovl4
+ *         14  world 1-1 opening cutscene  func_800A3408 -> func_800A3150(4),
+ *                                         overlay 18, replayed until
+ *                                         func_80227308_ovl18(1) != 1
  *         15  gameplay                    func_800F6AD4(0)
  *
- *     States 10 and up need a controller, so a headless run with no input is
- *     expected to cycle 1 -> 2 -> 3 -> 4 -> 5 ... through the attract loop
- *     forever. "Reached the attract demos" is therefore the honest ceiling of
- *     an unattended run, and anything short of it is a real stop.
+ *     Each of those gets its OWN rung -- see the note on the PC_STAGE_*
+ *     constants in pc_platform.h for why lumping the three demos together
+ *     made the ratchet blind to the port's biggest single improvement.
+ *
+ *     States 10 and up need a controller. With no input the game runs
+ *     1 -> 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 and case 9 sets it back to 2,
+ *     so PC_STAGE_ATTRACT_LOOP -- the whole cycle closed once -- is the
+ *     honest ceiling of an unattended run, and anything short of it is a real
+ *     stop. Past it needs synthetic input; src/pc/os_cont.c's scripted
+ *     controller (KIRBY_PC_INPUT) is what supplies it.
  *
  * THE SIGNAL HANDLER IS THE POINT OF THE FILE. A port that crashes 66 seconds
  * into a boot is only debuggable if the crash says where it was, and a
@@ -100,9 +109,17 @@ static const char *stage_name(int s) {
     case PC_STAGE_LOGOS:      return "logos";
     case PC_STAGE_OPENING:    return "opening-movie";
     case PC_STAGE_TITLE:      return "title-screen";
-    case PC_STAGE_DEMO:       return "attract-demo";
+    case PC_STAGE_DEMO1:      return "attract-demo-1";
+    case PC_STAGE_TITLE2:     return "title-screen-2";
+    case PC_STAGE_DEMO2:      return "attract-demo-2";
+    case PC_STAGE_TITLE3:     return "title-screen-3";
+    case PC_STAGE_DEMO3:      return "attract-demo-3";
+    case PC_STAGE_TITLE4:     return "title-screen-4";
+    case PC_STAGE_ATTRACT_LOOP: return "attract-loop-complete";
     case PC_STAGE_MENU:       return "file-select-menu";
+    case PC_STAGE_WORLDSELECT:return "world-select";
     case PC_STAGE_LEVELSELECT:return "level-select";
+    case PC_STAGE_CUTSCENE:   return "intro-cutscene";
     case PC_STAGE_GAMEPLAY:   return "gameplay";
     }
     return "unknown";
@@ -114,18 +131,23 @@ static const char *stage_name(int s) {
 static int stage_of_gamestate(u32 s) {
     switch (s) {
     case 1:  return PC_STAGE_LOGOS;
-    case 2:  return PC_STAGE_OPENING;
-    case 3:
-    case 5:
-    case 7:
-    case 9:  return PC_STAGE_TITLE;
-    case 4:
-    case 6:
-    case 8:  return PC_STAGE_DEMO;
+    case 2:
+        /* THE WRAP. game_tick()'s case 9 sets gGameState back to 2, so a
+         * second visit to the opening movie means the whole unattended cycle
+         * closed rather than that the boot is only just starting. */
+        return (sStage >= PC_STAGE_TITLE4) ? PC_STAGE_ATTRACT_LOOP
+                                           : PC_STAGE_OPENING;
+    case 3:  return PC_STAGE_TITLE;
+    case 4:  return PC_STAGE_DEMO1;
+    case 5:  return PC_STAGE_TITLE2;
+    case 6:  return PC_STAGE_DEMO2;
+    case 7:  return PC_STAGE_TITLE3;
+    case 8:  return PC_STAGE_DEMO3;
+    case 9:  return PC_STAGE_TITLE4;
     case 10: return PC_STAGE_MENU;
-    case 11:
-    case 12:
-    case 14: return PC_STAGE_LEVELSELECT;
+    case 11: return PC_STAGE_WORLDSELECT;
+    case 12: return PC_STAGE_LEVELSELECT;
+    case 14: return PC_STAGE_CUTSCENE;
     case 15: return PC_STAGE_GAMEPLAY;
     }
     return -1;

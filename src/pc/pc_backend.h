@@ -103,6 +103,14 @@ void pcb_pump(void);
 void pcb_input_poll(PCPad *pads, int n);
 void pcb_input_rumble(int port, int on);
 
+/* NOT A BACKEND FUNCTION. src/pc/pc_input_script.c's synthetic pad is
+ * declared here only because its argument is PCPad, and PCPad is an
+ * anonymous-struct typedef that no other header can forward declare. It is
+ * called from os_cont.c's snapshot() and is a no-op unless KIRBY_PC_INPUT is
+ * set; see that file for the format and for why script time is game time. */
+void pc_input_script_init(void);
+void pc_input_script_apply(PCPad *pads, int n);
+
 /* Audio. 16-bit stereo interleaved, native byte order. */
 void pcb_audio_init(int freq);
 void pcb_audio_set_freq(int freq);
