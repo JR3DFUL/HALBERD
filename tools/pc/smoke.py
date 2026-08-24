@@ -90,15 +90,16 @@ STAGES = [
 #   attract-demo-2  demo 1 plays to the end and the title screen comes back;
 #                   demo 2 dies in func_8019F410_ovl7 reading an anim header
 #                   through EnemyKindDesc.animTable -- the PORT-widened
-#                   struct in include/unk_structs/D_800E1B50.h carries two
-#                   spurious pads after its 8-byte function-pointer fields,
-#                   so every field from unkC on is two cells out of phase.
-#
-# The next rung is attract-loop-complete, and it is MEASURED, not hoped for:
-# with those two pads deleted the port runs all three demos and wraps back to
-# the opening movie (route 0>1>2>3>4>5>6>7>8>9>2>3>4>5>6 in a 60s run, no
-# crash). Raise this the moment that header change lands.
-EXPECTED_STAGE = 'attract-demo-2'
+#                   struct in include/unk_structs/D_800E1B50.h padded its
+#                   8-byte pointer fields as if they were 4 bytes, so
+#                   animTable sat in cell 7 (terrainKind) instead of cell 5.
+#                   FIXED, commit 59eef667.
+#   attract-loop-   all three demos play, the title screen returns between
+#   complete        each, and game_tick's case 9 sends gGameState back to 2:
+#                   the whole unattended cycle, closed. Measured twice round
+#                   in a 90s run with no crash. This is the ceiling without
+#                   input -- for anything past it see DEEP_EXPECTED_STAGE.
+EXPECTED_STAGE = 'attract-loop-complete'
 
 # THE SECOND RATCHET, for --deep. An unattended run cannot leave the attract
 # loop -- game_tick() only does that when someone presses START -- so
@@ -108,15 +109,14 @@ EXPECTED_STAGE = 'attract-demo-2'
 # one is "how deep can it be driven", and a deep run needs a ROM, input and
 # more patience.
 #
-#   intro-cutscene  MEASURED with the EnemyKindDesc pad fix applied:
-#                   title -> file select -> world select -> the world 1-1
+#   intro-cutscene  title -> file select -> world select -> the world 1-1
 #                   opening cutscene (overlay 18), held for 150s / 32915
-#                   frames with no crash. It does not reach gGameState 15:
-#                   func_800A3408 replays the cutscene while
-#                   func_80227308_ovl18(1) returns 1, and it has not been
-#                   seen to stop. Without that pad fix the deep run dies in
-#                   func_8019F410_ovl7 at world select, so today this is
-#                   aspirational and --deep will FAIL until it lands.
+#                   frames with no crash. It does NOT reach gGameState 15:
+#                   src/ovl1/game.c's func_800A3408 replays the cutscene
+#                   while func_80227308_ovl18(1) returns 1, and it has not
+#                   been seen to stop. Whether that is an overlay-18 bug or
+#                   just a cutscene that autostart keeps restarting is the
+#                   open question at this rung.
 DEEP_EXPECTED_STAGE = 'intro-cutscene'
 
 # Beyond the expected stage there is nothing to wait for: with no controller

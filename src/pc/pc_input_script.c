@@ -231,10 +231,38 @@ void pc_input_script_apply(PCPad *pads, int n) {
         }
     }
 
+    /* THIS EPOCH IS A CANARY, and it has already earned its keep once.
+     *
+     * sEpoch sits in the platform layer's .bss, a few hundred bytes past the
+     * end of the game's own bss objects, and a game-side buffer overrun lands
+     * on it before it lands on anything that complains. That is exactly how
+     * the HUD arena overrun in src/pc/pc_bss_whole.c was found: this timer
+     * started reporting 390317930 seconds because its epoch had been
+     * overwritten with a repeating 16-bit fill pattern. Nothing else in the
+     * process had noticed.
+     *
+     * A run cannot plausibly last a year, so say so rather than printing an
+     * absurd number and hoping somebody looks twice. Once only -- if the bss
+     * is being scribbled on, one line is a diagnosis and a thousand is
+     * noise. */
+    if (now > (u64)PC_COUNTER_HZ * 60u * 60u * 24u) {
+        static int said;
+
+        if (!said) {
+            said = 1;
+            fprintf(stderr,
+                    "[input] EPOCH CORRUPTED (now=%llx epoch=%llx). This "
+                    "static lives in the platform layer's .bss; something has "
+                    "written past the end of a game bss object into it.\n",
+                    (unsigned long long)now, (unsigned long long)sEpoch);
+            fflush(stderr);
+        }
+        return;
+    }
+
     if (sVerbose && mask != sLast) {
-        fprintf(stderr, "[input] %+7.2fs  buttons %04x  [now=%llx epoch=%llx]\n",
-                (double)now / (double)PC_COUNTER_HZ, (unsigned)mask,
-                (unsigned long long)now, (unsigned long long)sEpoch);
+        fprintf(stderr, "[input] %+7.2fs  buttons %04x\n",
+                (double)now / (double)PC_COUNTER_HZ, (unsigned)mask);
         fflush(stderr);
     }
     sLast = mask;
