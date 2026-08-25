@@ -116,15 +116,23 @@ Keyboard mapping (N64 pad):
 
 | Key | N64 |
 |-----|-----|
-| Space | START |
+| Return | START |
 | X / C / Z | A / B / Z |
+| arrow keys | **D-pad — this is what moves Kirby** |
 | W A S D | control stick |
-| T G F H | D-pad |
-| arrow keys | C buttons |
-| E / R | L / R |
+| I J K L | C buttons (up / left / down / right) |
+| A / S | L / R (they double as stick left/down) |
 
-Space at the title, X through the file menu (X twice on an empty slot:
-first creates the save, second starts it), T/G/F/H + X on the maps.
+**Move with the arrow keys, not WASD.** The analog stick genuinely does not
+move the player: Kirby 64 copies the stick value into the player's controller
+record and never reads it back — verified both at runtime and by scanning the
+whole ROM image, see `docs/PC_PORT_LIBULTRASHIP.md`. Walking is the D-pad, on
+hardware as much as here. WASD is still mapped because menus and other code
+paths may use the stick, and because a real gamepad's stick lands in the same
+place.
+
+Return at the title, X through the file menu (X twice on an empty slot:
+first creates the save, second starts it), arrow keys + X on the maps.
 
 On WSL the window appears on the Windows desktop automatically. If the
 game is audibly/visibly running in the terminal but no window shows,

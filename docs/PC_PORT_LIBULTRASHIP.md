@@ -260,41 +260,164 @@ survives with two alternating threads and crashes with eight.
 
 ## What does not work
 
-* **The analog stick does not move the player, and only the D-pad does.**
-  Measured with `KIRBY_PC_PLAYERPOS=<seconds>` (`src/pc/pc_progress.c`, which
-  prints the player world position while `gGameState == 15`), world 1-1, each
-  input held for ~150 wall seconds:
+* **The analog stick does not move the player — and that is the ROM's own
+  behaviour, not a gap in the port.** This entry used to end "the gap is
+  inside the player code that should read `stickX`". There is no such code.
 
-  | `KIRBY_PC_INPUT` | what is held | player X over the run |
+  Measured at runtime first. `KIRBY_PC_PROBE=1` with counters in
+  `src/ovl1/util.c` (`#ifdef PORT`, ROM byte-identical), world 1-1, stick held
+  at `0x50` for 340 s:
+
+  | probe | count |
+  | --- | --- |
+  | `utilSetPlayerContPad` | 8274 |
+  | `stickX.arrives` (that call saw `gPlayerControllers[0].stickX != 0`) | 8274 |
+  | `utilCorrectStickX` | **0** |
+  | `utilCorrectStickY` | **0** |
+  | `utilGetStickDirection` | **0** |
+
+  So the value arrives on *every* frame — the `[playerpos]` line reads
+  `stick=80`, which is `gKirbyController.stickX` itself — and the only three
+  functions in the game that read a raw stick axis are never entered. `vel`
+  stays `0.0000`, the track parameter stays `0.001000`, X stays `-2959.92`.
+  The same run with D-RIGHT held instead reads `held=0100`, `vel=5.0000`, and
+  walks.
+
+  Then confirmed over the whole 32 MB ROM image, which is the only way to
+  make an absence claim honestly. A scan that tracks `lui`/`addiu`/`addu`
+  bases through every instruction word and resolves each load/store's
+  effective address reports:
+
+  | field | writes | reads |
   | --- | --- | --- |
-  | `g0:DRIGHT:60000` | D-pad right only | walks `-2946.79` → `-1480.00` |
-  | `g0:SR:60000` | stick only, `0x50` | `-2959.92`, never moves |
-  | `g0:SR:60000` at `0x7F` | stick at full deflection | `-2959.92`, never moves |
+  | `sContPads[].stick_x` | (SI) | 1 `lb`, ROM `0x4D2C`, in `read_controller_input` |
+  | `gControllers[].stick_x` | 1 | 1 `lb`, ROM `0x4DDC`, in `contSetPlayerPads` |
+  | `gPlayerControllers[].stickX` | 6 | 2 `lb`: ROM `0x4D4EC` (`utilSetPlayerContPad`), ROM `0x4D7D0` (`utilCorrectStickX`) |
+  | `gKirbyController.stickX` | 2 `sb`, both in `utilSetPlayerContPad` | **0** |
+  | `gKirbyController.buttonHeld` (control) | — | 154 `lhu` |
 
-  Full deflection ruling it out means this is not a deadzone: nothing
-  downstream of `pads[0].stick_x` reaches the player. The plumbing as far as
-  the game is intact — `src/pc/os_cont.c` copies `stick_x` into the
-  `OSContPad`, `src/main/contpad.c` copies it on into
-  `gControllers[i].stick_x` and then `gPlayerControllers[i].stickX` — so the
-  gap is inside the player code that should read `stickX`. **This corrects a
-  claim that stood in `src/pc/pc_input_script.c` for some time** ("THE STICK,
-  NOT THE D-PAD, IS WHAT MOVES KIRBY"): the `walk` mode that appeared to
-  confirm it also sets `CONT_RIGHT`, and `CONT_RIGHT` was doing all the work.
+  and a `jal` scan finishes it: `utilCorrectStickX` is called exactly once in
+  the ROM (`0x4D8FC`) and `utilCorrectStickY` exactly once (`0x4D8EC`), both
+  from inside `utilGetStickDirection` — and `utilGetStickDirection` is called
+  **zero** times. Its address never appears as a `jal`, as an `la` pair, or as
+  a data word, so it is not reached through a table either. It is dead code in
+  the retail ROM.
 
-* **The player stops at world X = `-1480.00` and the level does not continue.**
-  Walking right from the 1-1 spawn, X rises through a series of
-  collision-corrected fractional values (`-2946.79`, `-2039.27`, `-1790.72`,
-  …) and then stops at exactly `-1480.00` and stays there for the rest of the
-  run. Walking *left* stops at `-2959.92`. The playable corridor is therefore
-  about 1480 units wide and the run never leaves it.
+  The stick is therefore copied three times and read by nothing. Movement is
+  `gKirbyController.buttonHeld & 0x300` — D-pad left/right — in `ovl2/plylib.c`,
+  and Kirby's walk speed is not analog in this engine anyway. **Drive gameplay
+  with the D-pad. Making the stick work is a deliberate port feature (synthesise
+  the D-pad bits from `stick_x` in `src/pc/os_cont.c`), not a bug fix, and it
+  should be labelled as one if it is ever added.**
 
-  The **exactness** of the right-hand stop is the interesting half: every
-  other resting value carries a fractional penetration correction, so
-  `-1480.00` is a clamp against a datum, not a wall. It is **not** the
-  track-parameter clamp in `func_800F8570` (`ovl2_2.c`) — instrumenting both
-  of that function's `0.0001f`/`0.9999f` arms and its node transition showed
-  it is never called during gameplay at all. That is where the next
-  investigation starts.
+* **The player stops at world X = `-1480.00`, and `-1480.00` is a wall plane.**
+  Walking right from the 1-1 spawn, X rises through a series of fractional
+  values and then stops dead at exactly `-1480.00`, `blocked=0`, with the
+  engine still asking for full speed: `node=3 t=0.517857 vel=5.0000
+  acc=0.6250 held=0100`, unchanged for 275 s.
+
+  The previous note here reasoned that the *exactness* made it "a clamp
+  against a datum, not a wall". That is disproved. `-1480.00` is exact because
+  it is a plane constant read straight out of the level's collision data:
+
+  ```
+  (gdb) print *(struct Normal *) <the blocking record's plane>
+  $1 = {x = -1, y = 0, z = 0, originOffset = -1480}
+  (gdb) print *(struct CollisionTriangle *) <its triangle>
+  $2 = {vertex = {102, 97, 99}, polyCount = 30, normalType = 1,
+        collisionIndex = 0, breakParticle = 0, Halt_Movement = 0,
+        collisionParameter = 0, collisionType = 0}
+  ```
+
+  An ordinary solid face (`collisionType` 0 = default, `Halt_Movement` 0)
+  whose plane is `x = -1480`, normal `(-1,0,0)`, i.e. facing back down the
+  corridor. A wall resolve puts the body *exactly* on the plane; it is the
+  values that are *not* on a plane that carry fractions.
+
+  The mechanism, from a hardware watchpoint on `D_800E6BD0[0]` and the
+  `8E6C.obj0` probe (`src/ovl2/ovl2_3.c`, `#ifdef PORT`):
+
+  1. `func_800F8E6C` advances the track parameter `0.517857 -> 0.520089`
+     (`vel 5.0 * 0.1 / len 224`), as it should.
+  2. `func_80152828_ovl3` → `func_8010B11C` resolves the move and writes
+     `gPositionState.kirbyFootPos[0] = -1480` while the proposed
+     `gEntitiesNextPosXArray[0]` was `-1475`.
+  3. `func_801529C0_ovl3` (`src/ovl3/ovl3_1.c:713-719`) takes
+     `dx = -1480 - -1475 = -5.0000` and hands it to `func_800F8728`, which
+     converts the world delta back into track progress and subtracts exactly
+     what step 1 added — `0.520089 -> 0.517857`.
+
+  So the probe prints `*UNDONE*` every frame, and the parameter is frozen
+  while `vel` is 5.0. It is **not** the `[0,1]` clamp in `func_800F8A24` (its
+  out-of-range arm never fires), **not** the node hop declining
+  (`func_800F8B1C` is entered 8239 times and hops 0 more times), and **not**
+  `func_800F8570`, which an earlier lane had already ruled out.
+
+  **And the level wants a jump.** Same script plus an `A` pulse every two
+  seconds
+  (`g0:DRIGHT:60000` + `g20:A:12,g22:A:12,…`):
+
+  | time | x | node | t |
+  | --- | --- | --- | --- |
+  | +72 s | `-2096.47` | 3 | 0.242648 |
+  | +80 s | `-1480.00` | 3 | 0.517857 |
+  | +88 s | `-1224.80` | 3 | 0.631785 |
+  | +93 s | `-947.75` | 3 | 0.757700 |
+
+  So `-1480.00` is an ordinary ledge, the corridor was never a corridor, and
+  the port plays the level. What made it look like a wall for two lanes is
+  that both the plain `DRIGHT` script and the built-in `play` program jump on
+  a clock that does not happen to line up with arriving at it. `play` now
+  presses `A` on a short repeating cycle for that reason.
+
+* **Past the ledge is unrun ground, and two different faults live there.**
+  The built-in `play` program (which now jumps on a 2-second cycle) clears the
+  ledge — its last probe line is `node=3 left=0.520089 old=0.520089 ->
+  0.522321 vel=5.0000 x=-1475.00`, no `*UNDONE*` — and then crashes a few
+  frames later in
+
+  ```
+  func_8010E5B0    src/ovl2/ovl2_8.c:137
+  func_8010E740    src/ovl2/ovl2_8.c:250
+  func_8010FC30    src/ovl2/ovl2_8.c:1315
+  func_80110FD4    src/ovl2/ovl2_9.c:1131
+  func_8019F650_ovl7  src/ovl7/ovl7_2.c:207
+  ```
+
+  i.e. an ovl7 enemy walking into ovl2's collision. That one is not diagnosed.
+
+  The plain `DRIGHT` + jump-cycle run got further, to `x = -947.75`, and
+  crashed somewhere else:
+
+  ```
+  ./halberd(utilFuncTableJump+0x15)   src/ovl1/util.c:151
+  ./halberd(func_800FCFF0+0x32)       src/ovl2/spawn.c:201
+  ```
+
+  `utilFuncTableJump(idx, max, tbl)` does `tbl[idx](omCurrentObj)` with `tbl`
+  an array of function pointers, and `D_801244A4` is not one here. The decomp's
+  own listing (`asm/data/ovl2/spawn.data.s:144`, ROM `0xACF14`) has it as raw
+  words —
+
+  ```
+  dlabel D_801244A4
+      /* ACF14 801244A4 801BD7C4 */ .word 0x801BD7C4
+      ...
+  ```
+
+  — because splat did not resolve those cross-overlay entry addresses
+  (`0x801BD7C4` is ovl7, `0x801D2B90` ovl9, `0x8021A1A0` ovl19) into symbols.
+  `tools/pc/gen_data.py` only widens a `.word` block into `void *[]` when at
+  least one word is a *relocation reference*, so this one is emitted as
+  `u32 D_801244A4[] = { 0x801BD7C4, … }` and is then read at the wrong stride
+  with N64 addresses in it. Its siblings in the same file — `D_801242D0`,
+  `D_8012447C`, `D_80124488`, `D_801244DC` — have the same shape.
+
+  This is the first blocker past the ledge and it is decomp-side work first:
+  the addresses have to become named symbols in the listing before the port
+  can relocate them. `src/pc/pc_ovl_dispatch.c` already handles the three
+  cross-overlay call targets that *did* resolve, and is the pattern to follow
+  for any that land in the shared ovl10..ovl17 VRAM window.
 
 * **The game reaches the renderer as of 2026-08-12** — the stand-in
   `src/pc/pc_audio_thread.c` posts the init message the real `auThreadMain`

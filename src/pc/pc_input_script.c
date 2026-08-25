@@ -167,48 +167,81 @@ static u64 sPlayEpoch;
  * short, so the player keeps moving across a jump or an inhale instead of
  * stopping dead at every cue. */
 static const char kPlayProgram[] =
-    /* DRIGHT+SR, not SR: the D-pad is what actually moves the player in
-     * this build. See the measurement in the stick note at the bottom of
-     * this file. The stick is pressed too so the program keeps working
-     * unchanged once stickX reaches the player. */
-    "g0:DRIGHT+SR:600,"   /* walk right, 10 s */
-    "g8:A:10,"            /* jump, still walking */
-    "g10:DRIGHT+SR:600,"
-    "g14:B:120,"          /* inhale: the suction effect and what it catches */
-    "g20:DRIGHT+SR:600,"
-    "g24:A:10,"
-    "g26:DDOWN+SD:60,"    /* swallow / crouch */
-    "g30:DRIGHT+SR:600,"
-    "g36:START:8,"        /* pause menu on top of the level */
-    "g42:START:8,"        /* and back out of it */
-    "g44:DRIGHT+SR:600,"
-    "g52:A:10,"
-    "g54:DRIGHT+SR:600,"
-    "g60:B:120,"
-    "g64:DRIGHT+SR:900,"  /* 15 s: far enough to reach the next screen */
-    "g80:A:10,"
-    "g82:DRIGHT+SR:900,"
-    "g98:DRIGHT+SR:900,"
-    /* THE TAIL IS THE LONGEST CUE ON PURPOSE, and it was added after the
-     * first `play` run measured distinct=123 of 474 sampled frames against
-     * `walk`'s 450 of 452. Nothing had gone wrong: the program simply ran
-     * out at g129 and left the pad neutral for the remaining two thirds of
-     * the run, so an idle Kirby's looping animation re-hashed to the same
-     * few frames over and over. A script that stops driving stops measuring,
-     * and `distinct` is the counter that says so. */
-    "g114:DRIGHT+SR:60000";  /* walk right for the rest of the run */
+    /* DRIGHT, not SR: the D-pad is what moves the player, and nothing else
+     * ever will -- the stick has no reader anywhere in the ROM. See the
+     * stick note at the bottom of this file for the measurement. SR is still
+     * pressed alongside it, because it costs nothing and a run that sets
+     * both is the one that would notice if that ever changed. */
+    "g0:DRIGHT+SR:60000,"  /* walk right for the whole run; the cues below
+                            * OR into this one rather than replacing it */
+    /* JUMP ON A SHORT CYCLE, and this is the fix for the wedge this program
+     * carried. Kirby 64's world 1-1 has a solid ledge whose collision plane
+     * is x = -1480 (normal (-1,0,0), collisionType 0 -- read out of the
+     * level data with a debugger, see docs/PC_PORT_LIBULTRASHIP.md). A
+     * walking Kirby stops dead against it, which two lanes read as the level
+     * ending or the engine clamping. It is neither: he has to jump, and the
+     * old program's jumps at g8/g24/g52 simply never coincided with standing
+     * at the ledge. A 2-second cycle always does. Measured with the same
+     * cycle bolted onto a plain DRIGHT script: -2096.47 -> -1480.00 ->
+     * -1224.80 -> -947.75, i.e. straight over. */
+    "g2:A:12,g4:A:12,g6:A:12,g8:A:12,"
+    "g10:A:12,g12:A:12,g14:A:12,g16:A:12,g18:A:12,"
+    "g20:A:12,g22:A:12,g24:A:12,g26:A:12,g28:A:12,"
+    "g30:A:12,g32:A:12,g34:A:12,g36:A:12,g38:A:12,"
+    "g40:A:12,g42:A:12,g44:A:12,g46:A:12,g48:A:12,"
+    /* AND THE OTHER ACTIONS COME AFTER THE WALKING, which is the second half
+     * of the fix. With B at g14 and DDOWN at g19 -- where they used to be --
+     * Kirby arrives at the ledge in action 14 with vel = 0.0000, and a held
+     * D-RIGHT does not restart him: measured at +87, +96, +104, +112, +120
+     * and +128 s, all six samples identical at x = -1480.00 t = 0.517857
+     * vel = 0.0000 action = 14 with held = 0100 the whole time. Jumping
+     * cannot help from there because he never walks into the ledge again.
+     * Walk first, act later.
+     *
+     * The tail keeps driving to the end of the run on purpose: an earlier
+     * program ran out of cues at g129 and left the pad neutral for two
+     * thirds of the run, which showed up as distinct=123 of 474 sampled
+     * frames against a walking run's 450 of 452. A script that stops driving
+     * stops measuring. */
+    "g52:B:120,"          /* inhale: the suction effect and what it catches */
+    "g57:DDOWN+SD:60,"    /* swallow / crouch */
+    "g62:START:8,"        /* pause menu on top of the level */
+    "g68:START:8,"        /* and back out of it */
+    "g74:A:12,g76:A:12,g78:A:12,"
+    "g80:B:120,"
+    "g86:A:12,g88:A:12,g90:A:12,g92:A:12,g94:A:12,"
+    "g96:A:12,g98:A:12";
 
-/* KNOWN, AND NOT YET BISECTED: this program currently wedges. A plain
- * `KIRBY_PC_INPUT=g0:DRIGHT:60000` walks the player to the far end of the
- * 1-1 corridor at x = -1480.00; `play` stops at x = -2198.29, part way
- * along, and the held DRIGHT in the tail cue does not recover it
- * (KIRBY_PC_PLAYERPOS=20, three runs). So one of the actions between --
- * the A jumps, the B inhale, or the DDOWN swallow -- leaves the player in
- * a state a held direction cannot leave. It is NOT the pause pair: a
- * separate run pressing START at g15/g25/g55/g75 with nothing else walked
- * all the way to -1480.00 through every one of them. Bisecting the
- * remaining three is the next thing to do here, and is worth doing before
- * adding any more cues on top. */
+/* WHERE THIS PROGRAM NOW ENDS, so the next lane does not re-find it. It
+ * clears the ledge -- the last probe line before the crash reads
+ *
+ *   8E6C.obj0 #423  node=3 left=0.520089 old=0.520089 -> 0.522321
+ *                   vel=5.0000 len=224.000 x=-1475.00
+ *
+ * with no *UNDONE*, i.e. past t = 0.517857 and still accelerating -- and then
+ * SIGSEGVs a few frames later. TWO different faults have been seen just past
+ * the ledge, on two different routes through it, so this is a region of the
+ * level the port has not run before rather than one bug:
+ *
+ *   func_8010E5B0 (ovl2_8.c:137) <- func_8010E740 <- func_8010FC30 <-
+ *   func_80110FD4 (ovl2_9.c:1131) <- func_8019F650_ovl7 (ovl7_2.c:207)
+ *       -- this program, at x = -1475.00
+ *
+ *   utilFuncTableJump (util.c:151) <- func_800FCFF0 (spawn.c:201)
+ *       -- a plain DRIGHT + 2 s A cycle, at x = -947.75. That one is
+ *       diagnosed: the spawn callback table D_801244A4 is a run of RAW
+ *       cross-overlay addresses in the decomp's own listing rather than
+ *       symbol references, so it is emitted as u32[] and called at the wrong
+ *       stride. Decomp-side work first; see docs/PC_PORT_LIBULTRASHIP.md.
+ *
+ * The previous note here recorded `play` wedging at x = -2198.29 and asked
+ * for the A jumps, the B inhale and the DDOWN swallow to be bisected. That
+ * bisect is moot. Re-measured on the current tree, the OLD program stopped at
+ * x = -1480.00 with node=3 t=0.517857 vel=5.0000 -- the same ledge a plain
+ * held DRIGHT stops at, not a state its own cues had put the player in. The
+ * -2198.29 figure does not reproduce here; it was measured on a differently
+ * staged tree and nothing in this repository can now say what that tree was,
+ * which is its own lesson (see the note at the top of build.sh). */
 
 static u32 button_of(const char *name, size_t n) {
     static const struct { const char *name; u32 bit; } kNames[] = {
@@ -627,17 +660,33 @@ void pc_input_script_apply(PCPad *pads, int n) {
      *   the same at full deflection 0x7F
      *       x stays -2959.92
      *
-     * So it is not a deadzone: nothing downstream of pads[0].stick_x
-     * reaches the player. The plumbing as far as the game is intact --
-     * os_cont.c copies stick_x into the OSContPad, contpad.c copies it on
-     * into gControllers[i].stick_x and then gPlayerControllers[i].stickX --
-     * so the gap is inside the player code that should read stickX, which
-     * is worth its own investigation and is not one.
+     * So it is not a deadzone. That note ended "the gap is inside the player
+     * code that should read stickX". THERE IS NO SUCH CODE, and the search
+     * for it is over.
      *
-     * Until then, drive gameplay with the D-PAD; the stick is still set
-     * (it costs nothing and will start working when that gap closes), and
-     * the built-in `play` program presses DRIGHT alongside SR for exactly
-     * that reason. */
+     * The stick arrives perfectly: probes in src/ovl1/util.c counted
+     * utilSetPlayerContPad 8274 times over a 340 s stick-held run and
+     * gPlayerControllers[0].stickX was non-zero on all 8274, with the
+     * [playerpos] line reading stick=80 -- that field IS
+     * gKirbyController.stickX. utilCorrectStickX, utilCorrectStickY and
+     * utilGetStickDirection, the only three functions in the game that read
+     * a raw stick axis, were entered ZERO times in the same run.
+     *
+     * A scan of the whole 32 MB ROM image agrees and finishes the argument:
+     * gKirbyController.stickX has two `sb` writes (both in
+     * utilSetPlayerContPad) and no reads at all, where
+     * gKirbyController.buttonHeld has 154 `lhu` reads; and
+     * utilGetStickDirection -- the sole caller of utilCorrectStickX/Y -- is
+     * itself called zero times, by jal, by la, or through a data table. It
+     * is dead code in the retail ROM.
+     *
+     * So the stick is copied three times and read by nothing, and movement
+     * is gKirbyController.buttonHeld & 0x300 in ovl2/plylib.c. DRIVE
+     * GAMEPLAY WITH THE D-PAD. The stick is still set here because it costs
+     * nothing, but nothing will ever come of it without a deliberate port
+     * feature -- synthesising the D-pad bits from stick_x in os_cont.c --
+     * which would be a change to the game's behaviour and has to be labelled
+     * as one. Full details in docs/PC_PORT_LIBULTRASHIP.md. */
     if (sMode == 4 && gGameState == 15) {
         pads[0].stick_x = (s8)STICK_PUSH;
         pads[0].stick_y = 0;
