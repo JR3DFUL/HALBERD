@@ -8343,7 +8343,38 @@
  #pragma GLOBAL_ASM("asm/nonmatchings/ovl1/ovl1/func_800A2550.s")
 --- a/src/ovl1/ovl1_11.c
 +++ b/src/ovl1/ovl1_11.c
-@@ -102,6 +102,10 @@ void func_800BB6B0(GObj *gobj);
+@@ -51,13 +51,29 @@ void func_800BB588(GObj *gobj) {
+ }
+ 
+ #ifdef NON_MATCHING
++/* DECLARED AND PASSED, because this is the arm the port actually compiles.
++ *
++ * The bare `func_800AB0F4()` below had NO declaration in scope here, so it
++ * was an implicit `int f()` and the call left whatever happened to be in $a0.
++ * In gameplay that was not a GObj: func_800AB0F4 dereferences it as
++ * `gSegment4StartArray[g->objId]` and the port took SIGSEGV on the first
++ * frame of gGameState 15, at the first draw.
++ *
++ * The K&R declaration further down this file carries a comment calling the
++ * K&R form load-bearing because "its call site at line ~60 passes 0 args".
++ * That comment is about the OTHER arm -- with PORT and NON_MATCHING both
++ * defined the `#else` branch is dead and neither that declaration nor its
++ * call is compiled. Verified with tools/decomp/check_live_pragmas.py's arm
++ * evaluator over this file at (PORT, NON_MATCHING). */
++s32 func_800AB0F4(GObj *);
++
+ void func_800BB6B0(GObj *gobj) {
+     gDPPipeSync(gDisplayListHeads[0]++);
+     gSPClearGeometryMode(gDisplayListHeads[0]++, G_ZBUFFER);
+     gSPSegment(gDisplayListHeads[0]++, 0x04, gSegment4StartArray[gobj->objId]);
+     gDPSetRenderMode(gDisplayListHeads[0]++, G_RM_AA_OPA_SURF, G_RM_AA_OPA_SURF2);
+ 
+-    switch (func_800AB0F4()) {
++    switch (func_800AB0F4(gobj)) {
+         case 19:
+         case 21:
+         case 23:
+@@ -102,6 +118,10 @@ void func_800BB6B0(GObj *gobj);
  #ifdef NON_MATCHING
  /* m2c draft, for the PORT only. Not byte-exact and not
     claimed to be: the N64 build takes the pragma below. */

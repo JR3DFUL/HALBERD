@@ -7,7 +7,21 @@
 # Every stage is idempotent: rerun after a failure and it resumes.
 #
 # STATUS: beta. This encodes the exact chain the development container uses.
-# The port itself boots to the intro screens; see README for current state.
+#
+# The port reaches GAMEPLAY and renders. Driven by the scripted controller
+# (KIRBY_PC_INPUT=walk) it runs logos -> opening movie -> title -> file select
+# -> galaxy map -> planet map -> world 1-1, and draws the level and Kirby.
+# See README and docs/PC_PORT_LIBULTRASHIP.md for what is proven by running
+# rather than merely wired.
+#
+# NOTE ON THE DECOMP CLONE BELOW. It pins the published `decomp-clean`
+# branch, which lags the decomp's working branch. Two of the port's in-game
+# blockers were fixed on the decomp side after that branch was cut, and both
+# are carried here as hunks in patches/decomp-port.patch rather than being
+# waited on -- func_800AB0F4's call site in src/ovl1/ovl1_11.c, and the
+# 4-byte blob slot read in src/ovl6/ovl6.c. When decomp-clean is refreshed,
+# check whether those two hunks still apply and drop them if the branch has
+# them.
 set -euo pipefail
 
 ROM=${1:-baserom.us.z64}
