@@ -94,6 +94,8 @@
  * ultratypes' u16 IS uint16_t, its s8 IS int8_t -- and a compile-time check
  * on the PCPad layout is kept below so the two cannot drift apart silently.
  */
+#include <dlfcn.h>
+
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -133,6 +135,9 @@ void pcb_frame_end(void);
 void pcb_gfx_set_native_ucodes(const void* f3dex2, const void* s2dex);
 void pcb_gfx_set_ucode(int s2dex);
 void pcb_gfx_run(const void* displayList);
+int pcb_gfx_stats(unsigned* framesDrawn, unsigned* framesSampled,
+                  unsigned* framesNonBlank, unsigned* distinct,
+                  unsigned long long* lastHash);
 int pcb_alive(void);
 void pcb_pump(void);
 void pcb_input_poll(PCPad* pads, int n);
@@ -186,6 +191,113 @@ static uint8_t sControllerBits;
 static int sFramesDrawn;
 static int sTasksThisFrame;
 static bool sMultiTaskFrame;
+
+/* ------------------------------------------------- did it draw anything?
+ *
+ * See the long note over pcb_gfx_stats in src/pc/pc_backend.h for why this
+ * exists. Two independent facts are kept, because they answer two different
+ * questions and only one of them is free:
+ *
+ *   sFramesDrawn    DrawAndRunGraphicsCommands returned true, i.e. Fast3D
+ *                   ran the display list through the rasteriser and swapped.
+ *                   That is the pixel evidence, and it costs nothing.
+ *   the sample set  a readback of the presented image. This answers "was the
+ *                   image blank" and "did it CHANGE", which framesDrawn
+ *                   cannot -- a wedged game still swaps the same picture
+ *                   forever. It stalls the GPU, so it is opt-in through
+ *                   KIRBY_PC_FRAMEHASH=<every-nth-frame>.
+ *
+ * glReadPixels is resolved with dlsym rather than linked. The backend must
+ * not grow a hard dependency on a GL loader for a diagnostic: on a build
+ * where the symbol is not in the process (a future Metal/DirectX path, or a
+ * GL loaded entirely through function pointers) the lookup simply fails and
+ * the sample counters stay 0, which reports "not sampled" instead of lying.
+ *
+ * GL_FRONT, not GL_BACK: Fast3D's EndFrame has already swapped by the time
+ * pcb_frame_end runs, so the finished image is in the front buffer and the
+ * back buffer holds undefined contents. */
+#define PCB_GL_FRONT 0x0404
+#define PCB_GL_RGBA 0x1908
+#define PCB_GL_UNSIGNED_BYTE 0x1401
+
+typedef void (*pcb_glReadPixels_t)(int, int, int, int, unsigned, unsigned, void*);
+typedef void (*pcb_glReadBuffer_t)(unsigned);
+
+static unsigned sFramesSampled;
+static unsigned sFramesNonBlank;
+static unsigned sDistinct;
+static unsigned long long sLastHash;
+static int sSampleEvery;          /* 0 = sampling off */
+static int sSampleResolved;
+
+static pcb_glReadPixels_t sGlReadPixels;
+static pcb_glReadBuffer_t sGlReadBuffer;
+
+/* A 64x64 corner is enough to tell blank from drawn and frame N from frame
+ * N+1, and it is ~1000x less readback than a full 640x480. The origin is the
+ * middle of the window rather than (0,0): the N64 image is letterboxed by
+ * Fast3D on a resized window, so the corners can legitimately be the clear
+ * colour on a frame that drew perfectly well. */
+#define PCB_SAMPLE_DIM 64
+
+static void pcb_sample_frame(void) {
+    static unsigned char px[PCB_SAMPLE_DIM * PCB_SAMPLE_DIM * 4];
+    unsigned long long h = 1469598103934665603ull;   /* FNV-1a 64 offset */
+    size_t i;
+    int nonblank = 0;
+    int w = 0;
+    int hgt = 0;
+
+    if (!sSampleResolved) {
+        sSampleResolved = 1;
+        sGlReadPixels = (pcb_glReadPixels_t)dlsym(RTLD_DEFAULT, "glReadPixels");
+        sGlReadBuffer = (pcb_glReadBuffer_t)dlsym(RTLD_DEFAULT, "glReadBuffer");
+        if (sGlReadPixels == nullptr) {
+            fprintf(stderr, "[lus] KIRBY_PC_FRAMEHASH set but glReadPixels is "
+                            "not in this process; frames will not be sampled.\n");
+        }
+    }
+    if (sGlReadPixels == nullptr) {
+        return;
+    }
+
+    w = (int)sWindow->GetWidth();
+    hgt = (int)sWindow->GetHeight();
+    if (w < PCB_SAMPLE_DIM || hgt < PCB_SAMPLE_DIM) {
+        w = 640;
+        hgt = 480;
+    }
+    memset(px, 0, sizeof(px));
+    if (sGlReadBuffer != nullptr) {
+        sGlReadBuffer(PCB_GL_FRONT);
+    }
+    sGlReadPixels((w - PCB_SAMPLE_DIM) / 2, (hgt - PCB_SAMPLE_DIM) / 2,
+                  PCB_SAMPLE_DIM, PCB_SAMPLE_DIM, PCB_GL_RGBA,
+                  PCB_GL_UNSIGNED_BYTE, px);
+
+    for (i = 0; i < sizeof(px); i++) {
+        h ^= px[i];
+        h *= 1099511628211ull;
+    }
+    /* "Not the clear colour" is spelled as "not all one value" so that this
+     * keeps working if the clear colour is ever changed from black. A frame
+     * of uniform anything is a frame with nothing on it. */
+    for (i = 4; i < sizeof(px); i += 4) {
+        if (px[i] != px[0] || px[i + 1] != px[1] || px[i + 2] != px[2]) {
+            nonblank = 1;
+            break;
+        }
+    }
+
+    sFramesSampled++;
+    if (nonblank) {
+        sFramesNonBlank++;
+    }
+    if (sFramesSampled == 1 || h != sLastHash) {
+        sDistinct++;
+    }
+    sLastHash = h;
+}
 
 /* pc_pump_events() is called at the top of every blocking libultra entry
  * point, which in this game is thousands of times a second. SDL_PollEvent is
@@ -473,6 +585,19 @@ static bool lus_init(void) {
      * this to the window. */
     GfxSetNativeDimensions(320, 240);
 
+    /* KIRBY_PC_FRAMEHASH=N samples every Nth drawn frame; bare "1" or any
+     * non-numeric value means every frame. Off unless set -- the readback is
+     * a synchronous stall and would be paid on every frame of every run. */
+    {
+        const char* hashEnv = getenv("KIRBY_PC_FRAMEHASH");
+        if (hashEnv != nullptr) {
+            sSampleEvery = atoi(hashEnv);
+            if (sSampleEvery < 1) {
+                sSampleEvery = 1;
+            }
+        }
+    }
+
     sInitOk = true;
     return true;
 }
@@ -608,7 +733,42 @@ void pcb_gfx_run(const void* displayList) {
         sFramesDrawn++;
         pc_trace(PC_TR_GFX, "[lus] frame %d drawn from dl %p\n", sFramesDrawn,
                  displayList);
+        /* Sample here and not in pcb_frame_end: the swap happened inside the
+         * call above, so this is the first moment the finished image is in
+         * the front buffer, and it is also the only place we know a frame was
+         * actually produced. */
+        if (sSampleEvery > 0 && (sFramesDrawn % sSampleEvery) == 0) {
+            pcb_sample_frame();
+        }
     }
+}
+
+int pcb_gfx_stats(unsigned* framesDrawn, unsigned* framesSampled,
+                  unsigned* framesNonBlank, unsigned* distinct,
+                  unsigned long long* lastHash) {
+    if (framesDrawn != nullptr) {
+        *framesDrawn = (unsigned)sFramesDrawn;
+    }
+    if (framesSampled != nullptr) {
+        *framesSampled = sFramesSampled;
+    }
+    if (framesNonBlank != nullptr) {
+        *framesNonBlank = sFramesNonBlank;
+    }
+    if (distinct != nullptr) {
+        *distinct = sDistinct;
+    }
+    if (lastHash != nullptr) {
+        *lastHash = sLastHash;
+    }
+    /* 1 unconditionally, and NOT `sInitOk`. The question this answers is
+     * "does this backend rasterise", which is a property of the build, not of
+     * how the run went. A LUS build whose context failed to come up drew zero
+     * frames and must report a rasterising backend with framesDrawn=0 -- that
+     * is a rendering FAILURE and has to be readable as one. Returning 0 there
+     * would make it indistinguishable from a null-backend run, which is the
+     * exact confusion this function exists to end. */
+    return 1;
 }
 
 void pcb_frame_end(void) {
@@ -625,7 +785,7 @@ void pcb_frame_end(void) {
      * it re-draws the cached game FB through the normal composite. It
      * returns false until the first game frame exists -- fall back to
      * RunGuiOnly only then, so the window still repaints before boot. */
-    if (sTasksThisFrame == 0) {
+    if (sTasksThisFrame == 0 && sFramesDrawn == 0) {
         /* Measured on this stack: the game renders DIRECT to the backbuffer
          * (mRendersToFb false, GetGfxFrameBuffer()==0), so the held-frame
          * re-present has nothing to re-present and the RunGuiOnly fallback
@@ -633,8 +793,24 @@ void pcb_frame_end(void) {
          * game was visible for 1/120th of a second per real frame. Once the
          * first game frame has been drawn, do nothing on empty retraces: the
          * window simply keeps its last presented contents. Before the first
-         * frame, keep repainting so the window doesn't look hung at boot. */
-        if (!sWindow->PresentCurrentFramebuffer() && sFramesDrawn == 0) {
+         * frame, keep repainting so the window doesn't look hung at boot.
+         *
+         * THE `sFramesDrawn == 0` GUARD IS ON THE WHOLE BLOCK, and moving it
+         * there is what turned a port that looked wedged into one that boots.
+         * It used to guard only the RunGuiOnly fallback, so
+         * PresentCurrentFramebuffer ran on EVERY empty retrace for the whole
+         * life of the process -- and an empty retrace is the common case,
+         * ~120 of them per second against a game frame every couple of
+         * seconds. That call is not cheap: it enters Ship::Gui::StartDraw,
+         * where ImGui's SDL2 backend re-enumerates monitors (an
+         * XGetWindowProperty round trip), and ends in glXSwapBuffers ->
+         * XSync, another round trip. Sampling the scheduler thread found it
+         * inside that path in two samples out of three, and the game managed
+         * 6 frames in 60 seconds. With the guard where this comment always
+         * said it was, the same run boots through the logos and the opening
+         * movie. Nothing is lost: X11 keeps the last presented contents
+         * without being told again. */
+        if (!sWindow->PresentCurrentFramebuffer()) {
             sWindow->RunGuiOnly();
         }
     }

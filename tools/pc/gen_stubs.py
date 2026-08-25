@@ -54,8 +54,27 @@ def missing():
 
 
 # Supplied by the host at link time; stubbing them would shadow the real ones.
-LIBC = re.compile(r'^(memcpy|memset|memmove|strlen|strcpy|bcopy|bzero|'
-                  r'sinf|cosf|sqrtf|_GLOBAL_OFFSET_TABLE_|'
+#
+# A libc name that reaches the emitter fails in one of two ways, and BOTH are
+# worse than the symbol simply resolving to libc. If the host header declared
+# it, the emitted `long f(void)` conflicts with the real prototype and stubs.c
+# does not compile -- that is what `atexit` (called by the fatal-signal
+# reporter in src/pc/pc_progress.c) did the first time link.sh was run after
+# that reporter landed. If the header did NOT declare it, the stub links and
+# silently WINS over libc, so a routine the port genuinely relies on aborts.
+#
+# The list is deliberately wider than what is undefined today: a name here
+# only has any effect while it is undefined by every game object, and in that
+# case letting libc supply it is always the right answer.
+LIBC = re.compile(r'^(memcpy|memset|memmove|memcmp|strlen|strcpy|strncpy|'
+                  r'strcmp|strncmp|strcat|strchr|strstr|bcopy|bzero|bcmp|'
+                  r'malloc|calloc|realloc|free|abort|exit|atexit|_exit|'
+                  r'printf|fprintf|sprintf|snprintf|vsprintf|vsnprintf|'
+                  r'vfprintf|puts|fputs|fputc|putchar|fflush|fopen|fclose|'
+                  r'fread|fwrite|fseek|ftell|getenv|setenv|abs|labs|'
+                  r'sinf|cosf|tanf|atan2f|asinf|acosf|sqrtf|fabsf|powf|'
+                  r'floorf|ceilf|fmodf|ldexpf|sin|cos|sqrt|fabs|pow|'
+                  r'_GLOBAL_OFFSET_TABLE_|__stack_chk_fail|'
                   r'__stack_chk_fail_local)$')
 
 # Supplied by the LINKER, and this is a different failure mode from the libc

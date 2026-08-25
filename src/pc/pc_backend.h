@@ -93,6 +93,41 @@ void pcb_gfx_set_native_ucodes(const void *f3dex2, const void *s2dex2);
  * game's scheduler will accept. */
 void pcb_gfx_run(const void *displayList);
 
+/* -------------------------------------------------------------------------
+ * DID IT DRAW ANYTHING? -- the question pcb_has_renderer() does not answer.
+ *
+ * A whole day of measurement was once reported as port progress from runs
+ * linked against pc_backend_null.c, whose osSpTaskLoad says "no RSP" and
+ * whose pcb_gfx_run is empty. Those runs are a game-logic trace and say
+ * nothing about rendering, and nothing in the output distinguished them from
+ * a rendering run. This is the seam that makes the difference reportable.
+ *
+ * Returns 1 if this backend RASTERISES. Then the counters are filled in and
+ * mean something. Returns 0 for a backend that draws nothing, and then the
+ * counters are left alone and no caller may print a rendering verdict.
+ *
+ * That is a different fact from "no window opened": a rasterising backend on
+ * a virtual display (Xvfb + llvmpipe) answers 1 and reports real frames,
+ * because pixels really were produced.
+ *
+ *   framesDrawn    display lists that reached the rasteriser and were
+ *                  presented.
+ *   framesSampled  of those, how many were read back and hashed. 0 unless
+ *                  KIRBY_PC_FRAMEHASH is set -- the readback stalls the GPU
+ *                  and must not be on by default.
+ *   framesNonBlank of the sampled ones, how many held a pixel that was not
+ *                  the clear colour. THIS is "it drew something".
+ *   distinct       how many times the sampled frame hash CHANGED. A frozen
+ *                  image and a running game both draw frames; only one of
+ *                  them keeps producing different ones.
+ *   lastHash       FNV-1a over the last sampled frame, so two runs can be
+ *                  compared by eye.
+ *
+ * Any pointer may be NULL. ------------------------------------------------ */
+int pcb_gfx_stats(unsigned *framesDrawn, unsigned *framesSampled,
+                  unsigned *framesNonBlank, unsigned *distinct,
+                  unsigned long long *lastHash);
+
 /* Returns 0 once the user has asked to quit. */
 int pcb_alive(void);
 

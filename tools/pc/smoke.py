@@ -321,6 +321,44 @@ def main():
     if when('first_retrace') == 0.0:
         print('smoke: NO VI RETRACE EVER FIRED -- the pump is not running; '
               'see pc_vi_tick in src/pc/os_vi.c')
+    # WHAT THE STAGE NUMBER DOES NOT SAY. Every line above this one is game
+    # LOGIC: milestones, gGameState, gtlDrawnFrameCounter. All of them count
+    # up exactly the same on a build linked against src/pc/pc_backend_null.c,
+    # which draws nothing at all -- and a day of such runs was once reported
+    # as rendering progress because the output never mentioned the
+    # difference. render= is that missing fact, straight from pcb_gfx_stats.
+    render = v.get('render')
+    if render is None:
+        print('smoke: this binary predates render= in the verdict line; it '
+              'cannot say whether anything was drawn. Rebuild it.')
+    elif render == 'none':
+        print('smoke: RENDERED NOTHING -- linked against a backend that does '
+              'not rasterise (pc_backend_null.c). Everything above is game '
+              'logic only; this run is NOT evidence about rendering.')
+    else:
+        drawn = int(v.get('drawn', '0') or 0)
+        sampled = int(v.get('sampled', '0') or 0)
+        nonblank = int(v.get('nonblank', '0') or 0)
+        distinct = int(v.get('distinct', '0') or 0)
+        if drawn == 0:
+            print('smoke: RASTERISING BACKEND DREW 0 FRAMES -- the display '
+                  'lists never reached Fast3D. A rendering failure, not a '
+                  'game-logic one.')
+        elif sampled == 0:
+            print(f'smoke: {drawn} frame(s) rasterised and presented. Set '
+                  'KIRBY_PC_FRAMEHASH=1 to also check they were not blank.')
+        else:
+            print(f'smoke: {drawn} frame(s) rasterised, {sampled} sampled, '
+                  f'{nonblank} non-blank, {distinct} distinct '
+                  f'(hash {v.get("framehash", "?")})')
+            if nonblank == 0:
+                print('smoke: EVERY SAMPLED FRAME WAS BLANK -- frames are '
+                      'being presented but nothing is drawn into them.')
+            elif distinct <= 1:
+                print('smoke: THE IMAGE NEVER CHANGED -- the same frame is '
+                      'being presented over and over. The game is drawing '
+                      'but not advancing.')
+
     if when('first_gfxtask') == 0.0:
         print('smoke: NO GRAPHICS TASK WAS EVER SUBMITTED -- the game never '
               'reached osSpTaskStartGo')

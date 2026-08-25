@@ -65,6 +65,7 @@
 #include <unistd.h>
 
 #include "pc/pc_platform.h"
+#include "pc/pc_backend.h"
 
 /* game_tick()'s state variable and the frame counter gtlDraw bumps. Both are
  * plain globals in the game's bss; reading them is the same thing pc_dbg.c
@@ -214,8 +215,9 @@ void pc_progress_tick(void) {
  * ONE LINE, KEY=VALUE, on stderr. Both a human and tools/pc/smoke.py read it,
  * which is why it is neither prose nor JSON. */
 static void write_verdict(const char *outcome, const char *detail) {
-    char buf[512];
+    char buf[640];
     char route[192];
+    char render[128];
     int n = 0;
     int i;
 
@@ -234,14 +236,41 @@ static void write_verdict(const char *outcome, const char *detail) {
                  i ? ">" : "", sRoute[i]);
     }
 
+    /* THE RENDERING EVIDENCE, and the reason it is on this line rather than
+     * in a separate one. `frames=` above is gtlDrawnFrameCounter -- a counter
+     * the GAME increments when it finishes building a display list. It is a
+     * game-logic number and it counts up identically on a run linked against
+     * pc_backend_null.c, which rasterises nothing. A whole day of such runs
+     * was once read as rendering progress because nothing on this line said
+     * otherwise. `render=` is the fact that was missing: `none` means the
+     * backend does not draw and NO rendering claim may be made about the run.
+     * See pcb_gfx_stats in pc/pc_backend.h. */
+    render[0] = '\0';
+    {
+        unsigned drawn = 0;
+        unsigned sampled = 0;
+        unsigned nonblank = 0;
+        unsigned distinct = 0;
+        unsigned long long hash = 0;
+
+        if (pcb_gfx_stats(&drawn, &sampled, &nonblank, &distinct, &hash)) {
+            snprintf(render, sizeof(render),
+                     " render=raster drawn=%u sampled=%u nonblank=%u "
+                     "distinct=%u framehash=%016llx",
+                     drawn, sampled, nonblank, distinct, hash);
+        } else {
+            snprintf(render, sizeof(render), " render=none");
+        }
+    }
+
     n = snprintf(buf, sizeof(buf),
                  "[verdict] outcome=%s stage=%s stage_at=%.2f elapsed=%.2f "
                  "gamestate=%u frames=%d first_retrace=%.2f first_gfxtask=%.2f "
-                 "route=%s%s%s\n",
+                 "route=%s%s%s%s\n",
                  outcome, stage_name(sStage), sStageAt, now_s() - sT0,
                  (unsigned)gGameState, (int)gtlDrawnFrameCounter,
                  sFirstAt[PC_STAGE_RETRACE], sFirstAt[PC_STAGE_GFXTASK],
-                 route[0] ? route : "-",
+                 route[0] ? route : "-", render,
                  detail ? " detail=" : "", detail ? detail : "");
     if (n > 0) {
         ssize_t ignored = write(2, buf, (size_t)n);

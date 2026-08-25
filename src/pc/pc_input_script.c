@@ -24,6 +24,34 @@
  *       smoke test wants: it punches through the title screen, the file
  *       select and any confirm prompt without knowing what any of them are.
  *
+ *   KIRBY_PC_INPUT=advance
+ *       Drive by WHAT IS ON SCREEN rather than by the clock: the button
+ *       pressed is chosen from gGameState, and the cycle restarts whenever
+ *       gGameState changes. This exists because `autostart` cannot get
+ *       in-game, and the reason is not a port bug.
+ *
+ *       src/ovl1/game.c's func_800A3408 runs the world 1-1 opening cutscene
+ *       as
+ *
+ *           if (func_80227308_ovl18(0) != 0)
+ *               do { gGameState = 0xE; func_800A3150(4); }
+ *               while (func_80227308_ovl18(1) == 1);
+ *
+ *       and func_80227308_ovl18 is the WATCH-THE-CUTSCENE PROMPT, returning
+ *       the YES/NO the player picked. Its object (func_80226FD8_ovl18)
+ *       defaults the answer to YES, moves it to NO on D-LEFT (buttonPressed
+ *       & 0x200) and back to YES on D-RIGHT, and CONFIRMS on A or START.
+ *       `autostart` presses only START and A, so it confirms YES at every
+ *       re-prompt and the cutscene replays for ever. That is the loop
+ *       previously recorded as "does not reach gGameState 15, whether that
+ *       is an overlay-18 bug is the open question" -- it is not a bug, it is
+ *       a prompt nobody was answering.
+ *
+ *       The table is in button_for_state() below. The important entry is
+ *       states 11 and 14, where the prompt lives: a two-second cycle presses
+ *       D-LEFT, then A one second later, so every confirm is preceded by a
+ *       "no" within the same prompt.
+ *
  *   KIRBY_PC_INPUT=12.0:START,14.5:A:20,18:DDOWN+A
  *       An explicit timeline. Each entry is
  *
@@ -60,10 +88,18 @@ struct Cue {
 
 static struct Cue sCues[MAX_CUES];
 static int sNumCues;
-static int sMode;            /* 0 off, 1 scripted, 2 autostart */
+static int sMode;            /* 0 off, 1 scripted, 2 autostart, 3 advance */
 static int sReady;
 static u64 sEpoch;
 static int sVerbose;
+
+/* Mode 3 only. The game's own state variable, and the epoch of the slot cycle
+ * -- restarted whenever the state changes, so a fresh screen always sees the
+ * first button of its cycle rather than whatever phase the clock happened to
+ * be in. */
+extern u32 gGameState;
+static u32 sLastState = 0xFFFFFFFFu;
+static u64 sStateEpoch;
 
 static u16 button_of(const char *name, size_t n) {
     static const struct { const char *name; u16 bit; } kNames[] = {
@@ -149,6 +185,58 @@ static void parse_cue(const char *s, size_t n) {
     sNumCues++;
 }
 
+/* Mode 3's whole table. `slot` counts game-seconds since gGameState last
+ * changed, so slot 0 is always the first press a screen sees.
+ *
+ * The states are src/ovl1/game.c's game_tick() switch, and the mapping from
+ * state to milestone name is the same one src/pc/pc_progress.c uses --
+ * anything changed here should be changed there too. */
+static u16 button_for_state(u32 gs, u64 slot) {
+    switch (gs) {
+    case 10: /* file select: A picks the highlighted file, and nothing else
+              * here should be touched -- a stray D-pad press moves the
+              * selection onto a different save. */
+    case 12: /* the planet map. A enters the level under the cursor; the
+              * D-pad would walk the cursor off it. */
+        return CONT_A;
+
+    case 11: /* THE GALAXY MAP -- AND THE CUTSCENE PROMPT, which
+              * func_800A3408 runs with gGameState still 11. */
+    case 14: /* the cutscene do-while, and the re-prompt at the bottom of it.
+              *
+              * D-LEFT selects NO, A confirms. Pressing them in that order is
+              * what stops the world 1-1 opening cutscene replaying for ever
+              * -- see the header. On the galaxy map proper the D-LEFT is
+              * harmless: with one planet unlocked the cursor has nowhere to
+              * go, and the A that follows selects it.
+              *
+              * SEVEN D-LEFTS PER A, not one each, and the ratio is measured
+              * rather than chosen. The prompt is not up for most of this
+              * state: one turn of the do-while plays the whole world 1-1
+              * opening, which takes about 90 SECONDS of wall time (timed
+              * with a breakpoint on the gtlCreateScene at
+              * ovl18/code_239080.c:339 -- 90.0 s between the state being
+              * entered and the prompt being built). Whatever phase the
+              * alternation is in when the prompt finally appears is
+              * therefore fixed for that whole turn, and a one-for-one
+              * alternation lands A-before-D-LEFT half the time -- at 90
+              * seconds a retry, that is the difference between a test that
+              * finishes and one that does not. Making A the rare button
+              * costs at most eight seconds of waiting at a prompt and makes
+              * the "no" essentially certain to be in place first. */
+        return ((slot & 7) == 7) ? CONT_A : CONT_LEFT;
+
+    case 15: /* IN-GAME. Stop driving. Everything past this point is the
+              * thing being measured, and a synthetic START here opens the
+              * pause menu on top of it. */
+        return 0;
+
+    default: /* logos, opening movie, the title screen and the attract demos
+              * -- START skips, A answers anything that wants A. */
+        return (slot & 1) ? CONT_A : CONT_START;
+    }
+}
+
 void pc_input_script_init(void) {
     const char *spec;
     size_t start;
@@ -167,6 +255,11 @@ void pc_input_script_init(void) {
     if (strcmp(spec, "autostart") == 0) {
         sMode = 2;
         fprintf(stderr, "[input] autostart: pulsing START/A once a second\n");
+        return;
+    }
+    if (strcmp(spec, "advance") == 0) {
+        sMode = 3;
+        fprintf(stderr, "[input] advance: driving from gGameState\n");
         return;
     }
 
@@ -223,6 +316,22 @@ void pc_input_script_apply(PCPad *pads, int n) {
         if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
             mask = (slot & 1) ? CONT_A : CONT_START;
         }
+    } else if (sMode == 3) {
+        u32 gs = gGameState;
+        u64 since;
+        u64 slot;
+        u64 into;
+
+        if (gs != sLastState) {
+            sLastState = gs;
+            sStateEpoch = now;
+        }
+        since = now - sStateEpoch;
+        slot = since / PC_COUNTER_HZ;
+        into = since - slot * PC_COUNTER_HZ;
+        if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
+            mask = button_for_state(gs, slot);
+        }
     } else {
         for (i = 0; i < sNumCues; i++) {
             if (now >= sCues[i].at && now < sCues[i].until) {
@@ -261,9 +370,43 @@ void pc_input_script_apply(PCPad *pads, int n) {
     }
 
     if (sVerbose && mask != sLast) {
-        fprintf(stderr, "[input] %+7.2fs  buttons %04x\n",
-                (double)now / (double)PC_COUNTER_HZ, (unsigned)mask);
+        fprintf(stderr, "[input] %+7.2fs  buttons %04x  gGameState=%u\n",
+                (double)now / (double)PC_COUNTER_HZ, (unsigned)mask,
+                (unsigned)gGameState);
         fflush(stderr);
+    }
+
+    /* WHAT THE GAME LATCHED, which is a different fact from what was pressed
+     * and the only one a menu reacts to.
+     *
+     * Menus read gPlayerControllers[0].buttonPressed -- the RISING EDGE that
+     * src/main/contpad.c's read_controller_input computes and
+     * contSetPlayerPads publishes for exactly one game tick before clearing
+     * it. Everything between this function and there can drop a press: the
+     * SI read, the errno check, the channel map, a game tick that does not
+     * run. Printing only the button this script asked for therefore proves
+     * nothing about whether any screen could have seen it, and an hour went
+     * into "the D-pad does not work" before that distinction was drawn.
+     *
+     * Declared here as u16[] on purpose: that is the view the game's own
+     * menu code takes of the same storage (see ovl18/code_239080.c, which
+     * reads gPlayerControllers[1] for buttonPressed), and it needs no game
+     * struct header in the platform layer. */
+    if (sVerbose) {
+        extern u16 gPlayerControllers[];
+        static u16 sLastLatched;
+        u16 latched = gPlayerControllers[1];
+
+        if (latched != sLastLatched) {
+            sLastLatched = latched;
+            if (latched != 0) {
+                fprintf(stderr,
+                        "[input] %+7.2fs  game latched buttonPressed %04x\n",
+                        (double)now / (double)PC_COUNTER_HZ,
+                        (unsigned)latched);
+                fflush(stderr);
+            }
+        }
     }
     sLast = mask;
 
