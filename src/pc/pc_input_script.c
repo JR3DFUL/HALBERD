@@ -88,7 +88,8 @@ struct Cue {
 
 static struct Cue sCues[MAX_CUES];
 static int sNumCues;
-static int sMode;            /* 0 off, 1 scripted, 2 autostart, 3 advance */
+static int sMode;            /* 0 off, 1 scripted, 2 autostart, 3 advance,
+                              * 4 advance + hold RIGHT once in gameplay */
 static int sReady;
 static u64 sEpoch;
 static int sVerbose;
@@ -262,6 +263,19 @@ void pc_input_script_init(void) {
         fprintf(stderr, "[input] advance: driving from gGameState\n");
         return;
     }
+    /* `advance` stops at the moment gameplay starts, on purpose: a synthetic
+     * button in state 15 opens the pause menu on top of the thing being
+     * measured. `walk` is the same script with one addition -- once in state
+     * 15 it holds RIGHT -- and it exists because a screenshot of a standing
+     * start cannot distinguish "the level renders and the player is
+     * off-camera" from "the level renders and there is no player". Walking
+     * moves the camera; if the view follows, there is a player object being
+     * simulated and followed. */
+    if (strcmp(spec, "walk") == 0) {
+        sMode = 4;
+        fprintf(stderr, "[input] walk: advance, then hold RIGHT in gameplay\n");
+        return;
+    }
 
     n = strlen(spec);
     start = 0;
@@ -316,7 +330,7 @@ void pc_input_script_apply(PCPad *pads, int n) {
         if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
             mask = (slot & 1) ? CONT_A : CONT_START;
         }
-    } else if (sMode == 3) {
+    } else if (sMode == 3 || sMode == 4) {
         u32 gs = gGameState;
         u64 since;
         u64 slot;
@@ -329,7 +343,12 @@ void pc_input_script_apply(PCPad *pads, int n) {
         since = now - sStateEpoch;
         slot = since / PC_COUNTER_HZ;
         into = since - slot * PC_COUNTER_HZ;
-        if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
+        if (sMode == 4 && gs == 15) {
+            /* HELD, not pulsed. A one-frame D-pad tap is a step; the
+             * question here is whether the camera follows sustained
+             * movement. */
+            mask = CONT_RIGHT;
+        } else if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
             mask = button_for_state(gs, slot);
         }
     } else {
@@ -412,4 +431,11 @@ void pc_input_script_apply(PCPad *pads, int n) {
 
     pads[0].button = mask;
     pads[0].present = 1;
+    /* THE STICK, NOT THE D-PAD, IS WHAT MOVES KIRBY. The D-pad in Kirby 64
+     * drives menus; in gameplay the player is read from the analog stick, so
+     * a walk script that only sets buttons produces a Kirby standing
+     * perfectly still with the mask visibly latched. 0x50 is a firm push
+     * without being the extreme the real hardware rarely reaches. */
+    pads[0].stick_x = (s8)((sMode == 4 && gGameState == 15) ? 0x50 : 0);
+    pads[0].stick_y = 0;
 }
