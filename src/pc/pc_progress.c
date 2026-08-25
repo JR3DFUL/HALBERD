@@ -230,11 +230,52 @@ void pc_progress_tick(void) {
  * every ovl3 player routine uses). If X does not move while the stick is
  * held, nothing downstream of the pad is reaching the player, and no amount
  * of looking at the picture will say so. */
+/* WHERE THE PLAYER IS AND WHAT THE ENGINE THINKS HE IS DOING.
+ *
+ * x/y/z alone cannot tell a player who is being held still from one who is
+ * being pushed into a wall, and it took a whole lane to notice that the
+ * resting X was a ROUND NUMBER. Kirby 64 moves its entities along authored
+ * track nodes, not through free space: src/ovl2/ovl2_3.c's func_800F8E6C
+ * advances a per-entity parameter t in [0,1] along the node named by
+ * D_800E5F90, hops to a neighbouring node when t leaves that range
+ * (func_800F8B1C), and reads the world position back out of the node's
+ * geometry. So the five numbers below are the whole state of "walking":
+ *
+ *   node  D_800E5F90[0]  which track node the player is on
+ *   t     D_800E6BD0[0]  how far along it, 0..1
+ *   vel   D_800E64D0[0]  forward velocity, what t is advanced by
+ *   acc   D_800E6690[0]  forward acceleration, what the buttons set
+ *   face  D_800E6A10[0]  facing sign, +1 right / -1 left
+ *
+ * The names are the ones documented in include/track_arrays.h in the decomp,
+ * each with the code that proves it. A player whose t sits at exactly 1.0
+ * with a healthy vel is not blocked, he is at the end of his node and the hop
+ * did not happen -- a completely different bug from a collision. */
 void pc_progress_playerpos(void) {
     extern u32 gGameState;
     extern float gEntitiesNextPosXArray[];
     extern float gEntitiesNextPosYArray[];
     extern float gEntitiesNextPosZArray[];
+    extern s32 D_800E5F90[];       /* track node index, per entity */
+    extern float D_800E6BD0[];     /* track parameter t, per entity */
+    extern float D_800E64D0[];     /* forward velocity */
+    extern float D_800E6690[];     /* forward acceleration */
+    extern float D_800E6A10[];     /* facing sign */
+    /* The player's own controller copy, as src/ovl1/util.c publishes it.
+     * Spelled out here rather than included so the platform layer keeps no
+     * game headers; the layout is include/types.h's Controller_800D6FE8. */
+    extern struct PcKirbyCont {
+        u16 held, pressed, heldLong, released;
+        s8 stickX, stickY;
+    } gKirbyController;
+    /* gKirbyState as raw bytes: byte 5 is `action` and byte 0xB is `unkB`,
+     * the BLOCKED flag src/ovl2/plylib.c's func_8012209C sets when Kirby's
+     * body segment hits a collision face (4/3 = forward/backward against a
+     * vertical wall, 1/2 = up/down against a horizontal one). Every field
+     * ahead of both is a u8 or u32, so neither offset moves under LP64.
+     * Reading it here rather than including Player.h keeps the platform
+     * layer free of game headers, and the linker does not care. */
+    extern unsigned char gKirbyState[];
     static double sEvery = -1.0;
     static double sNext;
 
@@ -256,10 +297,20 @@ void pc_progress_playerpos(void) {
             return;
         }
         sNext = t + sEvery;
-        fprintf(stderr, "[playerpos] %+7.2fs  x=%.2f y=%.2f z=%.2f\n", t,
+        fprintf(stderr,
+                "[playerpos] %+7.2fs  x=%.2f y=%.2f z=%.2f  node=%d t=%.6f "
+                "vel=%.4f acc=%.4f face=%.1f  held=%04x stick=%d "
+                "action=%u blocked=%u\n",
+                t,
                 (double)gEntitiesNextPosXArray[0],
                 (double)gEntitiesNextPosYArray[0],
-                (double)gEntitiesNextPosZArray[0]);
+                (double)gEntitiesNextPosZArray[0],
+                (int)D_800E5F90[0], (double)D_800E6BD0[0],
+                (double)D_800E64D0[0], (double)D_800E6690[0],
+                (double)D_800E6A10[0],
+                (unsigned)gKirbyController.held,
+                (int)gKirbyController.stickX,
+                (unsigned)gKirbyState[5], (unsigned)gKirbyState[0xB]);
         fflush(stderr);
     }
 }

@@ -193,6 +193,16 @@ void pc_progress_tick(void);
 void pc_progress_playerpos(void);
 void pc_progress_report(const char *outcome);
 
+/* Game-side probes, src/pc/pc_probe.c. KIRBY_PC_PROBE=1. Call sites live in
+ * the decomp behind #ifdef PORT and declare these themselves, so the decomp
+ * never includes a platform header; these declarations are for the platform
+ * layer's own use. */
+void pc_probe_hit(const char *tag);
+void pc_probe_say(const char *tag, int limit, const char *fmt, ...);
+void pc_probe_every(const char *tag, double seconds, const char *fmt, ...);
+void pc_probe_dump(void);
+void pc_probe_tick(void);
+
 /* Temporary hang instrumentation, src/pc/pc_dbg.c. KIRBY_PC_PUMPDBG=1. */
 void pc_dbg_init(void);
 extern unsigned long pc_dbg_pump_call, pc_dbg_pump_reent, pc_dbg_pump_nosched,

@@ -424,6 +424,7 @@ void pc_pump_events(void) {
     }
     pc_progress_tick();
     pc_progress_playerpos();
+    pc_probe_tick();
     reentrant = 1;
     pc_in_event_delivery = 1;
     pcb_pump();
