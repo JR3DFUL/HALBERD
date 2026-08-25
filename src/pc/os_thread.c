@@ -423,6 +423,7 @@ void pc_pump_events(void) {
         _exit(0);
     }
     pc_progress_tick();
+    pc_progress_playerpos();
     reentrant = 1;
     pc_in_event_delivery = 1;
     pcb_pump();

@@ -55,12 +55,46 @@
  *   KIRBY_PC_INPUT=12.0:START,14.5:A:20,18:DDOWN+A
  *       An explicit timeline. Each entry is
  *
- *           <seconds>:<buttons>[:<frames>]
+ *           [g]<seconds>:<buttons>[:<frames>]
  *
  *       <seconds> is elapsed game time; <buttons> is one or more of
  *       A B Z START L R DUP DDOWN DLEFT DRIGHT CUP CDOWN CLEFT CRIGHT joined
  *       with '+', or NONE; <frames> is how long to hold it, in 60ths, and
  *       defaults to PRESS_FRAMES below. Entries may be listed in any order.
+ *
+ *       Four more names -- SR SL SU SD -- push the ANALOG STICK right, left,
+ *       up or down instead of pressing a button. They combine with buttons:
+ *       `DRIGHT+SR` is "walk right on both inputs".
+ *
+ *       WRITE DRIGHT, NOT SR, FOR MOVEMENT. This file used to say the
+ *       opposite -- that the D-pad only drives menus and the player is read
+ *       from the stick -- and that is not true of this build: measured with
+ *       KIRBY_PC_PLAYERPOS, a held stick leaves the player at his spawn X
+ *       for the whole run at any deflection, and a held D-pad walks him.
+ *       The full measurement is in the stick note at the bottom of this
+ *       file.
+ *
+ *       A LEADING `g` makes the time relative to the moment gameplay starts
+ *       (the first tick with gGameState == 15) rather than to the first
+ *       poll, and it is the only form worth writing for anything in a level.
+ *       Absolute times cannot address gameplay: reaching it means answering
+ *       the world 1-1 cutscene prompt, and how many times that prompt has to
+ *       be answered -- at about 90 seconds of cutscene per turn -- varies
+ *       run to run, so the wall second at which a level starts is not a
+ *       constant. Measured over the two runs that produced this note it
+ *       moved by more than a minute. A `g`-relative cue lands in the same
+ *       place in the level every time.
+ *
+ *       Listing ANY `g` cue also switches the menus onto `advance`'s
+ *       state-driven table automatically, so a gameplay script does not have
+ *       to restate how to get through the title screen and the prompt.
+ *
+ *   KIRBY_PC_INPUT=play
+ *       A built-in `g` timeline (kPlayProgram below) that walks, jumps,
+ *       inhales, swallows, opens and closes the pause menu and keeps
+ *       walking. It exists so a crash hunt has one reproducible route
+ *       through a level's object types rather than a fresh ad-hoc string
+ *       each time; edit the program, do not paste a variant.
  *
  * WHY A PULSE AND NOT A LEVEL. Menus latch on the RISING edge of a button, so
  * a held START is one press however long it is held, and a START that is
@@ -80,16 +114,30 @@
                               * short of anything that reads it as a hold */
 #define MAX_CUES     64
 
+/* Stick pushes ride in the same word as the button mask, above the CONT_
+ * bits, so one parse and one table cover both. Split out again in apply().
+ * 0x50 is the magnitude, matching mode 4's held walk. */
+#define STICK_R      0x00010000u
+#define STICK_L      0x00020000u
+#define STICK_U      0x00040000u
+#define STICK_D      0x00080000u
+#define STICK_MASK   0x000F0000u
+#define STICK_PUSH   0x50
+
 struct Cue {
-    u64 at;        /* count-register ticks from the first poll */
+    u64 at;        /* count-register ticks from the cue's epoch */
     u64 until;
-    u16 button;
+    u32 button;    /* CONT_ bits, plus the STICK_ bits above */
+    int rel;       /* 1: `at` counts from the start of gameplay, not the run */
 };
 
 static struct Cue sCues[MAX_CUES];
 static int sNumCues;
 static int sMode;            /* 0 off, 1 scripted, 2 autostart, 3 advance,
                               * 4 advance + hold RIGHT once in gameplay */
+static int sMenuAuto;        /* mode 1 only: drive menus from gGameState, as
+                              * `advance` does, and leave gameplay to the
+                              * cues. Set by any `g`-relative cue. */
 static int sReady;
 static u64 sEpoch;
 static int sVerbose;
@@ -102,8 +150,68 @@ extern u32 gGameState;
 static u32 sLastState = 0xFFFFFFFFu;
 static u64 sStateEpoch;
 
-static u16 button_of(const char *name, size_t n) {
-    static const struct { const char *name; u16 bit; } kNames[] = {
+/* The tick gameplay began, in the same timeline as `now`, or 0 if it has not
+ * begun yet. A `g` cue is inert until this is set, so a script cannot fire
+ * into the menus by accident. */
+static u64 sPlayEpoch;
+
+/* KIRBY_PC_INPUT=play. Times are game-seconds after gameplay starts.
+ *
+ * The route is deliberately made of DIFFERENT ACTIONS rather than a longer
+ * walk: the class of bug this is built to find is a display list assembled
+ * from a mis-read data slot, and every distinct action is a different
+ * object type being drawn for the first time. Walking further through
+ * scenery that already renders adds none.
+ *
+ * Held stick pushes are long (10 s) and the button presses inside them are
+ * short, so the player keeps moving across a jump or an inhale instead of
+ * stopping dead at every cue. */
+static const char kPlayProgram[] =
+    /* DRIGHT+SR, not SR: the D-pad is what actually moves the player in
+     * this build. See the measurement in the stick note at the bottom of
+     * this file. The stick is pressed too so the program keeps working
+     * unchanged once stickX reaches the player. */
+    "g0:DRIGHT+SR:600,"   /* walk right, 10 s */
+    "g8:A:10,"            /* jump, still walking */
+    "g10:DRIGHT+SR:600,"
+    "g14:B:120,"          /* inhale: the suction effect and what it catches */
+    "g20:DRIGHT+SR:600,"
+    "g24:A:10,"
+    "g26:DDOWN+SD:60,"    /* swallow / crouch */
+    "g30:DRIGHT+SR:600,"
+    "g36:START:8,"        /* pause menu on top of the level */
+    "g42:START:8,"        /* and back out of it */
+    "g44:DRIGHT+SR:600,"
+    "g52:A:10,"
+    "g54:DRIGHT+SR:600,"
+    "g60:B:120,"
+    "g64:DRIGHT+SR:900,"  /* 15 s: far enough to reach the next screen */
+    "g80:A:10,"
+    "g82:DRIGHT+SR:900,"
+    "g98:DRIGHT+SR:900,"
+    /* THE TAIL IS THE LONGEST CUE ON PURPOSE, and it was added after the
+     * first `play` run measured distinct=123 of 474 sampled frames against
+     * `walk`'s 450 of 452. Nothing had gone wrong: the program simply ran
+     * out at g129 and left the pad neutral for the remaining two thirds of
+     * the run, so an idle Kirby's looping animation re-hashed to the same
+     * few frames over and over. A script that stops driving stops measuring,
+     * and `distinct` is the counter that says so. */
+    "g114:DRIGHT+SR:60000";  /* walk right for the rest of the run */
+
+/* KNOWN, AND NOT YET BISECTED: this program currently wedges. A plain
+ * `KIRBY_PC_INPUT=g0:DRIGHT:60000` walks the player to the far end of the
+ * 1-1 corridor at x = -1480.00; `play` stops at x = -2198.29, part way
+ * along, and the held DRIGHT in the tail cue does not recover it
+ * (KIRBY_PC_PLAYERPOS=20, three runs). So one of the actions between --
+ * the A jumps, the B inhale, or the DDOWN swallow -- leaves the player in
+ * a state a held direction cannot leave. It is NOT the pause pair: a
+ * separate run pressing START at g15/g25/g55/g75 with nothing else walked
+ * all the way to -1480.00 through every one of them. Bisecting the
+ * remaining three is the next thing to do here, and is worth doing before
+ * adding any more cues on top. */
+
+static u32 button_of(const char *name, size_t n) {
+    static const struct { const char *name; u32 bit; } kNames[] = {
         { "A", CONT_A },        { "B", CONT_B },
         { "Z", CONT_G },        { "START", CONT_START },
         { "L", CONT_L },        { "R", CONT_R },
@@ -111,6 +219,8 @@ static u16 button_of(const char *name, size_t n) {
         { "DLEFT", CONT_LEFT }, { "DRIGHT", CONT_RIGHT },
         { "CUP", CONT_E },      { "CDOWN", CONT_D },
         { "CLEFT", CONT_C },    { "CRIGHT", CONT_F },
+        { "SR", STICK_R },      { "SL", STICK_L },
+        { "SU", STICK_U },      { "SD", STICK_D },
         { "NONE", 0 },
     };
     int i;
@@ -125,8 +235,8 @@ static u16 button_of(const char *name, size_t n) {
     return 0;
 }
 
-static u16 buttons_of(const char *s, size_t n) {
-    u16 mask = 0;
+static u32 buttons_of(const char *s, size_t n) {
+    u32 mask = 0;
     size_t start = 0;
     size_t i;
 
@@ -141,15 +251,21 @@ static u16 buttons_of(const char *s, size_t n) {
     return mask;
 }
 
-/* One `<seconds>:<buttons>[:<frames>]` entry. */
+/* One `[g]<seconds>:<buttons>[:<frames>]` entry. */
 static void parse_cue(const char *s, size_t n) {
     const char *colon1 = NULL;
     const char *colon2 = NULL;
     size_t i;
     double secs;
     long frames = PRESS_FRAMES;
-    u16 mask;
+    u32 mask;
+    int rel = 0;
 
+    if (n > 0 && (s[0] == 'g' || s[0] == 'G')) {
+        rel = 1;
+        s++;
+        n--;
+    }
     for (i = 0; i < n; i++) {
         if (s[i] == ':') {
             if (colon1 == NULL) {
@@ -183,7 +299,28 @@ static void parse_cue(const char *s, size_t n) {
     sCues[sNumCues].until =
         sCues[sNumCues].at + (u64)frames * (PC_COUNTER_HZ / 60u);
     sCues[sNumCues].button = mask;
+    sCues[sNumCues].rel = rel;
+    if (rel) {
+        sMenuAuto = 1;
+    }
     sNumCues++;
+}
+
+/* Split one comma-separated spec into cues. Shared by KIRBY_PC_INPUT and by
+ * `play`'s built-in program, so both go through exactly one parser. */
+static void parse_spec(const char *spec) {
+    size_t n = strlen(spec);
+    size_t start = 0;
+    size_t i;
+
+    for (i = 0; i <= n; i++) {
+        if (i == n || spec[i] == ',') {
+            if (i > start) {
+                parse_cue(spec + start, i - start);
+            }
+            start = i + 1;
+        }
+    }
 }
 
 /* Mode 3's whole table. `slot` counts game-seconds since gGameState last
@@ -240,8 +377,6 @@ static u16 button_for_state(u32 gs, u64 slot) {
 
 void pc_input_script_init(void) {
     const char *spec;
-    size_t start;
-    size_t i, n;
 
     if (sReady) {
         return;
@@ -276,23 +411,21 @@ void pc_input_script_init(void) {
         fprintf(stderr, "[input] walk: advance, then hold RIGHT in gameplay\n");
         return;
     }
-
-    n = strlen(spec);
-    start = 0;
-    for (i = 0; i <= n; i++) {
-        if (i == n || spec[i] == ',') {
-            if (i > start) {
-                parse_cue(spec + start, i - start);
-            }
-            start = i + 1;
-        }
+    /* `play` is the built-in program and nothing else: it goes through the
+     * same parser as a hand-written spec, so there is one code path to be
+     * wrong in. */
+    if (strcmp(spec, "play") == 0) {
+        spec = kPlayProgram;
     }
+
+    parse_spec(spec);
     if (sNumCues == 0) {
         fprintf(stderr, "[input] KIRBY_PC_INPUT set but no usable cues\n");
         return;
     }
     sMode = 1;
-    fprintf(stderr, "[input] %d scripted cue(s)\n", sNumCues);
+    fprintf(stderr, "[input] %d scripted cue(s)%s\n", sNumCues,
+            sMenuAuto ? ", menus driven from gGameState" : "");
 }
 
 /* Called from os_cont.c's snapshot(), after the backend has filled the pads.
@@ -303,9 +436,9 @@ void pc_input_script_init(void) {
  * every cue invisible here. */
 void pc_input_script_apply(PCPad *pads, int n) {
     u64 now;
-    u16 mask = 0;
+    u32 mask = 0;
     int i;
-    static u16 sLast;
+    static u32 sLast;
 
     if (!sReady) {
         pc_input_script_init();
@@ -320,6 +453,18 @@ void pc_input_script_apply(PCPad *pads, int n) {
         }
     }
     now = pc_count64() - sEpoch;
+
+    /* Latched once and never moved. gGameState leaves 15 for the pause menu
+     * and comes back, and re-zeroing the epoch on the way back would restart
+     * a script that is halfway through a level. */
+    if (sPlayEpoch == 0 && gGameState == 15) {
+        sPlayEpoch = now ? now : 1;
+        if (sVerbose) {
+            fprintf(stderr, "[input] gameplay starts at %+.2fs; `g` cues now "
+                    "count from here\n", (double)now / (double)PC_COUNTER_HZ);
+            fflush(stderr);
+        }
+    }
 
     if (sMode == 2) {
         /* One second on the game's clock per slot; press for the first
@@ -353,8 +498,37 @@ void pc_input_script_apply(PCPad *pads, int n) {
         }
     } else {
         for (i = 0; i < sNumCues; i++) {
-            if (now >= sCues[i].at && now < sCues[i].until) {
+            u64 t;
+
+            if (sCues[i].rel) {
+                if (sPlayEpoch == 0) {
+                    continue;    /* gameplay has not started; cue is inert */
+                }
+                t = now - sPlayEpoch;
+            } else {
+                t = now;
+            }
+            if (t >= sCues[i].at && t < sCues[i].until) {
                 mask |= sCues[i].button;
+            }
+        }
+        /* Cues own gameplay; the state table owns everything before it. A
+         * script that lists a `g` cue would otherwise have to spell out the
+         * title screen and the cutscene prompt for itself. */
+        if (sMenuAuto && gGameState != 15) {
+            u64 since;
+            u64 slot;
+            u64 into;
+
+            if (gGameState != sLastState) {
+                sLastState = gGameState;
+                sStateEpoch = now;
+            }
+            since = now - sStateEpoch;
+            slot = since / PC_COUNTER_HZ;
+            into = since - slot * PC_COUNTER_HZ;
+            if (into < (u64)PRESS_FRAMES * (PC_COUNTER_HZ / 60u)) {
+                mask |= button_for_state(gGameState, slot);
             }
         }
     }
@@ -389,8 +563,12 @@ void pc_input_script_apply(PCPad *pads, int n) {
     }
 
     if (sVerbose && mask != sLast) {
-        fprintf(stderr, "[input] %+7.2fs  buttons %04x  gGameState=%u\n",
-                (double)now / (double)PC_COUNTER_HZ, (unsigned)mask,
+        fprintf(stderr, "[input] %+7.2fs  buttons %04x  stick %c%c  "
+                "gGameState=%u\n",
+                (double)now / (double)PC_COUNTER_HZ,
+                (unsigned)(mask & ~STICK_MASK),
+                (mask & STICK_R) ? 'R' : (mask & STICK_L) ? 'L' : '-',
+                (mask & STICK_U) ? 'U' : (mask & STICK_D) ? 'D' : '-',
                 (unsigned)gGameState);
         fflush(stderr);
     }
@@ -429,13 +607,44 @@ void pc_input_script_apply(PCPad *pads, int n) {
     }
     sLast = mask;
 
-    pads[0].button = mask;
+    pads[0].button = (u16)(mask & ~STICK_MASK);
     pads[0].present = 1;
     /* THE STICK, NOT THE D-PAD, IS WHAT MOVES KIRBY. The D-pad in Kirby 64
      * drives menus; in gameplay the player is read from the analog stick, so
      * a walk script that only sets buttons produces a Kirby standing
      * perfectly still with the mask visibly latched. 0x50 is a firm push
      * without being the extreme the real hardware rarely reaches. */
-    pads[0].stick_x = (s8)((sMode == 4 && gGameState == 15) ? 0x50 : 0);
-    pads[0].stick_y = 0;
+    /* AND THE STICK DOES NOT ACTUALLY MOVE KIRBY IN THIS BUILD. The note
+     * above is what the port believed, and `walk` appeared to confirm it --
+     * but `walk` also sets CONT_RIGHT in its mask, and CONT_RIGHT is what
+     * was doing the work. Measured with KIRBY_PC_PLAYERPOS (pc_progress.c),
+     * three runs, world 1-1, stick held for 150 wall seconds:
+     *
+     *   KIRBY_PC_INPUT=g0:DRIGHT:60000   D-pad only, no stick
+     *       x walks -2946.79 -> -1480.00
+     *   KIRBY_PC_INPUT=g0:SR:60000       stick only, 0x50
+     *       x stays -2959.92, the spawn point, for the whole run
+     *   the same at full deflection 0x7F
+     *       x stays -2959.92
+     *
+     * So it is not a deadzone: nothing downstream of pads[0].stick_x
+     * reaches the player. The plumbing as far as the game is intact --
+     * os_cont.c copies stick_x into the OSContPad, contpad.c copies it on
+     * into gControllers[i].stick_x and then gPlayerControllers[i].stickX --
+     * so the gap is inside the player code that should read stickX, which
+     * is worth its own investigation and is not one.
+     *
+     * Until then, drive gameplay with the D-PAD; the stick is still set
+     * (it costs nothing and will start working when that gap closes), and
+     * the built-in `play` program presses DRIGHT alongside SR for exactly
+     * that reason. */
+    if (sMode == 4 && gGameState == 15) {
+        pads[0].stick_x = (s8)STICK_PUSH;
+        pads[0].stick_y = 0;
+    } else {
+        pads[0].stick_x = (s8)(((mask & STICK_R) ? STICK_PUSH : 0)
+                               - ((mask & STICK_L) ? STICK_PUSH : 0));
+        pads[0].stick_y = (s8)(((mask & STICK_U) ? STICK_PUSH : 0)
+                               - ((mask & STICK_D) ? STICK_PUSH : 0));
+    }
 }

@@ -190,6 +190,7 @@ void pc_stub_notice(const char *file, int line, const char *what);
 void pc_progress_init(void);
 void pc_progress_mark(int stage);
 void pc_progress_tick(void);
+void pc_progress_playerpos(void);
 void pc_progress_report(const char *outcome);
 
 /* Temporary hang instrumentation, src/pc/pc_dbg.c. KIRBY_PC_PUMPDBG=1. */

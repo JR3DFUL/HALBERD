@@ -193,8 +193,63 @@ bugs were not, and all three were found by running:
    quiet: read narrow where the port widened and you get a truncated pointer;
    read wide where it did not and you get a pointer made of the next field.
 
-   There are 87 `*(T **)` sites under `src/` outside `src/pc`. Most are off
-   host structs and are fine.
+   **The 87 `*(T **)` sites under `src/` outside `src/pc` have now been swept,
+   and the sweep was mostly a triage problem rather than a reading problem.**
+
+   * **43 of the 87 are not compiled into the port at all** — they sit in
+     `#ifdef MIPS_TO_C` factory drafts or in the `#else` arm of a construct
+     whose `#ifdef PORT` arm is what the port builds. Decide this mechanically
+     before reading anything: append a unique token to each candidate line, run
+     the file through `gcc -E -P` with the Makefile.pc defines (`-DPORT
+     -DNON_MATCHING -DAVOID_UB …`), and keep only the sites whose token
+     survives. A line-marker heuristic over plain `gcc -E` output is *not* a
+     substitute — gcc pads skipped regions with blank lines, so every dead site
+     comes back live. The sweep collapses from 87 sites to 44.
+
+   * Of the 44 live ones, most are **host-widened and correct**, and the
+     giveaway is always a PORT-side declaration that fixed the layout on
+     purpose: the twenty `D_8012BCA0 + 128 + i * 8` water-annex reads are at
+     LP64 offsets by construction (`struct PcUnkBCA0Mirror` in
+     `src/pc/pc_bss_whole.c`, with static asserts); `src/ovl2/ovl2_5.c` widened
+     its particle record from the N64's `0x128` to `0x130` and the writer and
+     both readers agree; and `src/ovl1/ovl1_3.c`'s six
+     `*(struct GObj **)D_800DF850[objId]` derefs are **right**, because
+     `func_800A94F4` hands back a block whose cells the port already widened to
+     eight bytes — the same function's `temp_v0[2]`-under-PORT versus
+     `temp_v0[1]` on N64 says so in one line.
+
+   * **The index side of the class is bigger than the dereference side, and a
+     `*(T **)` grep does not find it.** The failure is `(u8 *)table + idx * 4`
+     where `table` is a pointer array the port widened to 8-byte elements: the
+     bias addresses element `idx/2`, and for an odd index straddles two. It is
+     invisible because the same source line usually reuses the same bias
+     *correctly* on a neighbouring `s32[]` or `f32[]`. `src/ovl2/ovl2.c`'s
+     `func_800F6350` PORT arm has carried this fix for `D_800DE350` for a
+     while; four more instances over `D_800E1B50` (`ovl9_3.c`, `ovl9_9.c`,
+     `ovl9_13.c`) and one more over `D_800DE350` (`ovl8.c`) were still
+     standing. To find them: list every `extern T *NAME[]` in the tree and grep
+     for `(u8 *) NAME +`.
+
+   * **And the compiler introduces the class on its own, through struct
+     padding.** `src/ovl19/helper.c` declared a sweep record as
+     `{Vector; Vector; f32; void *d;}`. On LP64 that is `sizeof 40` with `d` at
+     offset 32 behind four bytes of padding, while its only consumer
+     (`func_8011BF4C`) reads the descriptor at byte 28 — the padding of an
+     uninitialised stack local, dereferenced three times. Nothing in that
+     struct is a cast, so no grep for one finds it. `src/ovl7/ovl7_3.c` had
+     already written the rule down ("the hitbox-descriptor slot stays a u32
+     host-address cell so the record keeps the N64's `f32[8]`/32-byte shape");
+     this was the last of four callers still declaring a pointer. The same
+     shape appears as a plain wrong constant in `src/ovl1/ovl1_2_2.c`, which
+     wrote a `DObj *` at generator-node `+0x48` — the N64 offset of that slot,
+     where LP64 puts `frame`, `dobj` having moved to `+0x50`.
+
+   **The cheapest proof for all of these is `offsetof`/`sizeof`, not a
+   debugger.** Copy the struct into a five-line host program and print the
+   numbers; the port's own PORT-arm declarations then say which number the
+   consumer expects. Several of these bugs are in code no route yet reaches, so
+   a runtime probe prints nothing at all while the arithmetic is already
+   conclusive.
 
 A fourth bug was in the port's own scheduler and only showed up because LP64
 work made the boot go further: `dispatch()` derived the *outgoing* ucontext
@@ -204,6 +259,42 @@ instead of its own slot, and the next thread to block overwrote them. It
 survives with two alternating threads and crashes with eight.
 
 ## What does not work
+
+* **The analog stick does not move the player, and only the D-pad does.**
+  Measured with `KIRBY_PC_PLAYERPOS=<seconds>` (`src/pc/pc_progress.c`, which
+  prints the player world position while `gGameState == 15`), world 1-1, each
+  input held for ~150 wall seconds:
+
+  | `KIRBY_PC_INPUT` | what is held | player X over the run |
+  | --- | --- | --- |
+  | `g0:DRIGHT:60000` | D-pad right only | walks `-2946.79` → `-1480.00` |
+  | `g0:SR:60000` | stick only, `0x50` | `-2959.92`, never moves |
+  | `g0:SR:60000` at `0x7F` | stick at full deflection | `-2959.92`, never moves |
+
+  Full deflection ruling it out means this is not a deadzone: nothing
+  downstream of `pads[0].stick_x` reaches the player. The plumbing as far as
+  the game is intact — `src/pc/os_cont.c` copies `stick_x` into the
+  `OSContPad`, `src/main/contpad.c` copies it on into
+  `gControllers[i].stick_x` and then `gPlayerControllers[i].stickX` — so the
+  gap is inside the player code that should read `stickX`. **This corrects a
+  claim that stood in `src/pc/pc_input_script.c` for some time** ("THE STICK,
+  NOT THE D-PAD, IS WHAT MOVES KIRBY"): the `walk` mode that appeared to
+  confirm it also sets `CONT_RIGHT`, and `CONT_RIGHT` was doing all the work.
+
+* **The player stops at world X = `-1480.00` and the level does not continue.**
+  Walking right from the 1-1 spawn, X rises through a series of
+  collision-corrected fractional values (`-2946.79`, `-2039.27`, `-1790.72`,
+  …) and then stops at exactly `-1480.00` and stays there for the rest of the
+  run. Walking *left* stops at `-2959.92`. The playable corridor is therefore
+  about 1480 units wide and the run never leaves it.
+
+  The **exactness** of the right-hand stop is the interesting half: every
+  other resting value carries a fractional penetration correction, so
+  `-1480.00` is a clamp against a datum, not a wall. It is **not** the
+  track-parameter clamp in `func_800F8570` (`ovl2_2.c`) — instrumenting both
+  of that function's `0.0001f`/`0.9999f` arms and its node transition showed
+  it is never called during gameplay at all. That is where the next
+  investigation starts.
 
 * **The game reaches the renderer as of 2026-08-12** — the stand-in
   `src/pc/pc_audio_thread.c` posts the init message the real `auThreadMain`

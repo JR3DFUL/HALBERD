@@ -210,6 +210,60 @@ void pc_progress_tick(void) {
     }
 }
 
+/* ------------------------------------------------------- is anyone moving?
+ *
+ * KIRBY_PC_PLAYERPOS=<seconds> prints the player's world position, once per
+ * that many wall seconds, while gGameState is 15.
+ *
+ * IT ANSWERS IN NUMBERS THE QUESTION THE `walk` SCRIPT ASKS IN PIXELS, and
+ * it exists because the pixel answer turned out not to be decisive. `walk`
+ * holds the stick right and the verdict's `distinct=` counter reports how
+ * many sampled frames differed; a high count was read as "the camera
+ * follows, so the player is simulated". But scenery animates on its own --
+ * a butterfly, a swaying flower, a scrolling texture all re-hash a frame --
+ * so `distinct` cannot tell a walking Kirby from a standing one. Two
+ * screenshots eighty wall-seconds apart, with the stick held right
+ * throughout, came back showing Kirby at the same pixel in front of the
+ * same fence while `distinct` said 450 of 452.
+ *
+ * gEntitiesNextPosXArray[0] is the player slot (objId 0, the same index
+ * every ovl3 player routine uses). If X does not move while the stick is
+ * held, nothing downstream of the pad is reaching the player, and no amount
+ * of looking at the picture will say so. */
+void pc_progress_playerpos(void) {
+    extern u32 gGameState;
+    extern float gEntitiesNextPosXArray[];
+    extern float gEntitiesNextPosYArray[];
+    extern float gEntitiesNextPosZArray[];
+    static double sEvery = -1.0;
+    static double sNext;
+
+    if (sEvery < 0.0) {
+        const char *s = getenv("KIRBY_PC_PLAYERPOS");
+
+        sEvery = (s != NULL && *s != '\0') ? atof(s) : 0.0;
+        if (sEvery > 0.0 && sEvery < 0.05) {
+            sEvery = 0.05;
+        }
+    }
+    if (sEvery <= 0.0 || gGameState != 15) {
+        return;
+    }
+    {
+        double t = now_s() - sT0;
+
+        if (t < sNext) {
+            return;
+        }
+        sNext = t + sEvery;
+        fprintf(stderr, "[playerpos] %+7.2fs  x=%.2f y=%.2f z=%.2f\n", t,
+                (double)gEntitiesNextPosXArray[0],
+                (double)gEntitiesNextPosYArray[0],
+                (double)gEntitiesNextPosZArray[0]);
+        fflush(stderr);
+    }
+}
+
 /* ------------------------------------------------------------- the verdict
  *
  * ONE LINE, KEY=VALUE, on stderr. Both a human and tools/pc/smoke.py read it,
