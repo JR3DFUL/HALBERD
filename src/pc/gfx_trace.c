@@ -22,6 +22,23 @@
  * by an earlier task will show unresolved pointers. They are printed as
  * `seg%X:%06X` rather than silently mapped to something wrong.
  *
+ * AND IT CANNOT TELL THE TWO APART, which is worse and was measured. The
+ * port's game memory is a static array in this binary's .bss, so a host
+ * pointer to a display list is a small number -- 0x016F8E70 for the galaxy
+ * map's DL head -- and 0x016F8E70 read as a segmented address is segment 1,
+ * offset 0x6F8E70. Segment 1 is unbound, so resolve() returns NULL and the
+ * walk stops. Every galaxy-map frame traced as "2 commands, 0 triangles"
+ * while the renderer was walking thousands. The image spans 0x400000.._end,
+ * which covers the whole N64 segmented range too, so no address test
+ * separates them; only knowing which allocator produced the value would,
+ * and the tracer does not.
+ *
+ * So: this walker is for lists that are WELL FORMED and whose segments are
+ * bound in-list. When the question is "what did the renderer actually
+ * execute, and what killed it", use the GBI ring at the bottom of this file
+ * (PC_TRACE=gbi) -- it records from inside the interpreter and has no
+ * opinion about what an address means.
+ *
  * Enable with PC_TRACE=gfx.
  *
  * A NOTE ON POINTER WIDTH, because this file got it wrong once and the output
@@ -37,6 +54,8 @@
 #include <PR/gbi.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 #include "pc/pc_platform.h"
 
@@ -280,4 +299,124 @@ void pc_gfx_trace_task(OSTask *task) {
     trace_list(&st, (const Gfx *)task->t.data_ptr);
     fprintf(stderr, "[gfx] ==== %u commands, %u vertices, %u triangles ====\n",
             st.count, st.verts, st.tris);
+}
+
+/* ------------------------------------------------------------- GBI ring
+ *
+ * The tracer above walks a display list from the outside, which is exactly
+ * what you want until the list is malformed -- then the tracer's own idea of
+ * where the commands are diverges from the renderer's, and it reports on a
+ * list nobody executed. (It did: the port's DL heads live in the low 32 bits
+ * of the address space, so resolve() below reads 0x016F8E70 as segment 1 and
+ * refuses to descend. Every galaxy-map frame traced as "2 commands".)
+ *
+ * This records the command stream from INSIDE the renderer instead.
+ * libultraship's interpreter offers gfx_set_trace_callback(), invoked once
+ * per command with the words it is about to decode and the current G_DL
+ * depth. We keep the last RING_N of them and dump them when the process
+ * dies, so a SIGSEGV in Fast::Interpreter::Run names the command that killed
+ * it instead of a stack frame.
+ *
+ * The dump runs from a signal handler, so it uses write(2) and formats its
+ * own hex: no stdio, no malloc, no locks.
+ *
+ * Enable with PC_TRACE=gbi. */
+
+#define RING_N 128
+
+typedef struct {
+    uintptr_t w0;
+    uintptr_t w1;
+    int depth;
+} GbiSlot;
+
+static GbiSlot sRing[RING_N];
+static unsigned sRingHead;      /* total commands seen, not an index */
+static int sRingOn;
+
+static void gbi_ring_record(uintptr_t w0, uintptr_t w1, int depth) {
+    GbiSlot *s = &sRing[sRingHead % RING_N];
+
+    s->w0 = w0;
+    s->w1 = w1;
+    s->depth = depth;
+    sRingHead++;
+}
+
+/* Declared by libultraship's fast/interpreter.h as extern "C". Repeated here
+ * so this stays a C file; the signature must match that header. Weak because
+ * this file is also linked into the null-backend build, which has no
+ * interpreter to hook -- there the ring simply stays silent. */
+__attribute__((weak)) void gfx_set_trace_callback(void (*cb)(uintptr_t w0,
+                                                             uintptr_t w1,
+                                                             int depth));
+
+void pc_gbi_ring_init(void) {
+    if (!(pc_trace_mask & PC_TR_GBI) || gfx_set_trace_callback == NULL) {
+        return;
+    }
+    sRingOn = 1;
+    gfx_set_trace_callback(gbi_ring_record);
+    fprintf(stderr, "[gbi] ring armed: last %d commands dumped on crash\n",
+            RING_N);
+}
+
+static char *put_hex(char *p, unsigned long long v, int digits) {
+    static const char kHex[] = "0123456789ABCDEF";
+    int i;
+
+    for (i = digits - 1; i >= 0; i--) {
+        p[i] = kHex[v & 0xF];
+        v >>= 4;
+    }
+    return p + digits;
+}
+
+static char *put_str(char *p, const char *s) {
+    while (*s != '\0') {
+        *p++ = *s++;
+    }
+    return p;
+}
+
+void pc_gbi_ring_dump(void) {
+    char line[160];
+    unsigned n;
+    unsigned i;
+    unsigned first;
+
+    if (!sRingOn || sRingHead == 0) {
+        return;
+    }
+    n = sRingHead < RING_N ? sRingHead : RING_N;
+    first = sRingHead - n;
+
+    {
+        static const char hdr[] = "[gbi] last commands the interpreter decoded "
+                                  "(oldest first); the one AFTER the last line "
+                                  "is the one it died on:\n";
+        ssize_t ignored = write(2, hdr, sizeof(hdr) - 1);
+        (void)ignored;
+    }
+    for (i = 0; i < n; i++) {
+        const GbiSlot *s = &sRing[(first + i) % RING_N];
+        char *p = line;
+        int d;
+        ssize_t ignored;
+
+        p = put_str(p, "[gbi] #");
+        p = put_hex(p, first + i, 6);
+        p = put_str(p, " d");
+        d = s->depth < 0 ? 0 : (s->depth > 15 ? 15 : s->depth);
+        p = put_hex(p, (unsigned)d, 1);
+        p = put_str(p, " op");
+        p = put_hex(p, (unsigned)((s->w0 >> 24) & 0xFF), 2);
+        p = put_str(p, "  ");
+        p = put_hex(p, (unsigned long long)s->w0, 16);
+        *p++ = ' ';
+        p = put_hex(p, (unsigned long long)s->w1, 16);
+        *p++ = '\n';
+        ignored = write(2, line, (size_t)(p - line));
+        (void)ignored;
+    }
 }

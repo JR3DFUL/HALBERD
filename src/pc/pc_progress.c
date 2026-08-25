@@ -314,6 +314,11 @@ static void fatal(int sig) {
     n = backtrace(frames, (int)(sizeof(frames) / sizeof(frames[0])));
     backtrace_symbols_fd(frames, n, 2);
 
+    /* A backtrace into Fast::Interpreter::Run names the walker, never the
+     * command it choked on. The ring does. No-op unless PC_TRACE=gbi armed
+     * it, and write(2)-only so it is safe from here. */
+    pc_gbi_ring_dump();
+
     /* Restore the default disposition and re-raise, so the shell still sees a
      * real signal exit status and a core file is still produced if enabled. */
     signal(sig, SIG_DFL);

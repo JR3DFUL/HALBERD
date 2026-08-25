@@ -147,6 +147,10 @@ void pcb_audio_set_freq(int freq);
 void pcb_audio_queue(const void* samples, uint32_t bytes);
 uint32_t pcb_audio_queued(void);
 
+/* From src/pc/gfx_trace.c -- the GBI ring, armed here because this is the
+ * only translation unit that knows the interpreter is up. */
+void pc_gbi_ring_init(void);
+
 /* From src/pc/os_time.c -- the platform layer's own trace switch, so LUS
  * diagnostics obey the same PC_TRACE= variable as everything else. */
 void pc_trace(unsigned bit, const char* fmt, ...);
@@ -613,6 +617,11 @@ static bool lus_init(void) {
             sSampleBuf = PCB_GL_FRONT;
         }
     }
+
+    /* Arm the GBI ring now: the interpreter exists from here on, and it has
+     * to be recording before the first task or a crash on frame 1 dumps
+     * nothing. No-op unless PC_TRACE=gbi. */
+    pc_gbi_ring_init();
 
     sInitOk = true;
     return true;

@@ -126,6 +126,7 @@ extern unsigned pc_trace_mask;
 #define PC_TR_CONT 0x10
 #define PC_TR_AI   0x20
 #define PC_TR_SCHED 0x40
+#define PC_TR_GBI  0x80
 
 void pc_trace(unsigned bit, const char *fmt, ...);
 
@@ -202,6 +203,13 @@ extern unsigned long pc_dbg_pump_call, pc_dbg_pump_reent, pc_dbg_pump_nosched,
  * Display list tracing (src/pc/gfx_trace.c)
  * ------------------------------------------------------------------------- */
 void pc_gfx_trace_task(OSTask *task);
+
+/* The last N GBI commands the renderer's interpreter actually decoded, kept
+ * in a ring and dumped from the crash handler. PC_TRACE=gbi arms it. Unlike
+ * pc_gfx_trace_task this observes the renderer from inside, so it stays
+ * correct when the list is malformed -- which is the only time it matters. */
+void pc_gbi_ring_init(void);
+void pc_gbi_ring_dump(void);
 
 /* -------------------------------------------------------------------------
  * Synthetic display lists (src/pc/gfx_selftest.c). KIRBY_PC_GFXTEST=1.

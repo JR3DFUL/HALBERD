@@ -247,7 +247,7 @@ static void trace_from_env(void) {
         { "dma", PC_TR_DMA },   { "vi", PC_TR_VI },
         { "sp", PC_TR_SP },     { "gfx", PC_TR_GFX },
         { "cont", PC_TR_CONT }, { "ai", PC_TR_AI },
-        { "sched", PC_TR_SCHED },
+        { "sched", PC_TR_SCHED }, { "gbi", PC_TR_GBI },
     };
     const char *s = getenv("PC_TRACE");
     int i;
