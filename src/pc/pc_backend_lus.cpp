@@ -217,6 +217,7 @@ static bool sMultiTaskFrame;
  * pcb_frame_end runs, so the finished image is in the front buffer and the
  * back buffer holds undefined contents. */
 #define PCB_GL_FRONT 0x0404
+#define PCB_GL_BACK 0x0405
 #define PCB_GL_RGBA 0x1908
 #define PCB_GL_UNSIGNED_BYTE 0x1401
 
@@ -229,6 +230,7 @@ static unsigned sDistinct;
 static unsigned long long sLastHash;
 static int sSampleEvery;          /* 0 = sampling off */
 static int sSampleResolved;
+static unsigned sSampleBuf = PCB_GL_BACK;
 
 static pcb_glReadPixels_t sGlReadPixels;
 static pcb_glReadBuffer_t sGlReadBuffer;
@@ -269,7 +271,7 @@ static void pcb_sample_frame(void) {
     }
     memset(px, 0, sizeof(px));
     if (sGlReadBuffer != nullptr) {
-        sGlReadBuffer(PCB_GL_FRONT);
+        sGlReadBuffer(sSampleBuf);
     }
     sGlReadPixels((w - PCB_SAMPLE_DIM) / 2, (hgt - PCB_SAMPLE_DIM) / 2,
                   PCB_SAMPLE_DIM, PCB_SAMPLE_DIM, PCB_GL_RGBA,
@@ -590,11 +592,25 @@ static bool lus_init(void) {
      * a synchronous stall and would be paid on every frame of every run. */
     {
         const char* hashEnv = getenv("KIRBY_PC_FRAMEHASH");
+        const char* bufEnv = getenv("KIRBY_PC_FRAMEHASH_BUF");
         if (hashEnv != nullptr) {
             sSampleEvery = atoi(hashEnv);
             if (sSampleEvery < 1) {
                 sSampleEvery = 1;
             }
+        }
+        /* GL_BACK BY DEFAULT, AND THE DEFAULT IS MEASURED. Fast3D's EndFrame
+         * has already swapped by the time the sample is taken, so GL_FRONT
+         * looks like the obvious choice -- and on this stack (Xvfb +
+         * llvmpipe) it reads back uniformly blank while the X11 root window
+         * plainly shows the rendered level. A run through world 1-1 reported
+         * nonblank=0 for all 24659 frames while `import -window root`
+         * captured grass, path, flowers and fence, and six captures 15
+         * seconds apart all differed. GL_FRONT is simply not readable here.
+         * KIRBY_PC_FRAMEHASH_BUF=front asks for it anyway on a stack where it
+         * does work. */
+        if (bufEnv != nullptr && bufEnv[0] == 'f') {
+            sSampleBuf = PCB_GL_FRONT;
         }
     }
 
