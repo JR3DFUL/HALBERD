@@ -886,6 +886,43 @@ def main():
         if not live:
             live = None
 
+    # NOT-IN-kirby.ld IS NOT THE SAME AS NOT-NEEDED, and conflating the two
+    # cost a whole link.
+    #
+    # A `.rodata` subsegment written DOTTED in kirby64.yaml
+    # (`[0xF7B60, .rodata, ovl3/plyeff]`) belongs to the C file: the N64 build
+    # gets it because asm-processor pulls the block in behind that file's
+    # GLOBAL_ASM pragmas, so there is no `build/asm/data/....o` for it and it
+    # never appears in kirby.ld. The native build compiles that same file with
+    # plain gcc, which knows nothing about the pragmas, so nothing defines
+    # those symbols at all. Measured: moving ovl3's 0xF7B60 rodata from
+    # plyshot to a dotted plyeff subsegment left `D_80197160_ovl3` -- read by
+    # plyeff.c itself through an `extern f32` -- undefined, and the native
+    # link failed on that one symbol.
+    #
+    # The stale-duplicate case the `live` filter exists for is still excluded,
+    # and by the property that actually distinguishes it: a stale twin's
+    # symbols are ALSO defined by the live listing that superseded it. So a
+    # non-live listing is admitted only when it defines something nothing else
+    # defines. That is self-limiting -- it can never introduce a duplicate --
+    # and it does not need to know why the listing is absent from kirby.ld.
+    if live is not None:
+        live_syms = set()
+        for path in sorted(glob.glob('asm/data/**/*.s', recursive=True)):
+            if path[len('asm/data/'):-2] in live:
+                for sym, _sec, _entries in parse(path):
+                    live_syms.add(sym)
+        for path in sorted(glob.glob('asm/data/**/*.s', recursive=True)):
+            name = path[len('asm/data/'):-2]
+            if name in live:
+                continue
+            syms = {sym for sym, _sec, _entries in parse(path)}
+            if syms and not (syms & live_syms) and not (syms & defined):
+                live.add(name)
+                live_syms |= syms
+                print(f'admitted {name}: {len(syms)} symbol(s) that no live '
+                      f'listing and no C file defines')
+
     # Pre-pass: every block that will emit as 8-byte cells, across ALL files.
     # Interior pointer resolution consults this to scale offsets, and it must
     # be complete before the first file renders -- ovl7 tables point into

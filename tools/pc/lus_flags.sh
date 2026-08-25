@@ -57,9 +57,19 @@ case "$1" in
     # _deps/*-build), so a fork update that adds a library is picked up
     # without editing this list. hidapi-hidraw is the Linux HID transport and
     # drags in libudev.
+    #
+    # `find -L`, NOT bare find. LUS_BUILD is very often a SYMLINK: an
+    # out-of-tree build directory pointed at from third_party/, which is
+    # exactly what the untracked-clone layout described at the top invites.
+    # Bare find does not follow a symlinked STARTING POINT -- it prints the
+    # link itself and descends into nothing -- so the group came out holding
+    # libultraship.a and nothing else, and the link died on `undefined
+    # reference to ImGui::MemFree(void*)`, a message that points nowhere near
+    # the cause. -L follows it and costs nothing when the path is a real
+    # directory.
     echo "-Wl,--start-group" \
          "$LUS_BUILD/src/libultraship.a" \
-         "$(find "$LUS_BUILD" -name '*.a' ! -name 'libultraship.a' | tr '\n' ' ')" \
+         "$(find -L "$LUS_BUILD" -name '*.a' ! -name 'libultraship.a' | tr '\n' ' ')" \
          "-Wl,--end-group" \
          "$($SDL2_CONFIG --libs)" \
          "-ludev -lspdlog -lfmt -ltinyxml2 -lzip -lGL -ldl -lpthread"
