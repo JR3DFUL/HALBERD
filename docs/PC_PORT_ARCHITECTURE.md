@@ -109,8 +109,14 @@ links against libultraship, and Fast3D executes the display lists that reach
 `osSpTaskStartGo`. That page also records what is proven by running versus
 merely wired, and the three LP64 *data* bugs the 64-bit move exposed.
 
-    libultraship  /workspace/jr3dful/libultraship   commit 6f42b9c, 2026-08-04
-    Torch         /workspace/jr3dful/torch          cloned AND BUILT
+    libultraship  third_party/libultraship   commit 6f42b9c, 2026-08-04
+    Torch         third_party/torch          cloned AND BUILT
+
+Those paths are what `build.sh` uses, and they are RELATIVE on purpose. An
+earlier version of this page named the absolute directories they happened to
+sit in on one machine, which is both wrong for everyone else and a path that
+does not belong in a repository. Override them with `LUS_ROOT`/`LUS_BUILD`
+(see tools/pc/lus_flags.sh) if the clones live elsewhere.
 
 The library lives at **Kenix3/libultraship**, not under HarbourMasters --
 HarbourMasters hosts the ports (Shipwright, Starship), not the library. An
