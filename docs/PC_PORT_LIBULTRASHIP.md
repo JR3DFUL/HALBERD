@@ -161,6 +161,41 @@ bugs were not, and all three were found by running:
    include guard; libreultra is a submodule and is also read by the matching
    build, so it could not be fixed in place.
 
+4. **An 8-byte dereference of a 4-byte blob slot.** This is the fourth *data*
+   class and the one that has cost the most, because nothing catches it. The
+   game reads N64 data blobs whose slots are FOUR bytes. A `*(T **)`
+   dereference reads EIGHT here. On hardware the two are the same instruction,
+   so the ROM is byte-identical either way, every decomp gate passes, and
+   `tools/pc/lp64_audit.py` does not see it — that tool audits call
+   signatures, not dereference widths.
+
+   Both of the port's in-game blockers were this, and each was one line:
+
+   * `src/ovl1/ovl1_3.c` func_800AB0F4 declared `u32 **buf` where
+     `gSegment4StartArray` is `u32 *[]`, so `buf[2]` read sixteen bytes in
+     instead of eight. The value is the object's DRAW KIND, and every switch
+     on it has no `default`, so affected objects were **silently not drawn**.
+     The level rendered correctly around a player that was never emitted,
+     which is why it read as a renderer problem for so long.
+
+   * `src/ovl6/ovl6.c` func_80152EA8_ovl6 read `*(void **)(src + 4)` off a
+     cursor advancing by an `src += 0x2C` N64 stride. The wide read swallowed
+     the float behind the pointer and manufactured a non-NULL display list out
+     of a position value; Fast3D took SIGSEGV walking into it. Slot 1 is NULL
+     — that node has no display list at all.
+
+   **The discriminator is the SLOT WIDTH of the thing being read, and it has
+   to be checked per site rather than assumed**: this tree contains both
+   conventions. A cursor with a hardcoded N64 stride (`+= 0x2C`, `* 0x10`,
+   `* 4`) walks 4-byte slots and must be read as `((u32 *)p)[n]`; a table the
+   port genuinely widens is indexed `base + idx * 8`, and `src/ovl1/ovl1_3.c`
+   has an example of each. The two failure modes are opposite and equally
+   quiet: read narrow where the port widened and you get a truncated pointer;
+   read wide where it did not and you get a pointer made of the next field.
+
+   There are 87 `*(T **)` sites under `src/` outside `src/pc`. Most are off
+   host structs and are fine.
+
 A fourth bug was in the port's own scheduler and only showed up because LP64
 work made the boot go further: `dispatch()` derived the *outgoing* ucontext
 from `__osRunningThread`, which `pc_block_on` deliberately sets to NULL before
