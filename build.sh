@@ -16,8 +16,20 @@
 #
 # NOTE ON THE DECOMP CLONE BELOW. It pins the published `decomp-clean`
 # branch, which lags the decomp's working branch, and patches/decomp-port.patch
-# closes the gap: it is the whole `git diff decomp-clean..<decomp working head>`
-# over src/ and include/, nothing more selective.
+# closes the gap:
+#
+#   git diff decomp-clean..<decomp working head> -- src include \
+#       ':(exclude)src/**/.*' ':(exclude)include/**/.*'
+#
+# The two excludes are the ONE selective thing about it, and they are there for
+# a rule this repository does not bend: no absolute path belonging to anybody's
+# machine may be committed. asm-processor leaves `.jbx_tmp_*.asmproc.d`
+# dependency files behind, one of them was committed to decomp-clean by
+# accident, and it carries a build-machine path. Excluding dotfiles under src/
+# and include/ keeps it out of the patch. Nothing the port compiles is a
+# dotfile, so nothing else is lost. Re-run the scan after regenerating:
+#
+#   grep -n '/home/\|/workspace/\|/Users/' patches/decomp-port.patch
 #
 # IT IS THE PATCH, NOT THE BRANCH, THAT DECIDES WHAT THIS BUILD RUNS, and a
 # patch that is merely OLD is not a cosmetic problem. Regenerated 2026-08-25

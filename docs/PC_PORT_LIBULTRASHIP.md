@@ -370,54 +370,110 @@ survives with two alternating threads and crashes with eight.
   a clock that does not happen to line up with arriving at it. `play` now
   presses `A` on a short repeating cycle for that reason.
 
-* **Past the ledge is unrun ground, and two different faults live there.**
-  The built-in `play` program (which now jumps on a 2-second cycle) clears the
-  ledge — its last probe line is `node=3 left=0.520089 old=0.520089 ->
-  0.522321 vel=5.0000 x=-1475.00`, no `*UNDONE*` — and then crashes a few
-  frames later in
+* **Past the ledge was unrun ground, and three separate LP64 layout bugs
+  lived there. All three are fixed and the level now runs.** A
+  `g0:DRIGHT+SR` walk with a 2-second `A` cycle takes the player from the
+  spawn at `x = -2096` across the `-1480` ledge, off the end of track node 3
+  and onto node 4, for 330 wall seconds at `KIRBY_PC_TIMESCALE=8` with
+  `outcome=interrupted` and no SIGSEGV. What was found, in the order it
+  surfaced:
 
-  ```
-  func_8010E5B0    src/ovl2/ovl2_8.c:137
-  func_8010E740    src/ovl2/ovl2_8.c:250
-  func_8010FC30    src/ovl2/ovl2_8.c:1315
-  func_80110FD4    src/ovl2/ovl2_9.c:1131
-  func_8019F650_ovl7  src/ovl7/ovl7_2.c:207
-  ```
+  1. **The spawn callback tables were emitted as scalar data.**
+     `utilFuncTableJump (src/ovl1/util.c:151) <- func_800FCFF0
+     (src/ovl2/spawn.c:201)`, SIGSEGV at `x = -947.75`.
+     `utilFuncTableJump(idx, max, tbl)` does `tbl[idx](omCurrentObj)` with
+     `tbl` an array of function pointers, and `D_801244A4` was not one here:
+     the decomp's listing (`asm/data/ovl2/spawn.data.s:144`, ROM `0xACF14`)
+     has all fourteen words as raw cross-overlay addresses, because splat
+     writes `.word func_X` only for a target inside the segment it is
+     disassembling. `tools/pc/gen_data.py` widened a `.word` block into
+     `void *[]` only when at least one word was a relocation reference, so
+     this one came out as `u32 D_801244A4[] = { 0x801BD7C4, … }` — dense
+     4-byte slots, indexed at LP64 pointer stride.
 
-  i.e. an ovl7 enemy walking into ovl2's collision. That one is not diagnosed.
+     FIXED in `gen_data.py` (`is_all_function_words`), which now also treats
+     an all-`.word` block as a pointer block when EVERY word is an exact hit
+     on a `func_` symbol in the matching build's symbol table. That rule is
+     measured, not curated: of the 2085 all-`.word` blocks in `asm/data` with
+     no symbolic ref, exactly three satisfy it — `D_8012447C`, `D_801244A4`,
+     `D_801244DC` — and all three are passed to `utilFuncTableJump` by
+     `spawn.c` with a bound equal to their own length (3, 0xE, 0x2C against
+     3, 14, 44 words).
 
-  The plain `DRIGHT` + jump-cycle run got further, to `x = -947.75`, and
-  crashed somewhere else:
+     The two siblings this document previously listed with them, `D_801242D0`
+     and `D_80124488`, were **already correct** and needed nothing:
+     `D_801242D0` carries four symbolic refs (indices 42, 47, 62, 103) and
+     `D_80124488` six, so both already satisfied the old rule. That claim is
+     withdrawn.
 
-  ```
-  ./halberd(utilFuncTableJump+0x15)   src/ovl1/util.c:151
-  ./halberd(func_800FCFF0+0x32)       src/ovl2/spawn.c:201
-  ```
+  2. **`func_80218520_ovl9`'s draft cleared the wrong array element**, which
+     showed up as a hard WEDGE at `x = -536.54` — not a crash: the process
+     lives, keeps rendering, and stops advancing. Three `gdb` stack samples
+     two seconds apart were identical:
 
-  `utilFuncTableJump(idx, max, tbl)` does `tbl[idx](omCurrentObj)` with `tbl`
-  an array of function pointers, and `D_801244A4` is not one here. The decomp's
-  own listing (`asm/data/ovl2/spawn.data.s:144`, ROM `0xACF14`) has it as raw
-  words —
+     ```
+     func_80218520_ovl9      src/ovl9/ovl9_15.c
+     utilFuncTableJump(idx=1, max=3, D_8021CDA0_ovl9)
+     func_802180D8_ovl9      src/ovl9/ovl9_15.c:1160   <- a `while (1)`
+     func_8021817C_ovl9
+     func_80218020_ovl9
+     func_800FCF0C           src/ovl2/spawn.c:185
+     ```
 
-  ```
-  dlabel D_801244A4
-      /* ACF14 801244A4 801BD7C4 */ .word 0x801BD7C4
-      ...
-  ```
+     The m2c draft kept m2c's byte offset (`var_v0 = objId * 4`) and used it
+     as an ELEMENT index on `s32 gEntityFuncListIDArray[]`, so this object's
+     state id was never cleared and the `while (1)` re-entered state 1 for
+     ever; on the frame where the `func_800AF27C` yield is skipped it spins
+     without yielding at all and starves the cooperative scheduler. FIXED in
+     the decomp (`NON_MATCHING` arm only, ROM byte-identical).
 
-  — because splat did not resolve those cross-overlay entry addresses
-  (`0x801BD7C4` is ovl7, `0x801D2B90` ovl9, `0x8021A1A0` ovl19) into symbols.
-  `tools/pc/gen_data.py` only widens a `.word` block into `void *[]` when at
-  least one word is a *relocation reference*, so this one is emitted as
-  `u32 D_801244A4[] = { 0x801BD7C4, … }` and is then read at the wrong stride
-  with N64 addresses in it. Its siblings in the same file — `D_801242D0`,
-  `D_8012447C`, `D_80124488`, `D_801244DC` — have the same shape.
+     **This is a class.** Scanning for "a local assigned `X * 4` that is then
+     dereferenced as `*(TypedArray + local)`" finds **91 sites in 16 files**,
+     including `src/ovl9/ovl9_5.c:785` on this very array. Each needs its own
+     listing check — some `* 4` locals really are element counts — but every
+     true positive is a silent 4x out-of-bounds access in any port build.
 
-  This is the first blocker past the ledge and it is decomp-side work first:
-  the addresses have to become named symbols in the listing before the port
-  can relocate them. `src/pc/pc_ovl_dispatch.c` already handles the three
-  cross-overlay call targets that *did* resolve, and is the pattern to follow
-  for any that land in the shared ovl10..ovl17 VRAM window.
+  3. **`struct Ovl7AnimObj` is `struct CollSlot` behind an N64-offset
+     filler.** `func_8019F410_ovl7 (src/ovl7/ovl7_2.c:112) <-
+     func_80218248_ovl9 (src/ovl9/ovl9_15.c:1230)`, SIGSEGV on 3 runs of 3 at
+     `x = -639 .. -931`. `src/ovl2/ovl2_9.c` declares `func_80111C88` as
+     returning a `CollSlot *`; `src/ovl7/ovl7_2.c` declares the same function
+     as returning an `Ovl7AnimObj *` and names its one field by the N64 byte
+     offset. `CollSlot` leads with `void *unk0` and carries
+     `struct Shape28 *unk1C`, so at LP64 everything after the first pointer
+     slides:
+
+     ```
+     gdb -ex "ptype /o struct CollSlot"     ->  56 bytes, unk24 at offset 48
+     gdb -ex "ptype /o struct Ovl7AnimObj"  ->  48 bytes, unk24 at offset 40
+     ```
+
+     Offset 40 in `CollSlot` is `s32 unk20`, the shape count. Instrumented,
+     every one of 480 calls read `anim->unk24 == 0x1`, and the first one to
+     take the `hdr->unk4 == 0 && arg0 != 0` branch stored through `0x1`:
+
+     ```
+     [f410] id=33 ent=0x12f2e48 unk8C=0x11ff340 anim=0x12e9f80
+            hdr=0x11ff300 hdr4=0 arg0=0x17296d8 unk24=0x1
+     ```
+
+     FIXED in the decomp under `#ifdef PORT` (filler `48`, N64 arm untouched).
+     `src/ovl7/ovl7_10.c:310` declares its own `struct Ovl7AnimObj` as
+     `filler0[0x20] + unk20` over `func_80111A04`'s return value; if that is
+     also a `CollSlot` the same slide applies. Not measured yet.
+
+  **What stops the run now is the level, not a fault.** On node 4 the track
+  parameter `t` oscillates — `0.4755, 0.3043, 0.2908, 0.3077, 0.3954, 0.2255,
+  0.4984` at 5-second intervals, `vel` a steady `5.0000`, `face` `+1`
+  throughout — so a held D-RIGHT loops the player around that node rather
+  than leaving it. Getting further needs a route (whatever world 1-1 wants
+  there — an inhale, a door, a switch) in the cue list, not a longer hold.
+
+  A related trap worth knowing: `kPlayProgram`'s walk cue used to hold for
+  `60000` frames, which is 1000 GAME seconds — only ~125 wall seconds at
+  `KIRBY_PC_TIMESCALE=8`. A run that outlives its own hold freezes with
+  `vel=0.0000` and looks exactly like a wedge. `held=0000 stick=0` in the
+  `[playerpos]` line is the tell. The cue now holds for `360000`.
 
 * **The game reaches the renderer as of 2026-08-12** — the stand-in
   `src/pc/pc_audio_thread.c` posts the init message the real `auThreadMain`

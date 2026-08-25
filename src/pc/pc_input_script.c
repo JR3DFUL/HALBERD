@@ -172,8 +172,17 @@ static const char kPlayProgram[] =
      * stick note at the bottom of this file for the measurement. SR is still
      * pressed alongside it, because it costs nothing and a run that sets
      * both is the one that would notice if that ever changed. */
-    "g0:DRIGHT+SR:60000,"  /* walk right for the whole run; the cues below
-                            * OR into this one rather than replacing it */
+    "g0:DRIGHT+SR:360000," /* walk right for the whole run; the cues below
+                            * OR into this one rather than replacing it.
+                            * 60000 frames is 1000 GAME seconds, i.e. only
+                            * ~125 wall seconds at KIRBY_PC_TIMESCALE=8, and
+                            * a run that outlives its own hold stops
+                            * measuring without saying so. Measured on the
+                            * old value: the player froze at x = 420.49,
+                            * vel = 0.0000, held=0000 stick=0 at +157.46s
+                            * and stayed there for the remaining 170 s of a
+                            * 330 s run. That reads exactly like a wedge and
+                            * is not one -- `held=0000` is the tell. */
     /* JUMP ON A SHORT CYCLE, and this is the fix for the wedge this program
      * carried. Kirby 64's world 1-1 has a solid ledge whose collision plane
      * is x = -1480 (normal (-1,0,0), collisionType 0 -- read out of the
@@ -210,38 +219,63 @@ static const char kPlayProgram[] =
     "g74:A:12,g76:A:12,g78:A:12,"
     "g80:B:120,"
     "g86:A:12,g88:A:12,g90:A:12,g92:A:12,g94:A:12,"
-    "g96:A:12,g98:A:12";
+    "g96:A:12,g98:A:12,"
+    /* AND KEEP JUMPING PAST g98. The program used to end here, which was
+     * fine while nothing survived past x = -947; it does not survive
+     * contact with a port that now walks the whole of world 1-1's node 3
+     * and loops on node 4. Every cue past this point is another 2 s jump,
+     * up to MAX_CUES (64) -- this list is exactly 63 of them, so anything
+     * added here has to displace something. */
+    "g100:A:12,g102:A:12,g104:A:12,g106:A:12,g108:A:12,"
+    "g110:A:12,g112:A:12,g114:A:12,g116:A:12,g118:A:12,"
+    "g120:A:12,g122:A:12,g124:A:12,g126:A:12,g128:A:12,"
+    "g130:A:12,g132:A:12,g134:A:12,g136:A:12,g138:A:12,"
+    "g140:A:12,g142:A:12,g144:A:12";
 
-/* WHERE THIS PROGRAM NOW ENDS, so the next lane does not re-find it. It
- * clears the ledge -- the last probe line before the crash reads
+/* WHERE THIS PROGRAM NOW ENDS, so the next lane does not re-find it.
  *
- *   8E6C.obj0 #423  node=3 left=0.520089 old=0.520089 -> 0.522321
- *                   vel=5.0000 len=224.000 x=-1475.00
+ * IT NO LONGER ENDS IN A CRASH. Both faults this note used to record are
+ * fixed, and a `g0:DRIGHT+SR` walk with a 2 s A cycle now runs world 1-1
+ * from the spawn at x = -2096 across the -1480 ledge, off the end of track
+ * node 3 and onto node 4, for 330 wall seconds at KIRBY_PC_TIMESCALE=8 with
+ * outcome=interrupted and no SIGSEGV. The two that were fixed:
  *
- * with no *UNDONE*, i.e. past t = 0.517857 and still accelerating -- and then
- * SIGSEGVs a few frames later. TWO different faults have been seen just past
- * the ledge, on two different routes through it, so this is a region of the
- * level the port has not run before rather than one bug:
+ *   utilFuncTableJump (util.c:151) <- func_800FCFF0 (spawn.c:201), at
+ *       x = -947.75. The spawn callback tables D_8012447C / D_801244A4 /
+ *       D_801244DC are runs of RAW cross-overlay addresses in the decomp's
+ *       listing, with no symbolic ref among them, so tools/pc/gen_data.py
+ *       read them as scalar data and emitted u32[] -- dense 4-byte slots
+ *       indexed at LP64 pointer stride. FIXED in gen_data.py, which now
+ *       recognises an all-.word block whose every word is an exact `func_`
+ *       symbol. Image-wide that rule fires on exactly those three blocks
+ *       out of 2085 candidates.
  *
- *   func_8010E5B0 (ovl2_8.c:137) <- func_8010E740 <- func_8010FC30 <-
- *   func_80110FD4 (ovl2_9.c:1131) <- func_8019F650_ovl7 (ovl7_2.c:207)
- *       -- this program, at x = -1475.00
+ *   func_8019F410_ovl7 (ovl7_2.c:112) <- func_80218248_ovl9
+ *       (ovl9_15.c:1230), 3 runs of 3, at x = -639 .. -931. `anim->unk24`
+ *       read 0x1 on every one of 480 calls: ovl7_2.c's `struct Ovl7AnimObj`
+ *       is ovl2_9.c's `struct CollSlot` behind an N64-offset filler, and
+ *       CollSlot's pointers slide its unk24 from 40 to 48 at LP64. FIXED in
+ *       the decomp under #ifdef PORT.
  *
- *   utilFuncTableJump (util.c:151) <- func_800FCFF0 (spawn.c:201)
- *       -- a plain DRIGHT + 2 s A cycle, at x = -947.75. That one is
- *       diagnosed: the spawn callback table D_801244A4 is a run of RAW
- *       cross-overlay addresses in the decomp's own listing rather than
- *       symbol references, so it is emitted as u32[] and called at the wrong
- *       stride. Decomp-side work first; see docs/PC_PORT_LIBULTRASHIP.md.
+ * A third failure showed up in between and is also fixed: a hard WEDGE (not
+ * a crash -- the process lives, renders, and stops advancing) at x = -536.54.
+ * Three gdb stack samples two seconds apart were identical,
+ * func_80218520_ovl9 <- utilFuncTableJump(idx=1, max=3) <- func_802180D8_ovl9
+ * (a `while (1)`), because that draft cleared gEntityFuncListIDArray at
+ * [objId*4] instead of [objId] and the loop's state id never changed.
  *
- * The previous note here recorded `play` wedging at x = -2198.29 and asked
- * for the A jumps, the B inhale and the DDOWN swallow to be bisected. That
- * bisect is moot. Re-measured on the current tree, the OLD program stopped at
- * x = -1480.00 with node=3 t=0.517857 vel=5.0000 -- the same ledge a plain
- * held DRIGHT stops at, not a state its own cues had put the player in. The
- * -2198.29 figure does not reproduce here; it was measured on a differently
- * staged tree and nothing in this repository can now say what that tree was,
- * which is its own lesson (see the note at the top of build.sh). */
+ * WHAT STOPS THE RUN NOW IS THE LEVEL, NOT A FAULT. On node 4 the player's
+ * track parameter t oscillates -- 0.4755, 0.3043, 0.2908, 0.3077, 0.3954,
+ * 0.2255, 0.4984 at 5 s intervals, vel a steady 5.0000, face +1 throughout --
+ * so held-DRIGHT alone loops him around that node rather than leaving it.
+ * Getting further needs a route, not a longer hold: whatever world 1-1 wants
+ * at that point (an inhale, a door, a switch) has to be in the cue list.
+ *
+ * Two things this note previously asserted are withdrawn. `play` wedging at
+ * x = -2198.29 never reproduced on any tree this repository can rebuild. And
+ * the pair of faults was read as "a region of the level the port has not run
+ * before"; they were two independent LP64 layout bugs that happened to be
+ * reachable only past the ledge. */
 
 static u32 button_of(const char *name, size_t n) {
     static const struct { const char *name; u32 bit; } kNames[] = {

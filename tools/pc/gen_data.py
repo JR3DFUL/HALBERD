@@ -675,7 +675,8 @@ def render(sym, section, entries, refs):
     # string is not one pointer slot. A packed struct is the only faithful
     # form, and it also beats byte-serialisation for the 41 mixed-width blocks
     # with no pointers, since it keeps the pointers and the values both.
-    has_ref = any(_is_ref(v) for k, v in entries if k == 'word')
+    has_ref = (any(_is_ref(v) for k, v in entries if k == 'word')
+               or (kinds == {'word'} and is_all_function_words(entries)))
     if is_mixed_ref_block(sym, entries):
         return render_mixed_widened(sym, section, entries, refs)
     if len(kinds) > 1:
@@ -731,13 +732,63 @@ def render(sym, section, entries, refs):
     return '', ''
 
 
+def is_all_function_words(entries):
+    """Every word an EXACT hit on a known `func_` VRAM symbol, and >= 2 words.
+
+    A callback table whose every word is a CROSS-OVERLAY address arrives here
+    with no symbol names at all: splat writes `.word func_X` only for targets
+    inside a segment it is currently disassembling, and writes the bare number
+    otherwise. `any(_is_ref(...))` then reads the table as scalar data and it
+    emits as `u32[]` -- dense 4-byte slots. Every caller indexes it at LP64
+    pointer stride, so index 1 reads the top half of slots 2-3 and the game
+    calls a garbage address.
+
+    src/ovl2/spawn.c:201 is where that faulted: `utilFuncTableJump(id, 0xE,
+    &D_801244A4)` SIGSEGVs on the first spawn past world 1-1's ledge, because
+    all fourteen words of D_801244A4 are raw ovl7 addresses.
+
+    THE DISCRIMINATOR IS NOT A GUESS, IT IS MEASURED. Over all of asm/data
+    there are 2085 all-`.word` blocks with no symbolic ref in them. Requiring
+    that EVERY word be an exact match for a `func_` symbol in the matching
+    build's symbol table cuts that to THREE: D_8012447C, D_801244A4 and
+    D_801244DC -- and all three are passed to utilFuncTableJump by spawn.c,
+    each with a bound that equals its own length (3, 0xE, 0x2C against 3, 14,
+    44 words). Nothing else in the image looks like this, so the rule is as
+    tight as a hardcoded list and does not have to be maintained as one.
+
+    Requiring EXACT hits (never a near miss) and FUNCTION symbols (never data)
+    is what keeps a table of plain constants from being mistaken for pointers;
+    resolve_scalar_pointer's comment has the same reasoning for scalar words.
+    """
+    if len(entries) < 2:
+        return False
+    syms = vram_symbols()
+    for _k, v in entries:
+        if _is_ref(v):
+            continue
+        try:
+            addr = int(v, 0)
+        except ValueError:
+            return False
+        name = syms.get(addr)
+        if name is None or not name.startswith('func_'):
+            return False
+    return True
+
+
 def is_pointer_block(entries):
-    """A block that renders as `void *sym[]` -- all .word, at least one a ref."""
+    """A block that renders as `void *sym[]` -- all .word, at least one a ref.
+
+    ...or, with no ref at all, a block whose every word names a function: see
+    is_all_function_words for why that is the same thing.
+    """
     entries = [e for e in entries if e[0] != 'incbin']
     if not entries:
         return False
-    return ({k for k, _ in entries} == {'word'}
-            and any(_is_ref(v) for _, v in entries))
+    if {k for k, _ in entries} != {'word'}:
+        return False
+    return (any(_is_ref(v) for _, v in entries)
+            or is_all_function_words(entries))
 
 
 def render_pointer_run(run, refs):
