@@ -15,13 +15,21 @@
 # rather than merely wired.
 #
 # NOTE ON THE DECOMP CLONE BELOW. It pins the published `decomp-clean`
-# branch, which lags the decomp's working branch. Two of the port's in-game
-# blockers were fixed on the decomp side after that branch was cut, and both
-# are carried here as hunks in patches/decomp-port.patch rather than being
-# waited on -- func_800AB0F4's call site in src/ovl1/ovl1_11.c, and the
-# 4-byte blob slot read in src/ovl6/ovl6.c. When decomp-clean is refreshed,
-# check whether those two hunks still apply and drop them if the branch has
-# them.
+# branch, which lags the decomp's working branch, and patches/decomp-port.patch
+# closes the gap: it is the whole `git diff decomp-clean..<decomp working head>`
+# over src/ and include/, nothing more selective.
+#
+# IT IS THE PATCH, NOT THE BRANCH, THAT DECIDES WHAT THIS BUILD RUNS, and a
+# patch that is merely OLD is not a cosmetic problem. Regenerated 2026-08-25
+# because the one-line install still SIGSEGVd on the first frame of gameplay
+# (func_80103004, src/ovl2/ovl2_7.c) while a hand-staged tree built from the
+# decomp's working head played the level: the fix -- seven collision wrappers
+# in ovl2_7.c whose pointer parameters were still spelled `s32`, which
+# truncates every one of them on this LP64 build -- had landed in the decomp
+# but not here. Nothing about that is visible from the port side; the port
+# repo's own history looked clean. So: whenever the decomp fixes something for
+# the port, regenerate this patch and RUN the result, or the next lane
+# measures a tree nobody ships.
 set -euo pipefail
 
 ROM=${1:-baserom.us.z64}
@@ -81,17 +89,27 @@ if [ ! -d "$WORK/kirby64_decomp" ]; then
     # (include/ultra64.h pulls PR/os_cont.h from libreultra/include/2.0I).
     git -C "$WORK/kirby64_decomp" submodule update --init --depth 1 libreultra
 fi
-# Overlay the port files onto the decomp checkout (they are gitignored there).
+# RESET THE CHECKOUT COMPLETELY, THEN OVERLAY, THEN PATCH -- in that order.
+#
+# `git checkout -- .` restores tracked files and does nothing about untracked
+# ones, which was fine while the patch only EDITED files. It stopped being
+# fine the moment the patch started ADDING them (the decomp splits its audio
+# and overlay TUs as it goes, so new .c files arrive in every refresh): a tree
+# carrying the previous patch already has those files, and `git apply` refuses
+# with "already exists in working directory". A second `./build.sh` then fails
+# where the first succeeded, which is the worst failure mode this script has.
+#
+# So `git clean -fdq` as well -- and it has to run BEFORE the port files are
+# copied in, because none of src/pc, tools/pc, port/ or Makefile.pc is
+# gitignored in the decomp checkout and the clean would take all four with it.
+# (An earlier comment here claimed they were ignored. They are not.)
+git -C "$WORK/kirby64_decomp" checkout -- . 2>/dev/null || true
+git -C "$WORK/kirby64_decomp" clean -fdq 2>/dev/null || true
 cp -r "$ROOT/src/pc"    "$WORK/kirby64_decomp/src/"
 mkdir -p "$WORK/kirby64_decomp/tools"
 cp -r "$ROOT/tools/pc"  "$WORK/kirby64_decomp/tools/"
 cp    "$ROOT/Makefile.pc" "$WORK/kirby64_decomp/"
 cp -r "$ROOT/port"      "$WORK/kirby64_decomp/"
-# Reset the staged checkout's tracked files, then apply the current patch.
-# The old apply-or-reverse-check dance broke the moment the patch was UPDATED:
-# a tree carrying the previous patch can neither apply the new one nor
-# reverse-check it. Resetting first makes any patch version apply cleanly.
-git -C "$WORK/kirby64_decomp" checkout -- . 2>/dev/null || true
 git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" || \
     { echo "decomp-port.patch failed to apply"; exit 1; }
 cp "$ROM" "$WORK/kirby64_decomp/baserom.us.z64"
