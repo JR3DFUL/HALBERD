@@ -495,6 +495,54 @@ def render_mixed_widened(sym, section, entries, refs):
             f'{const}void *{c_ident(sym)}[] = {{\n    {body}\n}};\n')
 
 
+# Blocks a HALFWORD reader walks. splat wrote them as `.word`, and the normal
+# scalar emission stores each word as one native u32 -- correct for anything
+# that reads it back as a u32, and WRONG for anything that reads it as u16s,
+# because little-endian storage swaps the two halves of every word.
+#
+# The rumble command streams are the case that found it. src/ovl1/ovl1_10.c's
+# func_800BAA64 walks one with a `u16 *`:
+#
+#     switch (*ptr >> 13) { case 3: ptr++; case 4: ptr = arg0->unk0C; ... }
+#
+# D_800D51A8 is `.word 0x600F2002, 0x40028000, 0x00000000`. The N64 sees the
+# halfwords 600F 2002 4002 8000 0000; the host, reading a native u32 array,
+# sees 2002 600F 8000 4002 0000. Entering at ptr = base+2 the N64 reads 0x2002
+# (opcode 1: stop) and returns; the host reads 0x600F (opcode 3: advance),
+# then 0x8000 (opcode 4), whose else-arm is `ptr = arg0->unk0C` -- and unk0C
+# is NULL on every call. Measured with a probe on func_800BAA64's entry:
+#
+#     [rumble] item=0x12de240 ptr=0x11ce3d2 unk0C=(nil) unk00=2 done=0
+#              base=0x11ce3d0 delta=2
+#
+# then SIGSEGV at src/ovl1/ovl1_10.c:220 dereferencing the NULL, 3 runs of 5
+# on a plain walk through world 1-1.
+#
+# Emitting them as u16[] in N64 halfword order gives a host image the halfword
+# reader sees exactly as the N64 does. A BYTE image (FORCE_BYTES) would not:
+# `*(u16 *)` over N64 bytes 60 0F reads 0x0F60 on a little-endian host.
+#
+# The members are the thirteen streams D_800D5238 points at, plus nothing
+# else -- D_800D5238 itself is a pointer table and stays one.
+FORCE_HALFWORDS = {
+    'D_800D51A0', 'D_800D51A8', 'D_800D51B4', 'D_800D51C0', 'D_800D51CC',
+    'D_800D51D8', 'D_800D51E4', 'D_800D51F0', 'D_800D51FC', 'D_800D5208',
+    'D_800D5214', 'D_800D5220', 'D_800D522C',
+}
+
+
+def render_halfwords(sym, section, entries):
+    """A FORCE_HALFWORDS block: two native u16 per N64 word, N64 order."""
+    const = 'const ' if section == '.rodata' else ''
+    vals = []
+    for _k, v in entries:
+        w = int(v, 0) & 0xFFFFFFFF
+        vals.append('0x%04X' % (w >> 16))
+        vals.append('0x%04X' % (w & 0xFFFF))
+    return (f'extern {const}u16 {sym}[];\n',
+            f'{const}u16 {c_ident(sym)}[] = {{ ' + ', '.join(vals) + ' };\n')
+
+
 def render_widened(sym, section, entries):
     """A FORCE_WIDEN block: one 8-byte (void *)(u32) cell per N64 word."""
     const = 'const ' if section == '.rodata' else ''
@@ -635,6 +683,9 @@ def render(sym, section, entries, refs):
 
     if sym in FORCE_BYTES and kinds == {'word'}:
         return render_bytes(sym, section, entries)
+
+    if sym in FORCE_HALFWORDS and kinds == {'word'}:
+        return render_halfwords(sym, section, entries)
 
     # .bss -- plain zeroed storage, and it must NOT be const.
     #
