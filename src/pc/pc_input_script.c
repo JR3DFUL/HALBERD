@@ -495,6 +495,43 @@ void pc_input_script_init(void) {
             sMenuAuto ? ", menus driven from gGameState" : "");
 }
 
+/* THE SCRIPT'S CLOCK IS THE GAME'S FRAME COUNTER, NOT THE COUNT REGISTER.
+ *
+ * Every cue time in this file is a number of game seconds, and a game second
+ * is 60 simulated frames -- that is what the player's speed, a menu's debounce
+ * and an animation's length are all measured in. The count register is not
+ * that: KIRBY_PC_TIMESCALE scales it, and nothing scales the rate at which
+ * frames are actually simulated, which on a software renderer is bounded by
+ * how fast Fast3D can draw them. Measured on llvmpipe at KIRBY_PC_TIMESCALE=8:
+ * 17256 frames in 300 wall seconds (57.5/s, about 1x) while the count
+ * register ran at 8x. With the register as the clock, `play`'s cues fired
+ * eight times earlier in the level than written: the g52 inhale landed at
+ * x = -1943.47, before the -1480 ledge, and left Kirby in action 14 with
+ * vel = 0.0000 for the rest of a 240 s run.
+ *
+ * gtlDrawnFrameCounter (src/main/gtl.c) is incremented once per drawn frame
+ * and zeroed when a scene is set up, so it is accumulated here into a
+ * monotonic count: a drop means a reset, and the new value is the number of
+ * frames since. The result is still expressed in count-register ticks
+ * (PC_COUNTER_HZ / 60 per frame), so every duration below reads the same way
+ * it did, and on a machine where the simulation keeps up with the timescale
+ * the two clocks agree. */
+extern s32 gtlDrawnFrameCounter;
+
+static u64 script_clock(void) {
+    static u64 sFrames;
+    static s32 sLastCounter;
+    s32 c = gtlDrawnFrameCounter;
+
+    if (c >= sLastCounter) {
+        sFrames += (u64)(c - sLastCounter);
+    } else {
+        sFrames += (u64)c;
+    }
+    sLastCounter = c;
+    return sFrames * (PC_COUNTER_HZ / 60u);
+}
+
 /* Called from os_cont.c's snapshot(), after the backend has filled the pads.
  *
  * PORT 0 ONLY, and it always reports the pad as PRESENT. A script is
@@ -514,12 +551,9 @@ void pc_input_script_apply(PCPad *pads, int n) {
         return;
     }
     if (sEpoch == 0) {
-        sEpoch = pc_count64();
-        if (sEpoch == 0) {
-            sEpoch = 1;
-        }
+        sEpoch = 1;
     }
-    now = pc_count64() - sEpoch;
+    now = script_clock();
 
     /* Latched once and never moved. gGameState leaves 15 for the pause menu
      * and comes back, and re-zeroing the epoch on the way back would restart
@@ -600,15 +634,17 @@ void pc_input_script_apply(PCPad *pads, int n) {
         }
     }
 
-    /* THIS EPOCH IS A CANARY, and it has already earned its keep once.
+    /* THIS CLOCK IS A CANARY, and it has already earned its keep once.
      *
-     * sEpoch sits in the platform layer's .bss, a few hundred bytes past the
-     * end of the game's own bss objects, and a game-side buffer overrun lands
-     * on it before it lands on anything that complains. That is exactly how
-     * the HUD arena overrun in src/pc/pc_bss_whole.c was found: this timer
-     * started reporting 390317930 seconds because its epoch had been
-     * overwritten with a repeating 16-bit fill pattern. Nothing else in the
-     * process had noticed.
+     * The script's statics sit in the platform layer's .bss, a few hundred
+     * bytes past the end of the game's own bss objects, and a game-side
+     * buffer overrun lands on them before it lands on anything that
+     * complains. That is exactly how the HUD arena overrun in
+     * src/pc/pc_bss_whole.c was found: this timer started reporting
+     * 390317930 seconds because its epoch had been overwritten with a
+     * repeating 16-bit fill pattern. Nothing else in the process had
+     * noticed. The clock is now the frame accumulator in script_clock(),
+     * which lives in the same .bss and trips the same check.
      *
      * A run cannot plausibly last a year, so say so rather than printing an
      * absurd number and hoping somebody looks twice. Once only -- if the bss
@@ -620,10 +656,11 @@ void pc_input_script_apply(PCPad *pads, int n) {
         if (!said) {
             said = 1;
             fprintf(stderr,
-                    "[input] EPOCH CORRUPTED (now=%llx epoch=%llx). This "
+                    "[input] CLOCK CORRUPTED (now=%llx frames=%llx). This "
                     "static lives in the platform layer's .bss; something has "
                     "written past the end of a game bss object into it.\n",
-                    (unsigned long long)now, (unsigned long long)sEpoch);
+                    (unsigned long long)now,
+                    (unsigned long long)(now / (PC_COUNTER_HZ / 60u)));
             fflush(stderr);
         }
         return;
