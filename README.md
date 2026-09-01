@@ -151,3 +151,18 @@ then rebuild:
 
 The build reuses everything already compiled and re-stages only what
 changed. `third_party/` and `out/` are yours -- git never touches them.
+
+## Building against your own decomp checkout
+
+`build.sh` fetches the decomp at the commit pinned in `DECOMP_REF` (a full
+SHA; the default is set at the top of the script). No patch is applied: the
+decomp's `decomp-clean` branch already carries every `#ifdef PORT` arm the
+port compiles. Two overrides:
+
+    DECOMP_REF=<full sha> ./build.sh baserom.us.z64
+    DECOMP_DIR=/path/to/kirby64_decomp ./build.sh baserom.us.z64
+
+`DECOMP_DIR` builds inside an existing checkout instead of cloning one. That
+checkout is never reset, cleaned or checked out; only the port overlay
+(`src/pc`, `tools/pc`, `port/`, `Makefile.pc`) is copied in, and a checkout
+that already symlinks those paths back at this repo is left alone.

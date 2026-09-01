@@ -14,34 +14,18 @@
 # See README and docs/PC_PORT_LIBULTRASHIP.md for what is proven by running
 # rather than merely wired.
 #
-# NOTE ON THE DECOMP CLONE BELOW. It pins the published `decomp-clean`
-# branch, which lags the decomp's working branch, and patches/decomp-port.patch
-# closes the gap:
+# DECOMP SOURCES. Step 4 fetches JR3DFUL/kirby64_decomp at the pinned commit
+# DECOMP_REF and copies this repository's port overlay (src/pc, tools/pc,
+# port/, Makefile.pc) into it. The decomp's published decomp-clean branch
+# carries every PORT arm the port compiles, so no patch is applied. Knobs:
 #
-#   git diff decomp-clean..<decomp working head> -- src include \
-#       ':(exclude)src/**/.*' ':(exclude)include/**/.*'
-#
-# The two excludes are the ONE selective thing about it, and they are there for
-# a rule this repository does not bend: no absolute path belonging to anybody's
-# machine may be committed. asm-processor leaves `.jbx_tmp_*.asmproc.d`
-# dependency files behind, one of them was committed to decomp-clean by
-# accident, and it carries a build-machine path. Excluding dotfiles under src/
-# and include/ keeps it out of the patch. Nothing the port compiles is a
-# dotfile, so nothing else is lost. Re-run the scan after regenerating:
-#
-#   grep -n '/home/\|/workspace/\|/Users/' patches/decomp-port.patch
-#
-# IT IS THE PATCH, NOT THE BRANCH, THAT DECIDES WHAT THIS BUILD RUNS, and a
-# patch that is merely OLD is not a cosmetic problem. Regenerated 2026-08-25
-# because the one-line install still SIGSEGVd on the first frame of gameplay
-# (func_80103004, src/ovl2/ovl2_7.c) while a hand-staged tree built from the
-# decomp's working head played the level: the fix -- seven collision wrappers
-# in ovl2_7.c whose pointer parameters were still spelled `s32`, which
-# truncates every one of them on this LP64 build -- had landed in the decomp
-# but not here. Nothing about that is visible from the port side; the port
-# repo's own history looked clean. So: whenever the decomp fixes something for
-# the port, regenerate this patch and RUN the result, or the next lane
-# measures a tree nobody ships.
+#   DECOMP_REF=<sha>   build against another decomp commit. Full 40-digit
+#                      SHA: a shallow fetch by commit needs all of it.
+#   DECOMP_DIR=/path   build inside an existing decomp checkout instead of
+#                      cloning one. It is never reset, cleaned or checked out;
+#                      only the overlay is copied in, and a checkout that
+#                      already symlinks the overlay back at this tree is left
+#                      exactly as it is.
 set -euo pipefail
 
 ROM=${1:-baserom.us.z64}
@@ -51,7 +35,13 @@ WORK=$ROOT/third_party
 OUT=$ROOT/out
 JOBS=$(nproc)
 
+DECOMP_URL=https://github.com/JR3DFUL/kirby64_decomp
+DECOMP_REF=${DECOMP_REF:-ea8acdc001187851a574135358843292117b7fe1}
+
 msg() { printf '\n== %s ==\n' "$*"; }
+# True when both paths resolve to the same file or directory (symlinks
+# followed). A missing path resolves to itself and so never matches.
+same_path() { [ "$(readlink -f "$1" 2>/dev/null)" = "$(readlink -f "$2" 2>/dev/null)" ]; }
 
 msg "0/7 ROM check"
 [ -f "$ROM" ] || { echo "ROM not found: $ROM (pass the path as arg 1)"; exit 1; }
@@ -80,9 +70,9 @@ msg "3/7 libultraship (JRickey ssb64 fork + Kirby patch)"
 if [ ! -d "$WORK/libultraship" ]; then
     git clone --depth 1 -b ssb64 https://github.com/JRickey/libultraship "$WORK/libultraship"
 fi
-# Re-apply the current patch every run (reset first, same as the decomp
-# staging below) so a pulled patch update actually reaches the build; ninja
-# then recompiles only what the patch touched.
+# Re-apply the current patch every run (reset first) so a pulled patch update
+# actually reaches the build; ninja then recompiles only what the patch
+# touched.
 git -C "$WORK/libultraship" checkout -- . 2>/dev/null || true
 git -C "$WORK/libultraship" apply "$ROOT/patches/libultraship-jrickey-kirby.patch" || \
     { echo "libultraship-jrickey-kirby.patch failed to apply"; exit 1; }
@@ -94,45 +84,57 @@ fi
 ninja -C "$WORK/lus-build" -j"$JOBS" libultraship
 
 msg "4/7 decomp sources (game code)"
-if [ ! -d "$WORK/kirby64_decomp" ]; then
-    git clone --depth 1 -b decomp-clean \
-        https://github.com/JR3DFUL/kirby64_decomp "$WORK/kirby64_decomp"
+if [ -n "${DECOMP_DIR:-}" ]; then
+    DECOMP=$(cd "$DECOMP_DIR" && pwd)
+    [ -f "$DECOMP/include/ultra64.h" ] || \
+        { echo "DECOMP_DIR=$DECOMP_DIR is not a kirby64_decomp checkout"; exit 1; }
+    echo "using existing checkout $DECOMP (DECOMP_REF ignored)"
+else
+    DECOMP=$WORK/kirby64_decomp
+    if [ ! -d "$DECOMP/.git" ]; then
+        git init -q "$DECOMP"
+        git -C "$DECOMP" remote add origin "$DECOMP_URL"
+    fi
+    # This clone belongs to the script, so moving it to DECOMP_REF may discard
+    # (-f) whatever an earlier run left in tracked files. It never touches the
+    # overlay: the decomp does not track src/pc, tools/pc, port/ or Makefile.pc.
+    # The fetch is skipped when the commit is already here, so a rerun works
+    # offline.
+    if ! git -C "$DECOMP" rev-parse -q --verify "$DECOMP_REF^{commit}" >/dev/null 2>&1; then
+        git -C "$DECOMP" fetch --depth 1 origin "$DECOMP_REF"
+        git -C "$DECOMP" checkout -q -f --detach FETCH_HEAD
+    else
+        git -C "$DECOMP" checkout -q -f --detach "$DECOMP_REF"
+    fi
     # libreultra is a submodule and the PC build compiles against its headers
     # (include/ultra64.h pulls PR/os_cont.h from libreultra/include/2.0I).
-    git -C "$WORK/kirby64_decomp" submodule update --init --depth 1 libreultra
+    git -C "$DECOMP" submodule update --init --depth 1 libreultra
 fi
-# RESET THE CHECKOUT COMPLETELY, THEN OVERLAY, THEN PATCH -- in that order.
-#
-# `git checkout -- .` restores tracked files and does nothing about untracked
-# ones, which was fine while the patch only EDITED files. It stopped being
-# fine the moment the patch started ADDING them (the decomp splits its audio
-# and overlay TUs as it goes, so new .c files arrive in every refresh): a tree
-# carrying the previous patch already has those files, and `git apply` refuses
-# with "already exists in working directory". A second `./build.sh` then fails
-# where the first succeeded, which is the worst failure mode this script has.
-#
-# So `git clean -fdq` as well -- and it has to run BEFORE the port files are
-# copied in, because none of src/pc, tools/pc, port/ or Makefile.pc is
-# gitignored in the decomp checkout and the clean would take all four with it.
-# (An earlier comment here claimed they were ignored. They are not.)
-git -C "$WORK/kirby64_decomp" checkout -- . 2>/dev/null || true
-git -C "$WORK/kirby64_decomp" clean -fdq 2>/dev/null || true
-cp -r "$ROOT/src/pc"    "$WORK/kirby64_decomp/src/"
-mkdir -p "$WORK/kirby64_decomp/tools"
-cp -r "$ROOT/tools/pc"  "$WORK/kirby64_decomp/tools/"
-cp    "$ROOT/Makefile.pc" "$WORK/kirby64_decomp/"
-cp -r "$ROOT/port"      "$WORK/kirby64_decomp/"
-git -C "$WORK/kirby64_decomp" apply "$ROOT/patches/decomp-port.patch" || \
-    { echo "decomp-port.patch failed to apply"; exit 1; }
-cp "$ROM" "$WORK/kirby64_decomp/baserom.us.z64"
-cp "$ROM" "$OUT/baserom.us.z64"
+# The overlay. src/pc and tools/pc are replaced rather than merged: Makefile.pc
+# compiles every file under src/pc, so a file deleted from the port would
+# otherwise linger from an earlier run and still be built. port/ is merged,
+# because it only carries Torch manifests and the staged shader, and a
+# developer's checkout may hold extracted assets under port/o2r that this
+# script did not put there.
+for p in src/pc tools/pc Makefile.pc; do
+    same_path "$ROOT/$p" "$DECOMP/$p" && continue
+    rm -rf "${DECOMP:?}/$p"
+    mkdir -p "$(dirname "$DECOMP/$p")"
+    cp -r "$ROOT/$p" "$DECOMP/$p"
+done
+if ! same_path "$ROOT/port" "$DECOMP/port"; then
+    mkdir -p "$DECOMP/port"
+    cp -r "$ROOT/port/." "$DECOMP/port/"
+fi
+same_path "$ROM" "$DECOMP/baserom.us.z64" || cp "$ROM" "$DECOMP/baserom.us.z64"
+same_path "$ROM" "$OUT/baserom.us.z64"    || cp "$ROM" "$OUT/baserom.us.z64"
 
 msg "5/7 game build + link"
-( cd "$WORK/kirby64_decomp" && make -f Makefile.pc -j"$JOBS" )
-( cd "$WORK/kirby64_decomp" && \
+( cd "$DECOMP" && make -f Makefile.pc -j"$JOBS" )
+( cd "$DECOMP" && \
   LUS_ROOT="$WORK/libultraship" LUS_BUILD="$WORK/lus-build" \
   SDL2_PREFIX="$WORK/sdl2-install" bash tools/pc/link.sh )
-cp "$WORK/kirby64_decomp/build/pc/kirby64" "$OUT/halberd"
+cp "$DECOMP/build/pc/kirby64" "$OUT/halberd"
 
 msg "6/7 assets (Torch o2r + Fast3D shaders)"
 if [ ! -f "$WORK/torch-build/torch" ]; then
@@ -142,7 +144,7 @@ if [ ! -f "$WORK/torch-build/torch" ]; then
     ninja -C "$WORK/torch-build" -j"$JOBS" torch
 fi
 mkdir -p "$OUT/port/o2r" "$OUT/port/assets/shaders/opengl"
-( cd "$WORK/kirby64_decomp" && "$WORK/torch-build/torch" o2r baserom.us.z64 -s port/yamls -d "$OUT/port/o2r" ) || \
+( cd "$DECOMP" && "$WORK/torch-build/torch" o2r baserom.us.z64 -s port/yamls -d "$OUT/port/o2r" ) || \
   echo "WARN: torch o2r failed -- game runs, textures may be limited"
 cp "$WORK/libultraship/src/fast/shaders/opengl/default.shader.glsl" "$OUT/port/assets/shaders/opengl/"
 
@@ -157,7 +159,7 @@ exec ./halberd "\$@"
 LAUNCH
 chmod +x "$OUT/run.sh"
 
-cat <<EOF
+cat <<EOT
 
 Build complete.
 
@@ -165,4 +167,4 @@ Run the game:
     $OUT/run.sh
 
 Headless/debug extras: KIRBY_PC_SCHEDDEBUG=1, KIRBY_PC_BGDEBUG=1 (stderr diagnostics).
-EOF
+EOT
