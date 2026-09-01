@@ -12,24 +12,60 @@ This is a status document, not a plan. Everything asserted here was run.
     KIRBY_PC_TRACE=1                 log missing symbols instead of stopping
     PC_TRACE=gfx,vi,sched,...        subsystem tracing
     PC_LUS=0                         link the headless backend instead
+    KIRBY_PC_INPUT=walk|play|...     scripted controller (src/pc/pc_input_script.c)
+    KIRBY_PC_TIMESCALE=8             scale the count register (see "Speed" below)
+    KIRBY_PC_FRAMEHASH=8             hash a sample of every 8th presented frame
+    KIRBY_PC_PLAYERPOS=10            print the player's position every 10 s in-level
+    python3 tools/pc/smoke.py ...    run it and print one [verdict] line
 
 ## The state in one paragraph
 
-libultraship builds, the game links against it at `-m64`, and F3DEX2 display
-lists submitted through `osSpTaskLoad`/`osSpTaskStartGo` are executed by Fast3D
-and presented in an OpenGL window at the game's own 60 Hz. That path is proven
-end to end with a synthetic display list built from the game's own `<PR/gbi.h>`
-macros — 1198 frames in 20 s, colours matching the requested fill exactly when
-the framebuffer is read back.
+libultraship builds, the game links against it at `-m64`, the game's own
+F3DEX2 display lists submitted through `osSpTaskLoad`/`osSpTaskStartGo` are
+executed by Fast3D, and driven by the scripted controller the port reaches
+gameplay in world 1-1 and draws it. Measured 2026-09-01 in a 4-core container
+with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
+`ssb64` at cdb279c plus `patches/libultraship-jrickey-kirby.patch`, SDL2
+2.30.11, with `port/o2r/kirby64.o2r` mounted:
 
-*(Updated 2026-08-12: the paragraph that stood here said the game never
-reaches the renderer because `thread5_game` blocks on the undecompiled
-`auThreadMain`. That was cured the same day by `src/pc/pc_audio_thread.c`, a
-stand-in that posts the init message and consumes the audio flags. The game
-now boots through the scheduler into `game_tick`; the current frontier is the
-audio-library call surface (`auSetBGMVolume` reaching null sequence players)
-and the boot-path stub set, tracked in the commit log. Audio itself is still
-absent — the stand-in is not an implementation.)*
+    KIRBY_PC_WINDOWED=1 KIRBY_PC_FRAMEHASH=8 KIRBY_PC_PLAYERPOS=10 \
+      python3 tools/pc/smoke.py --input walk --expect gameplay --timescale 8 \
+                                --timeout 300 --verbose
+
+    [verdict] outcome=interrupted stage=gameplay stage_at=45.33 elapsed=300.00
+              gamestate=15 frames=17256 first_retrace=0.28 first_gfxtask=0.32
+              route=0>1>2>3>10>11>12>15 render=raster drawn=19965
+              sampled=2495 nonblank=2489 distinct=2485
+    smoke: PASS -- reached gameplay, which is the recorded high-water mark
+
+The route is logos, opening movie, title, file select, galaxy map (where
+`walk` answers the world 1-1 cutscene prompt with D-LEFT then A, so state 14
+is not on the route), planet map, and gameplay at 45 s wall. `[playerpos]`
+put the player at `x = -1520.17 vel = 5.0000` ten seconds in and at
+`x = -1480.00` — the ledge; `walk` holds D-RIGHT and never jumps — from +65 s
+to the end of the run, with no fault. 2489 of the 2495 sampled frames were
+non-blank and 2485 distinct.
+
+Unattended (no input), the same binary reaches `attract-demo-1` at 50.31 s of
+a 60 s run: `render=raster drawn=3640 sampled=455 nonblank=439 distinct=336`.
+
+**What the captures show** (root-window grabs of the 640x480 window during
+those runs): the opening movie, the title screen, and world 1-1 with the HUD
+(lives, health bar, shard counter), Kirby, a Waddle Dee, the checkered blocks,
+fences and flowers. **What they show wrong:** the sky behind world 1-1 is
+black where the N64 draws a background, with a few sprite fragments along the
+top edge; Ribbon's face in the opening movie is a noise-pattern texture.
+Nothing else was checked against hardware.
+
+**Speed.** `KIRBY_PC_TIMESCALE=8` scales the count register eightfold, but
+nothing scales the rate at which frames are simulated, and on llvmpipe that
+is bound by Fast3D: 17256 frames in 300 s is 57.5 frames/s, about real time.
+The timescale does not shorten a run here; a scripted route does. It also
+means any clock derived from the count register runs eight times faster than
+the level — see the `play` entry under "What does not work".
+
+Audio is absent: `src/pc/pc_audio_thread.c` stands in for `auThreadMain`,
+posts the init message and consumes the audio flags, and plays nothing.
 
 ## How LUS's main loop and the game's scheduler were reconciled
 
@@ -97,16 +133,15 @@ it contains no `.o2r`/`.otr`/`.zip`/`.mpq`; dropping a Torch-built
 `kirby64.o2r` into `port/assets` would silently unmount the shaders and turn a
 working renderer into an abort.
 
-**Segmented addresses are not resolved the way the game builds them.**
-`Interpreter::SegAddr` treats `w1` as segmented only when bit 0 is set — the
-OTR convention, where `DisplayListFactory` writes `seg | 1`. A raw N64 display
-list carries even segmented addresses (`0x06001234`) and Fast3D will dereference
-one as a host pointer. Nothing in this port hits it yet because the synthetic
-list uses no segments and the game builds none yet, but **it is the first thing
-that will break when real game display lists start flowing**, and the fix has
-to be decided then: either mark segment references on the way in, or teach the
-port's `G_MOVEWORD`/`G_MW_SEGMENT` handling to hand Fast3D pre-resolved
-pointers.
+**Segmented addresses.** `Interpreter::SegAddr` treats `w1` as segmented
+only when bit 0 is set — the OTR convention, where `DisplayListFactory` writes
+`seg | 1`. The game's lists arrive carrying host pointers, all below 4 GB
+because the image is linked `-no-pie`, and the fork's
+`gfx_vtx_addr_is_unresolved` is patched to accept a low, mapped, 8-aligned
+pointer as a real `Vtx` array (`patches/libultraship-jrickey-kirby.patch`). A
+level, its objects and the player render through that path.
+`src/pc/gfx_trace.c` describes what a stale segmented value looks like when
+one does get through.
 
 **Nothing else.** The display-list format itself needs no adaptation: this
 tree's `<PR/gbi.h>` already stores two `uintptr_t` per command, exactly like
@@ -475,10 +510,41 @@ survives with two alternating threads and crashes with eight.
   `vel=0.0000` and looks exactly like a wedge. `held=0000 stick=0` in the
   `[playerpos]` line is the tell. The cue now holds for `360000`.
 
-* **The game reaches the renderer as of 2026-08-12** — the stand-in
-  `src/pc/pc_audio_thread.c` posts the init message the real `auThreadMain`
-  would. What remains on this path is the audio-library call surface: the
-  first `au*` call dereferences the null sequence players that
+* **`play` keeps time in simulated frames now, and its route ends in
+  player action 14.** The cue times in `src/pc/pc_input_script.c` are game
+  seconds. The clock behind them used to be the count register, which
+  `KIRBY_PC_TIMESCALE` scales while nothing scales the simulation; on
+  llvmpipe at timescale 8 the register ran 8x and the game drew 57.5
+  frames/s, so `play`'s cues fired eight times earlier in the level than
+  written — the `g52` B cue landed at `x = -1943.47`, before the ledge, and
+  Kirby stood in action 14 with `vel = 0.0000` for the remaining 190 s of a
+  240 s run. The clock is now an accumulator over `gtlDrawnFrameCounter`
+  (`src/main/gtl.c`: one bump per drawn frame, zeroed at scene setup, which
+  the accumulator absorbs). Same program, same machine, after the change:
+
+      [verdict] outcome=interrupted stage=gameplay stage_at=28.76 elapsed=240.01
+                gamestate=15 frames=7614 route=0>1>2>3>10>11>12>15 render=raster
+                drawn=14656 sampled=1832 nonblank=1768 distinct=792
+
+  Kirby is over the ledge at +38.8 s (`x = 41.57 y = 98.10 node = 4
+  action = 6`), falls at +58.8 s (`y = -3774.32`), respawns at node 0
+  (`x = -2912.42`), and from +78.8 s to the end of the run reads
+  `x = -2629.92 y = -1.90 vel = 0.0000 action = 14 held = 0100`. Action 14 is
+  entered by `func_801727D8_ovl3` (`src/ovl3/kirby.c`), which sets it, stores
+  an upward speed of 9.0 and a gravity of -0.980665 into the player's motion
+  slots and parks its coroutine; its per-frame entry
+  (`D_80196AE8_ovl3[14] = func_80172A3C_ovl3`) hops to action 6 as soon as
+  `gKirbyState.unk30` is non-zero, which the start function has just made
+  it. Neither the stored speed (y never leaves -1.90) nor the hop happens
+  here, so the player's per-frame tick is not running in that state, or
+  `set_kirby_action_1(6, 6)` does not take. In both runs the action began
+  within ten seconds of the B cue. Not traced further; `src/ovl3/kirby.c`
+  is being worked by a decompilation lane. The `walk` route never presses B
+  and never hits it.
+* **Audio is absent.** `src/pc/pc_audio_thread.c` stands in for
+  `auThreadMain`: it posts the init message and consumes the audio flags, and
+  that is all. What remains on this path is the audio-library call surface:
+  the first `au*` call dereferences the null sequence players that
   `auCreatePlayers` (still a pragma) would have built. Guarding that surface
   is porting work; implementing it is decompilation work.
 * **Audio is wired but never exercised.** `pcb_audio_queue` calls
@@ -505,34 +571,52 @@ survives with two alternating threads and crashes with eight.
   virtual display never completes, `IsFrameReady` stays false, and every frame
   is silently dropped. That looks exactly like a broken renderer and is not
   one. `KIRBY_PC_WINDOWED=1` forces it off.
-* **No game assets are committed yet.** `port/o2r/` is empty in the tree.
-  The mount itself is verified: a 13.9 MB Torch-built `kirby64.o2r` from the
-  asset workstream was mounted alongside the shader folder and the renderer
-  kept running unchanged (1195 frames in 20 s), so dropping the archive into
-  `port/o2r/` really is the whole integration on this side.
-* **The RDP quirks the BattleShip notes warn about are entirely unexplored.**
-  Tile masks, `SetTileSize` extents, IA/I4 uploads and `gDPSetPrimDepth` 2D
-  layering cannot be hit by fill rectangles. Expect them the day the game
-  submits its first real list. `src/pc/gfx_trace.c` is the tool for that and
-  now decodes correctly at LP64 (it walked the list as `u32*` before, reading
-  every command's low half twice).
+* **`port/o2r/` is a build product, and nothing reads from it yet.**
+  `build.sh` step 6 — by hand, `torch o2r baserom.us.z64 -s port/yamls -d
+  port/o2r` from the decomp root — writes `kirby64.o2r`: 10,583 resources,
+  13,987,129 bytes, 3.8 s with the JRickey `ssb64` Torch at c3565f1. The
+  binary mounts it beside the shader folder on every run (`archive_paths()`
+  in `src/pc/pc_backend_lus.cpp`; `KIRBY_O2R` overrides the path) and the
+  runs above were made with it mounted. But no code under `src/pc` loads a
+  resource out of it: every texture Fast3D drew came from ROM memory the
+  port DMAs at runtime through `src/pc/os_pi.c`. The archive is the
+  integration point for replacing that, not something the game depends on.
+  (`audio.yml` extracts as plain BLOBs because the fork's Torch has no BK64
+  factory — see docs/PC_PORT_ASSETS.md.)
+* **Two rendering faults are visible in every capture and neither has been
+  traced.** The sky behind world 1-1 is black, with sprite fragments along
+  the top edge, where the N64 draws a background; and Ribbon's face in the
+  opening movie is rendered as noise — a texture decoded in the wrong format
+  or from the wrong address. The tools for both are `src/pc/gfx_trace.c`
+  (`PC_TRACE=gbi`; it decodes correctly at LP64) and the census hooks the
+  LUS patch adds to the interpreter (`KIRBY_PC_TEXCENSUS=1`,
+  `KIRBY_PC_BGDEBUG=1`, `KIRBY_PC_DRAWLOG`).
 
 ## Building libultraship here
 
-Three things were needed and none is obvious:
+`build.sh` steps 2-3 are the record; this is what they do and why.
 
-1. **SDL3 from source.** Commit `6f42b9c` migrated LUS to SDL3 and SDL3 is not
-   in apt on Ubuntu 24.04. Built to `/usr/local`.
-2. **Three stub files.** Ubuntu ships `libzip-dev` without `libzip-tools`, but
-   `libzip-targets.cmake` imports `libzip::zipcmp`/`zipmerge`/`ziptool` as
-   IMPORTED executables and hard-errors when `/usr/bin/zipcmp` is absent. LUS
-   never runs them; empty executables at those paths are enough.
-3. **A one-line patch to the LUS checkout.** `cmake/dependencies/common.cmake`
-   downloads `stb_image.h` from `github.com/nothings/stb/raw/...`, which this
-   environment's proxy answers 403 while allowing `raw.githubusercontent.com`.
-   `file(DOWNLOAD)` does not fail the configure — it writes a zero-byte file —
-   so the failure surfaces minutes later as "stbi_uc was not declared". The
-   patch switches the host and adds a status check.
+1. **SDL2 2.30.11 from source** into `third_party/sdl2-install`. The JRickey
+   fork is an SDL2 codebase (`imgui_impl_sdl2`, `SDL_OpenAudio`); upstream
+   libultraship moved to SDL3 and this fork did not.
+2. **The fork, plus one patch.** `JRickey/libultraship` branch `ssb64`
+   (cdb279c, 2026-08-11, at the time of writing) with
+   `patches/libultraship-jrickey-kirby.patch` applied — Kirby's additions to
+   `fast/interpreter.cpp` and `Gui.cpp`: the texture-census hooks, the
+   low-pointer `Vtx` rule, S2DEX background and sprite handling, rectangle
+   and viewport changes. The script resets the checkout and re-applies the
+   patch on every run. Configure is `cmake -G Ninja
+   -DCMAKE_BUILD_TYPE=Release -DGBI_UCODE=F3DEX_GBI_2 -DLUS_BUILD_TESTS=OFF
+   -DCMAKE_PREFIX_PATH=<sdl2-install>`; `ninja libultraship` is 248 steps.
+3. **Three stub executables.** Ubuntu's `libzip-dev` installs a
+   `libzip-targets.cmake` that imports `libzip::zipcmp`/`zipmerge`/`ziptool`
+   as executables and fails the configure when `/usr/bin/zipcmp` is absent,
+   although LUS never runs them. `build.sh` writes `#!/bin/sh` / `exit 0` at
+   each missing path; that is exactly what was on disk when the library
+   built here.
 
-Everything else (ImGui, prism, thread-pool, monocypher) FetchContent-clones
-from github over git, which this environment allows.
+The `stb_image.h` download in `cmake/dependencies/common.cmake` came through
+this environment's proxy intact (284,733 bytes); `common.cmake` has a fallback
+path (`torch/lib/n64graphics/stb_image.h` in the checkout) for when it does
+not. Everything else (ImGui, prism, thread-pool, glslang, SPIRV-Cross, tinycc,
+hidapi) is fetched by CMake from GitHub over git.

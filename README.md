@@ -58,15 +58,19 @@ If your dump does not match the hash, it will not build.
 
 ## Current state
 
-Boots, renders the intro movie and title screen, and takes input through
-the full menu flow: file select (saves persist to `kirby64.eep`), the
-opening cutscene, the world map and the planet level-select. Levels load
-and run -- stage pipeline (config, collision, tracks, entities), enemy
-spawning and the scene loop are live. The player-spawn chain (controllable
-Kirby) and in-level rendering are in active development, as is game audio.
-Some sprites draw untextured and a number of game-side functions carry
-behavioral (non-matching) PORT implementations pending genuine matches --
-see commit history for the running list.
+Measured 2026-09-01 (Mesa llvmpipe under Xvfb, no GPU). Driven by the
+scripted controller (`KIRBY_PC_INPUT=walk`) the port boots through the
+logos, opening movie, title screen, file select (saves persist to
+`kirby64.eep`), galaxy map and planet map into world 1-1 and reaches
+gameplay at 45 s; the level, HUD, Kirby and enemies render (`render=raster`,
+19965 frames drawn, 2489 of 2495 sampled frames non-blank), the player
+walks to the first ledge, and a 300 s run ends without a fault. Not
+working: audio (a stand-in thread; nothing plays); the sky behind the level
+draws black; Ribbon's face texture in the opening movie is noise; the analog
+stick does not move the player (the ROM's own behaviour -- use the D-pad);
+and a number of game-side functions carry behavioural (non-matching) PORT
+implementations pending genuine matches. `docs/PC_PORT_LIBULTRASHIP.md`
+carries the verdict lines and what is behind each item.
 
 ## Relationship to the decomp
 
