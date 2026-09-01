@@ -154,7 +154,7 @@ if [ ! -f "$WORK/torch-build/torch" ]; then
 fi
 mkdir -p "$OUT/port/o2r" "$OUT/port/assets/shaders/opengl"
 ( cd "$DECOMP" && "$WORK/torch-build/torch" o2r baserom.us.z64 -s port/yamls -d "$OUT/port/o2r" ) || \
-  echo "WARN: torch o2r failed -- game runs, textures may be limited"
+  echo "WARN: torch o2r failed -- nothing in the port reads the archive yet, so the game still runs"
 cp "$WORK/libultraship/src/fast/shaders/opengl/default.shader.glsl" "$OUT/port/assets/shaders/opengl/"
 
 msg "7/7 launcher"
