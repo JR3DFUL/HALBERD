@@ -586,14 +586,29 @@ survives with two alternating threads and crashes with eight.
   integration point for replacing that, not something the game depends on.
   (`audio.yml` extracts as plain BLOBs because the fork's Torch has no BK64
   factory — see docs/PC_PORT_ASSETS.md.)
-* **Two rendering faults are visible in every capture and neither has been
-  traced.** The sky behind world 1-1 is black, with sprite fragments along
-  the top edge, where the N64 draws a background; and Ribbon's face in the
-  opening movie is rendered as noise — a texture decoded in the wrong format
-  or from the wrong address. The tools for both are `src/pc/gfx_trace.c`
-  (`PC_TRACE=gbi`; it decodes correctly at LP64) and the census hooks the
-  LUS patch adds to the interpreter (`KIRBY_PC_TEXCENSUS=1`,
-  `KIRBY_PC_BGDEBUG=1`, `KIRBY_PC_DRAWLOG`).
+* **Two rendering faults are visible in every capture.** The sky behind
+  world 1-1 is black, with sprite fragments along the top edge, where the
+  N64 draws a background; and Ribbon's face in the opening movie is rendered
+  as noise — a texture decoded in the wrong format or from the wrong
+  address.
+
+  The sky is not a fill problem. With gdb on the fork's RDP handlers during
+  world 1-1 (breakpoints on `gfx_set_fill_color_handler_rdp`,
+  `gfx_fill_rect_handler_rdp`, `gfx_set_c_img_handler_rdp`, printing the
+  raw command words), each frame carries `src/main/render.c`'s camera clear
+  exactly as written: `SETCIMG 0x013cde00` (the Z buffer), `SETFILLCOLOR
+  0xfffcfffc`, `FILLRECT`, then `SETCIMG 0x0F000000`, `SETFILLCOLOR
+  0x00010001`, `FILLRECT (10,10)-(309,181)`. `0x00010001` is
+  `viPackRGBA(0x000000FF)`: the level's camera colour is black, and the
+  fill covers the 3D view. Whatever paints the sky on hardware is an object
+  in the scene that is not being emitted here — the same class as the
+  draw-kind slot bug in `src/ovl1/ovl1_3.c` above, and the next thing to
+  look for. `src/pc/gfx_trace.c` (`PC_TRACE=gfx`) does not descend into
+  the frame's `G_DL push`, so it shows two commands per frame and cannot
+  help with this; the census hooks the LUS patch adds
+  (`KIRBY_PC_DRAWLOG=<lo>:<hi>` frame range, `KIRBY_PC_TEXCENSUS=1`,
+  `KIRBY_PC_BGDEBUG=1`, `KIRBY_PC_RECTDEBUG=1`) and gdb on the handlers
+  can.
 
 ## Building libultraship here
 
