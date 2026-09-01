@@ -111,13 +111,19 @@ EXPECTED_STAGE = 'attract-loop-complete'
 #
 #   intro-cutscene  title -> file select -> world select -> the world 1-1
 #                   opening cutscene (overlay 18), held for 150s / 32915
-#                   frames with no crash. It does NOT reach gGameState 15:
-#                   src/ovl1/game.c's func_800A3408 replays the cutscene
-#                   while func_80227308_ovl18(1) returns 1, and it has not
-#                   been seen to stop. Whether that is an overlay-18 bug or
-#                   just a cutscene that autostart keeps restarting is the
-#                   open question at this rung.
-DEEP_EXPECTED_STAGE = 'intro-cutscene'
+#                   frames with no crash, driven by `autostart`. It did not
+#                   reach gGameState 15 because `autostart` presses only
+#                   START and A, and A answers YES to the watch-the-cutscene
+#                   prompt every time it comes round (src/pc/pc_input_script.c
+#                   has the mechanism). Not a bug: a prompt nobody answered.
+#   gameplay        driven by `advance`, which picks the button from
+#                   gGameState and answers that prompt with D-LEFT then A.
+#                   Measured 2026-09-01 on llvmpipe, `--input walk` (advance
+#                   plus a held D-RIGHT in-level), timescale 8: gameplay at
+#                   45.33 s, route 0>1>2>3>10>11>12>15, render=raster,
+#                   drawn=19965 sampled=2495 nonblank=2489 distinct=2485,
+#                   300 s with no fault. --deep now drives with `advance`.
+DEEP_EXPECTED_STAGE = 'gameplay'
 
 # Beyond the expected stage there is nothing to wait for: with no controller
 # attached the game cycles the attract loop forever, so a run that gets that
@@ -202,7 +208,7 @@ def main():
                          'src/pc/pc_input_script.c. Without it the run is '
                          'unattended and cannot leave the attract loop.')
     ap.add_argument('--deep', action='store_true',
-                    help='shorthand for --input autostart with a longer '
+                    help='shorthand for --input advance with a longer '
                          'timeout and the deepest reachable stage expected')
     ap.add_argument('--expect', default=EXPECTED_STAGE, choices=STAGES,
                     help=f'stage that must be reached (default {EXPECTED_STAGE})')
@@ -221,9 +227,12 @@ def main():
 
     if args.deep:
         if args.input is None:
-            args.input = 'autostart'
+            args.input = 'advance'
+        # Reaching gameplay took 45 s on llvmpipe (the timescale does not
+        # speed up a renderer-bound simulation; see the doc), so the deep
+        # budget is sized for that plus a margin.
         if args.timeout == DEFAULT_TIMEOUT:
-            args.timeout = 90
+            args.timeout = 150
         if args.expect == EXPECTED_STAGE:
             args.expect = DEEP_EXPECTED_STAGE
 

@@ -537,10 +537,13 @@ survives with two alternating threads and crashes with eight.
   `gKirbyState.unk30` is non-zero, which the start function has just made
   it. Neither the stored speed (y never leaves -1.90) nor the hop happens
   here, so the player's per-frame tick is not running in that state, or
-  `set_kirby_action_1(6, 6)` does not take. In both runs the action began
-  within ten seconds of the B cue. Not traced further; `src/ovl3/kirby.c`
-  is being worked by a decompilation lane. The `walk` route never presses B
-  and never hits it.
+  `set_kirby_action_1(6, 6)` does not take. The `[input]` log for the run
+  above puts the B cue at frame-clock +113.38 s (g52 exactly), a sample
+  with Kirby still walking (action 3) after it, then `DDOWN+SD` (g57) and
+  the START pause/unpause pair (g62, g68), and action 14 at the next sample;
+  which of those three enters it was not isolated. Not traced further;
+  `src/ovl3/kirby.c` is being worked by a decompilation lane. The `walk`
+  route presses none of them and never hits it.
 * **Audio is absent.** `src/pc/pc_audio_thread.c` stands in for
   `auThreadMain`: it posts the init message and consumes the audio flags, and
   that is all. What remains on this path is the audio-library call surface:
