@@ -54,6 +54,15 @@ if command -v apt-get >/dev/null; then
     sudo apt-get install -y $need || apt-get install -y $need
 else
     echo "install equivalents of: $need"; fi
+# libzip's CMake package imports zipcmp/zipmerge/ziptool as executables and
+# hard-errors at configure time when they are absent, although libultraship
+# never runs them. Ubuntu's libzip-dev does not ship them (libzip-tools does,
+# where it exists). An empty script at each path satisfies the import.
+for t in zipcmp zipmerge ziptool; do
+    [ -e "/usr/bin/$t" ] && continue
+    printf '#!/bin/sh\nexit 0\n' | sudo tee "/usr/bin/$t" >/dev/null
+    sudo chmod +x "/usr/bin/$t"
+done
 
 mkdir -p "$WORK" "$OUT"
 
