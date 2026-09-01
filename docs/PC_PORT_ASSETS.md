@@ -6,10 +6,13 @@ archive that libultraship's resource manager mounts.
 
 Run it with:
 
-    torch o2r baserom.us.z64 -s port/yamls -d build/pc
+    torch o2r baserom.us.z64 -s port/yamls -d port/o2r
 
-Current result: **10,583 resources, 30.7 MB uncompressed, 13.9 MB archive, zero
-errors**, in about 3.5 seconds. Every extracted byte was verified against the
+(`build.sh` runs the same command with `-d out/port/o2r`; the binary mounts
+`port/o2r` relative to its working directory, `KIRBY_O2R` overrides.)
+
+Current result: **10,583 resources, 13,987,129-byte archive, zero errors**, in
+3.8 seconds (measured 2026-09-01 with the JRickey `ssb64` fork at c3565f1). Every extracted byte was verified against the
 ROM (see "Verification" below).
 
 ## Where things live
@@ -58,15 +61,23 @@ formats have nothing in common beyond both describing instruments, so no amount
 of configuration bridges them.
 
 **This is the same shape of problem SSB64 hit, and it has the same answer, but
-it does not need new code.** Torch already ships an ALBankFile walker, written
+it does not need new code.** Upstream Torch ships an ALBankFile walker, written
 for Banjo-Kazooie — another SDK libaudio title — as `BK64:SOUNDFONT_CTL` and
-`BK64:SOUNDFONT_TBL` in `src/factories/bk64/SoundfontTblFactory.cpp`. Despite
-the namespace it contains nothing Banjo-specific. It parses Kirby 64's banks
-unmodified.
+`BK64:SOUNDFONT_TBL`, and despite the namespace it contains nothing
+Banjo-specific. The fork this port builds against (JRickey/Torch, branch
+`ssb64`, the one `build.sh` clones) does not carry it: `src/factories/` there
+has `naudio` but no `bk64`, and `torch o2r` aborts on the first such node with
+`No factory by the name 'BK64:SOUNDFONT_CTL' found`.
 
-So: **audio needs no custom factory.** Point the BK64 soundfont factories at the
-right offsets and it works. That is the useful difference from SSB64, which did
-need custom factories for its relocatable data.
+So `audio.yml` uses **BLOB for all four bank buffers**, with the tbl sizes the
+BK64 walker would have computed written in by hand after doing the same walk
+over the ROM (every `ALWaveTable.base + len` in the paired ctl, max, rounded up
+to 16): `0xB89CC -> 0xB89D0` for bank1 and `0x12FEEE -> 0x12FEF0` for bank2.
+Both end exactly on the next splat subsegment (`0x49F590` and `0x3E1400`), so
+the sizes are cross-checked against `kirby64.yaml` as well. The archive content
+is the same either way — both factories emit raw buffers — and the port hands
+them to its own `alBnkfNew()` unchanged. **Audio still needs no custom
+factory**; it needs no factory at all beyond BLOB.
 
 ### Which tbl goes with which ctl
 
@@ -133,8 +144,7 @@ break it — `alSeqFileNew()` patches `seqArray[i].offset` in place against the
 base address of the whole file.
 
 If per-sample AIFF export is wanted later (for a music-replacement feature, say)
-that does need a new factory, because the BK64 walker computes sizes but does
-not decode ADPCM.
+that does need a new factory: nothing in the extraction decodes ADPCM.
 
 ## Textures
 

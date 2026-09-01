@@ -39,27 +39,30 @@
 # and 0x12FEF0 -- exactly the gap to the next splat subsegment in both cases.
 # The pairing is therefore confirmed by the data as well as by the loader.
 #
-# Factories used: BK64:SOUNDFONT_CTL / BK64:SOUNDFONT_TBL. Despite the name
-# these are game-agnostic ALBankFile handlers -- Banjo-Kazooie is another SDK
-# libaudio title. SOUNDFONT_CTL emits the ctl verbatim; SOUNDFONT_TBL walks the
-# paired ctl to compute the tbl length rather than trusting a hardcoded size.
-# Both emit raw buffers, so the port feeds them to its own decompiled
-# alBnkfNew() unchanged, which is exactly what auLoadAssets() already does.
+# Every node is a BLOB. The Torch fork this port builds against
+# (JRickey/Torch, branch ssb64) has no BK64:SOUNDFONT_CTL / SOUNDFONT_TBL
+# factories -- `torch o2r` aborts with "No factory by the name
+# 'BK64:SOUNDFONT_CTL'" -- and those factories would only have emitted the
+# same raw bytes (ctl verbatim; tbl cut at max(wavetable.base + len) over
+# the paired ctl, rounded up to 16). The tbl sizes below ARE that walk,
+# done over the ROM: 0xB89CC -> 0xB89D0 for bank1 and 0x12FEEE -> 0x12FEF0
+# for bank2, each ending exactly on the next splat subsegment (0x49F590 and
+# 0x3E1400). The port feeds all four buffers to its own alBnkfNew() unchanged,
+# which is what auLoadAssets() already does.
 
 # ---------------------------------------------------------------------------
 # bank1 -- sound effects. 1 instrument, 106 sounds, 106 ADPCM wavetables,
 # sampleRate 44100.
 # ---------------------------------------------------------------------------
 sfx_bank_ctl:
-  type: BK64:SOUNDFONT_CTL
+  type: BLOB
   offset: 0x3E1400
   size: 0x57C0
 
 sfx_bank_tbl:
-  type: BK64:SOUNDFONT_TBL
+  type: BLOB
   offset: 0x3E6BC0
-  ctl_offset: 0x3E1400
-  ctl_size: 0x57C0
+  size: 0xB89D0
 
 # ---------------------------------------------------------------------------
 # bank2 -- music instrument bank, bound to the sequence player. 57 instrument
@@ -67,15 +70,14 @@ sfx_bank_tbl:
 # ADPCM wavetables, sampleRate 32000.
 # ---------------------------------------------------------------------------
 music_bank_ctl:
-  type: BK64:SOUNDFONT_CTL
+  type: BLOB
   offset: 0x2A8CB0
   size: 0x8860
 
 music_bank_tbl:
-  type: BK64:SOUNDFONT_TBL
+  type: BLOB
   offset: 0x2B1510
-  ctl_offset: 0x2A8CB0
-  ctl_size: 0x8860
+  size: 0x12FEF0
 
 # ---------------------------------------------------------------------------
 # Sequence bank -- ALSeqFile 'S1', 63 sequences in SDK compressed-MIDI form
