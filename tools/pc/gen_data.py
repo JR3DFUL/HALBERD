@@ -600,6 +600,13 @@ SUPPRESS_BSS = {
     # and write past the first splinter.
     'D_801292B0', 'D_801292C8', 'D_801292CC', 'D_801292D0', 'D_801292D4',
     'D_801292D8', 'D_801292DC', 'D_801292E0',
+    # Scene-camera at/eye snapshots, whole in pc_bss_whole.c. D_800D7B2C is
+    # D_800D7B20 + 0xC on N64 (the eye half; ovl2_3.c/ovl17.c/ovl1_2.c write
+    # it by that name while ovl2_6.c's skybox parallax reads D_800D7B20[3..5]),
+    # and func_800FC62C parks six floats at D_800D7B38 + 0x18, past the 24
+    # bytes a split object had. Split, the eye stayed 0 and the skybox pitch
+    # parallax was computed against an eye at the origin.
+    'D_800D7B20', 'D_800D7B2C', 'D_800D7B38',
 }
 
 

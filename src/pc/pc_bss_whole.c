@@ -108,3 +108,18 @@ ALIAS(D_801292D4, D_801292B0, 0x24)
 ALIAS(D_801292D8, D_801292B0, 0x28)
 ALIAS(D_801292DC, D_801292B0, 0x2C)
 ALIAS(D_801292E0, D_801292B0, 0x30)
+
+/* Scene-camera at/eye snapshots (struct Ovl2CamPos in ovl2_3.c: two Vectors,
+ * 0x18 bytes, scalar-only so LP64 == N64). D_800D7B20 is the live pair and
+ * D_800D7B2C is its eye half by name: func_800FA2D4/func_800FC164 (ovl2_3.c),
+ * ovl17.c and ovl1_2.c store `D_800D7B2C = cam->viewMtx.lookAt.eye` while
+ * func_80100EE4 (ovl2_6.c) reads the eye back as D_800D7B20[3..5] for the
+ * skybox parallax. Split into two objects the eye never arrived and the
+ * layers were scrolled for a camera at the origin. D_800D7B38 is the
+ * previous-frame pair AND, at +0x18, the six-float park block func_800FC62C
+ * saves the live pair to across a camera animation; its N64 extent runs to
+ * D_800D7B68, 0x30 bytes, not the 0x18 a split object had. */
+u8 D_800D7B20[0x18] __attribute__((aligned(8)));
+u8 D_800D7B38[0x30] __attribute__((aligned(8)));
+
+ALIAS(D_800D7B2C, D_800D7B20, 0xC)
