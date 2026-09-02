@@ -16,6 +16,8 @@ This is a status document, not a plan. Everything asserted here was run.
     KIRBY_PC_TIMESCALE=8             scale the count register (see "Speed" below)
     KIRBY_PC_FRAMEHASH=8             hash a sample of every 8th presented frame
     KIRBY_PC_PLAYERPOS=10            print the player's position every 10 s in-level
+    KIRBY_PC_SKYDEBUG=1              skybox layers: placement, scale, camera parallax
+    KIRBY_PC_BGDEBUG_FROM=<frame>    CI4/TLUT decode peeks from that task-frame on
     python3 tools/pc/smoke.py ...    run it and print one [verdict] line
 
 ## The state in one paragraph
@@ -23,7 +25,7 @@ This is a status document, not a plan. Everything asserted here was run.
 libultraship builds, the game links against it at `-m64`, the game's own
 F3DEX2 display lists submitted through `osSpTaskLoad`/`osSpTaskStartGo` are
 executed by Fast3D, and driven by the scripted controller the port reaches
-gameplay in world 1-1 and draws it. Measured 2026-09-01 in a 4-core container
+gameplay in world 1-1 and draws it. Measured 2026-09-02 in a 4-core container
 with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
 `ssb64` at cdb279c plus `patches/libultraship-jrickey-kirby.patch`, SDL2
 2.30.11, with `port/o2r/kirby64.o2r` mounted:
@@ -32,29 +34,32 @@ with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
       python3 tools/pc/smoke.py --input walk --expect gameplay --timescale 8 \
                                 --timeout 300 --verbose
 
-    [verdict] outcome=interrupted stage=gameplay stage_at=45.33 elapsed=300.00
-              gamestate=15 frames=17256 first_retrace=0.28 first_gfxtask=0.32
-              route=0>1>2>3>10>11>12>15 render=raster drawn=19965
-              sampled=2495 nonblank=2489 distinct=2485
+    smoke: reached  gameplay  at 44.10s (gGameState route 0>1>2>3>10>11>12>15)
+    smoke: outcome  interrupted, after 300.01s
+    smoke: 15586 frame(s) rasterised, 1948 sampled, 1931 non-blank, 1877 distinct
     smoke: PASS -- reached gameplay, which is the recorded high-water mark
 
 The route is logos, opening movie, title, file select, galaxy map (where
 `walk` answers the world 1-1 cutscene prompt with D-LEFT then A, so state 14
-is not on the route), planet map, and gameplay at 45 s wall. `[playerpos]`
+is not on the route), planet map, and gameplay at 44 s wall. `[playerpos]`
 put the player at `x = -1520.17 vel = 5.0000` ten seconds in and at
 `x = -1480.00` — the ledge; `walk` holds D-RIGHT and never jumps — from +65 s
-to the end of the run, with no fault. 2489 of the 2495 sampled frames were
-non-blank and 2485 distinct.
+to the end of the run, with no fault (the `[playerpos]` figures are from the
+2026-09-01 run of the same route). 1931 of the 1948 sampled frames were
+non-blank and 1877 distinct. `smoke.py --deep` (the `advance` script, 150 s)
+reaches gameplay at 51.48 s: 9185 frames, 1131 of 1148 sampled non-blank.
 
-Unattended (no input), the same binary reaches `attract-demo-1` at 50.31 s of
-a 60 s run: `render=raster drawn=3640 sampled=455 nonblank=439 distinct=336`.
+Unattended (no input), the same binary reaches `title-screen-2` at 59.41 s of
+a 60 s run (5310 frames, 647 of 663 sampled non-blank); `smoke.py`'s default
+ratchet is `attract-loop-complete`, which no 60 s run reaches on llvmpipe, so
+the unattended check prints FAIL here both before and after this session.
 
 **What the captures show** (root-window grabs of the 640x480 window during
 those runs): the opening movie, the title screen, and world 1-1 with the HUD
 (lives, health bar, shard counter), Kirby, a Waddle Dee, the checkered blocks,
-fences and flowers. **What they show wrong:** the sky behind world 1-1 is
-black where the N64 draws a background, with a few sprite fragments along the
-top edge; Ribbon's face in the opening movie is a noise-pattern texture.
+fences and flowers, and (since 2026-09-02) the world 1-1 sky: the cyan
+gradient, a cloud and the light-green hill band at the horizon. **What they
+show wrong:** Ribbon's face in the opening movie is a noise-pattern texture.
 Nothing else was checked against hardware.
 
 **Speed.** `KIRBY_PC_TIMESCALE=8` scales the count register eightfold, but
@@ -586,29 +591,59 @@ survives with two alternating threads and crashes with eight.
   integration point for replacing that, not something the game depends on.
   (`audio.yml` extracts as plain BLOBs because the fork's Torch has no BK64
   factory — see docs/PC_PORT_ASSETS.md.)
-* **Two rendering faults are visible in every capture.** The sky behind
-  world 1-1 is black, with sprite fragments along the top edge, where the
-  N64 draws a background; and Ribbon's face in the opening movie is rendered
-  as noise — a texture decoded in the wrong format or from the wrong
-  address.
+* **The world 1-1 sky was black, and it took four bugs on two sides to be.**
+  Fixed 2026-09-02; the frame now carries the cyan gradient, a cloud layer
+  and the hill band. The camera clear really is black (`SETFILLCOLOR
+  0x00010001` from colour record 127 of `D_800D478C`, which is zero in the
+  ROM data), so the sky is the three skybox layers `src/ovl2/ovl2_6.c`
+  emits as S2DEX `G_BG_1CYC` commands, and `KIRBY_PC_SKYDEBUG=1` shows they
+  were emitted every frame. What kept them off the screen, in the order
+  found:
 
-  The sky is not a fill problem. With gdb on the fork's RDP handlers during
-  world 1-1 (breakpoints on `gfx_set_fill_color_handler_rdp`,
-  `gfx_fill_rect_handler_rdp`, `gfx_set_c_img_handler_rdp`, printing the
-  raw command words), each frame carries `src/main/render.c`'s camera clear
-  exactly as written: `SETCIMG 0x013cde00` (the Z buffer), `SETFILLCOLOR
-  0xfffcfffc`, `FILLRECT`, then `SETCIMG 0x0F000000`, `SETFILLCOLOR
-  0x00010001`, `FILLRECT (10,10)-(309,181)`. `0x00010001` is
-  `viPackRGBA(0x000000FF)`: the level's camera colour is black, and the
-  fill covers the 3D view. Whatever paints the sky on hardware is an object
-  in the scene that is not being emitted here — the same class as the
-  draw-kind slot bug in `src/ovl1/ovl1_3.c` above, and the next thing to
-  look for. `src/pc/gfx_trace.c` (`PC_TRACE=gfx`) does not descend into
-  the frame's `G_DL push`, so it shows two commands per frame and cannot
-  help with this; the census hooks the LUS patch adds
-  (`KIRBY_PC_DRAWLOG=<lo>:<hi>` frame range, `KIRBY_PC_TEXCENSUS=1`,
-  `KIRBY_PC_BGDEBUG=1`, `KIRBY_PC_RECTDEBUG=1`) and gdb on the handlers
-  can.
+  1. **`Gfxs2dexBg1cyc` took `frameW/frameH` as the far corner.** The fork
+     (and upstream) passed them straight to `GfxDpTextureRectangle` as
+     `lrx/lry`; they are the frame's size. Only a frame at the origin worked,
+     and Kirby's layers sit inside the 3D view (`frameX=40 frameY=308
+     frameH=192`), so each came out as an inverted rectangle above its own
+     top edge — the "sprite fragments along the top edge". Now
+     `frameX + frameW`, `frameY + frameH`, and `scaleW/scaleH` are the
+     rectangle's `dsdx/dtdy` as in `guS2DEmuBgRect1Cyc` (the PORT arm sets
+     them to `1024/scale + 0.5`, which is what the ROM's own emitter
+     `func_800FF9B4` computes at `0x800FFCB4`). In the patch.
+  2. **The skybox pitch parallax saw a camera eye at the origin.** The three
+     layers are placed 50–85 px below the view top and scrolled up by
+     `rect[1] * pitchFrac`, and `pitchFrac` comes from the at/eye snapshot
+     `D_800D7B20`. The ROM writes its eye half by the interior name
+     `D_800D7B2C`; `gen_data.py` emitted the two as separate objects, so the
+     eye stayed `(0,0,0)`, `pitchFrac` read `+0.03` instead of `-0.38`, and
+     the layers sat 60 px too low — under the ground. `D_800D7B20`
+     (0x18) and `D_800D7B38` (0x30: the previous pair plus the six-float
+     park block `func_800FC62C` writes at `+0x18`, which a 24-byte object
+     overran) are now whole in `src/pc/pc_bss_whole.c` with `D_800D7B2C`
+     aliased at `+0xC`. Measured: `[skycam] snap eye=(0.0,0.0,0.0)
+     pitchFrac=0.0323` before, `eye=(-1357.0,180.0,476.8) pitchFrac=-0.3827`
+     after, the layers at `y = -5.8 .. 42`.
+  3. **A layer clipped at the view top showed its top rows, not the rows
+     under the clip.** The PORT arm now offsets `imageX/imageY` (u10.5) by
+     the clipped amount over the layer scale; `Gfxs2dexBg1cyc` passes them
+     to the rectangle unshifted (both are u10.5; the old `<< 3` was harmless
+     only while they were always 0).
+  4. **Every 4-bit `LOADBLOCK` recorded 0 bytes.** `GfxDpLoadBlock` kept
+     its texel-to-byte shift in a `uint32_t`; the 4-bit case's `-1` compared
+     `> 0` and shifted left by 4294967295. The CI4 hill layer therefore
+     decoded as 0 rows (`[dlog import] ... siz=0 ... size=0` every frame; the
+     texture-upload census never saw its address). Signed now; the same
+     `LOADBLOCK` reports `size=1024` and the census shows `CI4 64x32
+     rgb_nz=1.00 a_nz=0.80`. The render tile's `line` for a 4-bit image was
+     0 for the same reason (`width * siz` with `siz` an enum); it is
+     `((texels << siz) / 2 + 7) / 8` now.
+
+  Still wrong in the same family: Ribbon's face in the opening movie is a
+  noise-pattern texture, and Kirby's own face texture is absent in-level
+  (flat pink body). Neither is traced; `KIRBY_PC_TEXCENSUS=1` now also
+  prints one `[dlog import]` line per `ImportTexture` call (format, size,
+  TLUT mode, palette, tile, bytes), which is how the 0-byte load above was
+  found.
 
 ## Building libultraship here
 

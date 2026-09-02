@@ -58,15 +58,16 @@ If your dump does not match the hash, it will not build.
 
 ## Current state
 
-Measured 2026-09-01 (Mesa llvmpipe under Xvfb, no GPU). Driven by the
+Measured 2026-09-02 (Mesa llvmpipe under Xvfb, no GPU). Driven by the
 scripted controller (`KIRBY_PC_INPUT=walk`) the port boots through the
 logos, opening movie, title screen, file select (saves persist to
 `kirby64.eep`), galaxy map and planet map into world 1-1 and reaches
-gameplay at 45 s; the level, HUD, Kirby and enemies render (`render=raster`,
-19965 frames drawn, 2489 of 2495 sampled frames non-blank), the player
+gameplay at 44 s; the level, its sky, HUD, Kirby and enemies render
+(`render=raster`, 15586 frames drawn, 1931 of 1948 sampled frames non-blank),
+the player
 walks to the first ledge, and a 300 s run ends without a fault. Not
-working: audio (a stand-in thread; nothing plays); the sky behind the level
-draws black; Ribbon's face texture in the opening movie is noise; the analog
+working: audio (a stand-in thread; nothing plays); Ribbon's face texture in
+the opening movie is noise; the analog
 stick does not move the player (the ROM's own behaviour -- use the D-pad);
 and a number of game-side functions carry behavioural (non-matching) PORT
 implementations pending genuine matches. `docs/PC_PORT_LIBULTRASHIP.md`
