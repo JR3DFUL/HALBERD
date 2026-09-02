@@ -36,7 +36,7 @@ OUT=$ROOT/out
 JOBS=$(nproc)
 
 DECOMP_URL=https://github.com/JR3DFUL/kirby64_decomp
-DECOMP_REF=${DECOMP_REF:-ea8acdc001187851a574135358843292117b7fe1}
+DECOMP_REF=${DECOMP_REF:-5fb197749d0fefe61769bc1585166a0be9c1869c}
 
 msg() { printf '\n== %s ==\n' "$*"; }
 # True when both paths resolve to the same file or directory (symlinks
