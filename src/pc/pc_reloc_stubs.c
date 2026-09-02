@@ -137,6 +137,57 @@ void pc_bgload_debug(unsigned int id, const void *raw, const void *img, const vo
             img, pal, i[0], i[1], i[2], i[3], i[4], i[5], i[6], i[7]);
 }
 
+/* Skybox-layer placement (func_80100790's PORT arm, src/ovl2/ovl2_6.c).
+ * KIRBY_PC_SKYDEBUG=1 prints every layer of the first four draw calls, then
+ * one call in 512: the camera rect the layer is placed in, its span before
+ * clipping, texel size, per-texel pixel scale, the derived out flags, the
+ * image format and whether the rect test culled it. */
+void pc_sky_debug(int objId, const float *rect, float x0, float y0, float x1, float y1,
+                  int w, int h, float sx, float sy, unsigned out, int fmt, int cull,
+                  const void *img, const unsigned short *tlut) {
+    const unsigned char *ib = (const unsigned char *)img;
+    static int on = -1;
+    static unsigned n;
+    if (on < 0) {
+        on = getenv("KIRBY_PC_SKYDEBUG") != NULL;
+    }
+    if (!on) {
+        return;
+    }
+    n++;
+    if (n > 4 * 8 && (n & 511) != 0) {
+        return;
+    }
+    fprintf(stderr,
+            "[sky] obj=%d rect=(%.1f,%.1f)-(%.1f,%.1f) layer=(%.2f,%.2f)-(%.2f,%.2f) "
+            "tex=%dx%d scale=%.3fx%.3f out=%#x fmt=%d cull=%d img=%p "
+            "[%02x%02x%02x%02x] tlut=[%04x %04x %04x %04x]\n",
+            objId, rect[2], rect[3], rect[4], rect[5], x0, y0, x1, y1, w, h, sx, sy, out, fmt,
+            cull, img, ib ? ib[0] : 0, ib ? ib[1] : 0, ib ? ib[2] : 0, ib ? ib[3] : 0,
+            tlut[0], tlut[1], tlut[2], tlut[3]);
+}
+
+/* The camera numbers the skybox scroll (func_80100EE4's PORT arm) derives
+ * its parallax from: the D_800D7B20 at/eye snapshot ovl2_3.c keeps, the
+ * scene camera's live lookAt, and the resulting yaw/pitch screen fractions.
+ * Same KIRBY_PC_SKYDEBUG switch, one line in 256 calls. */
+void pc_sky_cam_debug(const float *snap, const float *at, const float *eye, float yawFrac,
+                      float pitchFrac, float fovy, float aspect) {
+    static int on = -1;
+    static unsigned n;
+    if (on < 0) {
+        on = getenv("KIRBY_PC_SKYDEBUG") != NULL;
+    }
+    if (!on || ((n++ & 255) != 0)) {
+        return;
+    }
+    fprintf(stderr,
+            "[skycam] snap at=(%.1f,%.1f,%.1f) eye=(%.1f,%.1f,%.1f) live at=(%.1f,%.1f,%.1f) "
+            "eye=(%.1f,%.1f,%.1f) yawFrac=%.4f pitchFrac=%.4f fovy=%.1f aspect=%.3f\n",
+            snap[0], snap[1], snap[2], snap[3], snap[4], snap[5], at[0], at[1], at[2], eye[0],
+            eye[1], eye[2], yawFrac, pitchFrac, fovy, aspect);
+}
+
 /* Transient bring-up tap: file-select flow tracing (KIRBY_PC_FSDEBUG). */
 #include <stdio.h>
 #include <stdlib.h>
