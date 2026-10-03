@@ -9,9 +9,9 @@
  * =====================================================================
  *
  * Five symbols in the 0x8012xxxx / 0x803Dxxxx range are the framebuffers, the
- * z-buffer and the heap-top marker. Until now every one of them was a 1024-byte
- * WEAK DATA STUB from tools/pc/gen_stubs.py, because nothing in the tree
- * defines them -- on the N64 they are not objects at all, they are addresses in
+ * z-buffer and the heap-top marker. Without this file every one of them is a
+ * 1024-byte WEAK DATA STUB from tools/pc/gen_stubs.py, because nothing else in
+ * the tree defines them -- on the N64 they are not objects at all, they are addresses in
  * the linker script.
  *
  * The clear loops that ovl2 and ovl5 have already decompiled write 0x25800
@@ -23,7 +23,7 @@
  *         i++;
  *     } while (i != 320 * 240);
  *
- * so each pass wrote 150 KB past the end of a 1 KB stub, over whatever .bss
+ * so each pass writes 150 KB past the end of a 1 KB stub, over whatever .bss
  * followed it, without a fault -- .bss is writable, so the damage is silent and
  * turns up later as impossible-looking corruption somewhere else. That is the
  * same failure the gtl heap had, and it is why this file exists.
@@ -135,12 +135,11 @@ __asm__(
  * One arena, reused by every scene, because that is what the game does: each
  * gtlCreateScene calls gtlSetupHeap again and starts allocating from the top.
  */
-/* 8 MB was the N64-sized guess and it is too small: gtlCreateScene asks for a
- * single 10.5 MB block during ovl6's intro, mlAlloc reports "ml : alloc
- * overflow #65536", and fatal_printf hands control to the crash screen --
- * which then sits in faultWaitButton forever with cfb == NULL, i.e. a black
- * window and a process at 70% CPU. That is exactly what this port did before
- * this line changed.
+/* 8 MB (the N64-sized guess) is too small: gtlCreateScene asks for a single
+ * 10.5 MB block during ovl6's intro, mlAlloc reports "ml : alloc overflow
+ * #65536", and fatal_printf hands control to the crash screen -- which then
+ * sits in faultWaitButton forever with cfb == NULL, i.e. a black window and a
+ * process at 70% CPU.
  *
  * A host port has no reason to be bounded by the console's RAM budget, so give
  * the arena room for the largest scene rather than the console's. 64 MB is

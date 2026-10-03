@@ -120,7 +120,7 @@ static ucontext_t sBootCtx;
 static int sSchedReady;
 
 /* WHICH CONTEXT ARE WE PHYSICALLY ON. Not the same question as "which thread
- * is running", and conflating the two was a real bug.
+ * is running", and conflating the two is a real bug (below).
  *
  * __osRunningThread is the SCHEDULER's answer, and the scheduler deliberately
  * sets it to NULL before switching away -- pc_block_on() does exactly that,

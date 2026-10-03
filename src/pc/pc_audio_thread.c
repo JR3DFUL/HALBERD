@@ -4,8 +4,8 @@
  *
  * The renderer works -- Fast3D executes display lists submitted through
  * osSpTaskStartGo, proven at 59.9 Hz with a synthetic list built from the
- * game's own <PR/gbi.h>. But the GAME never reaches it, and the reason is one
- * function:
+ * game's own <PR/gbi.h>. But without this file the GAME never reaches it,
+ * and the reason is one function:
  *
  *     main.c   osCreateThread(&gAudioThread, 4, auThreadMain, ...)
  *     audio.c  thread5_game blocks on gThreadInitializedMQ
@@ -53,14 +53,13 @@ extern s32 auSettingsUpdated;
 
 /* IT MUST CONSUME auRestarting AND auSettingsUpdated, or the game deadlocks.
  *
- * This file used to park on a queue nothing posts to. That looked safe -- it
- * yields, so the cooperative scheduler keeps running -- and it hung the port
- * anyway, in a way worth writing down because the symptom pointed nowhere near
- * the cause.
+ * Parking on a queue nothing posts to looks safe -- it yields, so the
+ * cooperative scheduler keeps running -- and hangs the port anyway, with a
+ * symptom that points nowhere near the cause.
  *
- * The port reached no unimplemented symbol at all, and still never drew a
+ * The port reaches no unimplemented symbol at all, and still never draws a
  * frame: gGameState stuck at 1, gtlDrawnFrameCounter at 0, sRetraceCount at 0.
- * Attaching to the live process gave the answer in one backtrace --
+ * A backtrace of the live process shows why --
  *
  *     game_tick -> func_800A2B9C -> func_800A74B0   (ovl1_2_2.c:52)
  *     do { } while (func_80020EB4() != 0);
@@ -158,8 +157,8 @@ static u8 sBgmSeqData[2][0x4000];
  * inside the sound player, and auCreatePlayers, the function that carves them
  * out of auHeap, is still a #pragma.
  *
- * So `extern` here left six symbols that no object in the native link defines,
- * and they were the largest single entry in `gap.py`'s "libc / other" bucket.
+ * So `extern` here would leave six symbols that no object in the native link
+ * defines, the largest single entry in `gap.py`'s "libc / other" bucket.
  * Defining them keeps this file's stand-in intact -- the arrays below are its
  * whole point -- and costs six pointers.
  *

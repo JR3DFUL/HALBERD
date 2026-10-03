@@ -41,8 +41,8 @@
  *
  * Enable with PC_TRACE=gfx.
  *
- * A NOTE ON POINTER WIDTH, because this file got it wrong once and the output
- * was plausible enough to be believed. A Gfx is TWO uintptr_t, not two u32:
+ * A NOTE ON POINTER WIDTH, because the wrong width produces output plausible
+ * enough to be believed. A Gfx is TWO uintptr_t, not two u32:
  * include/PR/gbi.h declares Gwords that way and include/PR/ultratypes.h widens
  * uintptr_t under PORT, so a display-list command is 8 bytes on N64 and 16 in
  * this build. Walking it as `const u32 *` with `p += 2` therefore reads every
@@ -306,9 +306,9 @@ void pc_gfx_trace_task(OSTask *task) {
  * The tracer above walks a display list from the outside, which is exactly
  * what you want until the list is malformed -- then the tracer's own idea of
  * where the commands are diverges from the renderer's, and it reports on a
- * list nobody executed. (It did: the port's DL heads live in the low 32 bits
- * of the address space, so resolve() below reads 0x016F8E70 as segment 1 and
- * refuses to descend. Every galaxy-map frame traced as "2 commands".)
+ * list nobody executed. (This happens: the port's DL heads live in the low 32
+ * bits of the address space, so resolve() below reads 0x016F8E70 as segment 1
+ * and refuses to descend. Every galaxy-map frame traces as "2 commands".)
  *
  * This records the command stream from INSIDE the renderer instead.
  * libultraship's interpreter offers gfx_set_trace_callback(), invoked once

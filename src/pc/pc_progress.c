@@ -1,8 +1,8 @@
 /* How far did the port get?
  *
- * The port boots. That changed the useful question from "does it link" to
- * "where does it stop", and answering that from a pumpdbg counter dump or a
- * gdb session is not something a make target can do. This file turns the boot
+ * The useful question about a booting port is "where does it stop", and
+ * answering that from a pumpdbg counter dump or a gdb session is not
+ * something a make target can do. This file turns the boot
  * into a sequence of NAMED MILESTONES, records the furthest one reached, and
  * prints a one-line verdict however the process ends -- normal exit, SIGINT,
  * or a fatal signal. tools/pc/smoke.py parses that line.
@@ -215,16 +215,14 @@ void pc_progress_tick(void) {
  * KIRBY_PC_PLAYERPOS=<seconds> prints the player's world position, once per
  * that many wall seconds, while gGameState is 15.
  *
- * IT ANSWERS IN NUMBERS THE QUESTION THE `walk` SCRIPT ASKS IN PIXELS, and
- * it exists because the pixel answer turned out not to be decisive. `walk`
- * holds the stick right and the verdict's `distinct=` counter reports how
- * many sampled frames differed; a high count was read as "the camera
- * follows, so the player is simulated". But scenery animates on its own --
- * a butterfly, a swaying flower, a scrolling texture all re-hash a frame --
- * so `distinct` cannot tell a walking Kirby from a standing one. Two
- * screenshots eighty wall-seconds apart, with the stick held right
- * throughout, came back showing Kirby at the same pixel in front of the
- * same fence while `distinct` said 450 of 452.
+ * IT ANSWERS IN NUMBERS THE QUESTION THE `walk` SCRIPT ASKS IN PIXELS,
+ * because the pixel answer is not decisive. `walk` holds right and the
+ * verdict's `distinct=` counter reports how many sampled frames differed,
+ * but scenery animates on its own -- a butterfly, a swaying flower, a
+ * scrolling texture all re-hash a frame -- so `distinct` cannot tell a
+ * walking Kirby from a standing one. Two screenshots eighty wall-seconds
+ * apart, with the stick held right throughout, showed Kirby at the same
+ * pixel in front of the same fence while `distinct` said 450 of 452.
  *
  * gEntitiesNextPosXArray[0] is the player slot (objId 0, the same index
  * every ovl3 player routine uses). If X does not move while the stick is
@@ -233,8 +231,9 @@ void pc_progress_tick(void) {
 /* WHERE THE PLAYER IS AND WHAT THE ENGINE THINKS HE IS DOING.
  *
  * x/y/z alone cannot tell a player who is being held still from one who is
- * being pushed into a wall, and it took a whole lane to notice that the
- * resting X was a ROUND NUMBER. Kirby 64 moves its entities along authored
+ * being pushed into a wall; the hint is a resting X that is a ROUND NUMBER
+ * (a wall resolve leaves the body exactly on a plane constant, such as
+ * -1480.00). Kirby 64 moves its entities along authored
  * track nodes, not through free space: src/ovl2/ovl2_3.c's func_800F8E6C
  * advances a per-entity parameter t in [0,1] along the node named by
  * D_800E5F90, hops to a neighbouring node when t leaves that range
@@ -345,9 +344,9 @@ static void write_verdict(const char *outcome, const char *detail) {
      * in a separate one. `frames=` above is gtlDrawnFrameCounter -- a counter
      * the GAME increments when it finishes building a display list. It is a
      * game-logic number and it counts up identically on a run linked against
-     * pc_backend_null.c, which rasterises nothing. A whole day of such runs
-     * was once read as rendering progress because nothing on this line said
-     * otherwise. `render=` is the fact that was missing: `none` means the
+     * pc_backend_null.c, which rasterises nothing, and without `render=`
+     * nothing on this line distinguishes such a run from a rendering one.
+     * `none` means the
      * backend does not draw and NO rendering claim may be made about the run.
      * See pcb_gfx_stats in pc/pc_backend.h. */
     render[0] = '\0';

@@ -25,7 +25,7 @@ This is a status document, not a plan. Everything asserted here was run.
 libultraship builds, the game links against it at `-m64`, the game's own
 F3DEX2 display lists submitted through `osSpTaskLoad`/`osSpTaskStartGo` are
 executed by Fast3D, and driven by the scripted controller the port reaches
-gameplay in world 1-1 and draws it. Measured 2026-09-02 in a 4-core container
+gameplay in world 1-1 and draws it. Measured 2026-09-02 on 4 cores
 with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
 `ssb64` at cdb279c plus `patches/libultraship-jrickey-kirby.patch`, SDL2
 2.30.11, with `port/o2r/kirby64.o2r` mounted:
@@ -52,12 +52,12 @@ reaches gameplay at 51.48 s: 9185 frames, 1131 of 1148 sampled non-blank.
 Unattended (no input), the same binary reaches `title-screen-2` at 59.41 s of
 a 60 s run (5310 frames, 647 of 663 sampled non-blank); `smoke.py`'s default
 ratchet is `attract-loop-complete`, which no 60 s run reaches on llvmpipe, so
-the unattended check prints FAIL here both before and after this session.
+the unattended check prints FAIL on llvmpipe.
 
 **What the captures show** (root-window grabs of the 640x480 window during
 those runs): the opening movie, the title screen, and world 1-1 with the HUD
 (lives, health bar, shard counter), Kirby, a Waddle Dee, the checkered blocks,
-fences and flowers, and (since 2026-09-02) the world 1-1 sky: the cyan
+fences and flowers, and the world 1-1 sky: the cyan
 gradient, a cloud and the light-green hill band at the horizon. **What they
 show wrong:** Ribbon's face in the opening movie is a noise-pattern texture.
 Nothing else was checked against hardware.
@@ -74,9 +74,8 @@ posts the init message and consumes the audio flags, and plays nothing.
 
 ## How LUS's main loop and the game's scheduler were reconciled
 
-This was the question the whole task turned on, and the answer is that they do
-not conflict — for one specific reason that is worth stating precisely, because
-it is a property of *this* port and not of ports in general.
+They do not conflict, for one specific reason that is worth stating
+precisely, because it is a property of *this* port and not of ports in general.
 
 `src/pc/os_thread.c` runs every N64 thread as a `ucontext` on **one host
 thread**. That was chosen for the game's sake: Kirby 64 has no locks anywhere
@@ -108,7 +107,7 @@ The frame boundary is therefore the *game's*, not a timer. That is strictly
 better than a timer: `src/main/sched.c` recycles framebuffers off the same
 event, so the two cannot disagree.
 
-### The pacing consequence, which was not obvious
+### The pacing consequence
 
 `GfxWindowBackendSDL::SwapBuffersBegin` calls `SyncFramerateWithTime`, which
 sleeps until `1/targetFps` has elapsed. It runs inside `Interpreter::EndFrame`,
@@ -175,9 +174,9 @@ about once rather than silently flickering.
 
 ## LP64: what actually broke
 
-The port had to move to `-m64` because libultraship is a 64-bit library. The
-compile was the easy part (one `uintptr_t` typedef, already done). Three *data*
-bugs were not, and all three were found by running:
+The port is `-m64` because libultraship is a 64-bit library. The compile was
+the easy part (one `uintptr_t` typedef). The *data* bugs below were not; the
+first three only show up by running:
 
 1. **Truncated pointers.** `src/main/dma.c` does `dma_copy(..., (u32)vAddr, ...)`
    — correct on N64, a silent top-32-bit drop under a PIE at
@@ -202,21 +201,21 @@ bugs were not, and all three were found by running:
    build, so it could not be fixed in place.
 
 4. **An 8-byte dereference of a 4-byte blob slot.** This is the fourth *data*
-   class and the one that has cost the most, because nothing catches it. The
+   class and the hardest to find, because nothing catches it. The
    game reads N64 data blobs whose slots are FOUR bytes. A `*(T **)`
    dereference reads EIGHT here. On hardware the two are the same instruction,
    so the ROM is byte-identical either way, every decomp gate passes, and
    `tools/pc/lp64_audit.py` does not see it — that tool audits call
    signatures, not dereference widths.
 
-   Both of the port's in-game blockers were this, and each was one line:
+   Two in-game blockers were this class, and each was a one-line fix:
 
    * `src/ovl1/ovl1_3.c` func_800AB0F4 declared `u32 **buf` where
      `gSegment4StartArray` is `u32 *[]`, so `buf[2]` read sixteen bytes in
      instead of eight. The value is the object's DRAW KIND, and every switch
      on it has no `default`, so affected objects were **silently not drawn**.
-     The level rendered correctly around a player that was never emitted,
-     which is why it read as a renderer problem for so long.
+     The level renders correctly around a player that is never emitted, so
+     the symptom looks like a renderer problem.
 
    * `src/ovl6/ovl6.c` func_80152EA8_ovl6 read `*(void **)(src + 4)` off a
      cursor advancing by an `src += 0x2C` N64 stride. The wide read swallowed
@@ -233,8 +232,8 @@ bugs were not, and all three were found by running:
    quiet: read narrow where the port widened and you get a truncated pointer;
    read wide where it did not and you get a pointer made of the next field.
 
-   **The 87 `*(T **)` sites under `src/` outside `src/pc` have now been swept,
-   and the sweep was mostly a triage problem rather than a reading problem.**
+   **The 87 `*(T **)` sites under `src/` outside `src/pc` have been swept,
+   and the sweep is mostly a triage problem rather than a reading problem.**
 
    * **43 of the 87 are not compiled into the port at all** — they sit in
      `#ifdef MIPS_TO_C` factory drafts or in the `#else` arm of a construct
@@ -264,10 +263,9 @@ bugs were not, and all three were found by running:
      bias addresses element `idx/2`, and for an odd index straddles two. It is
      invisible because the same source line usually reuses the same bias
      *correctly* on a neighbouring `s32[]` or `f32[]`. `src/ovl2/ovl2.c`'s
-     `func_800F6350` PORT arm has carried this fix for `D_800DE350` for a
-     while; four more instances over `D_800E1B50` (`ovl9_3.c`, `ovl9_9.c`,
-     `ovl9_13.c`) and one more over `D_800DE350` (`ovl8.c`) were still
-     standing. To find them: list every `extern T *NAME[]` in the tree and grep
+     `func_800F6350` PORT arm carries this fix for `D_800DE350`; the sweep
+     found four more instances over `D_800E1B50` (`ovl9_3.c`, `ovl9_9.c`,
+     `ovl9_13.c`) and one more over `D_800DE350` (`ovl8.c`). To find them: list every `extern T *NAME[]` in the tree and grep
      for `(u8 *) NAME +`.
 
    * **And the compiler introduces the class on its own, through struct
@@ -279,7 +277,7 @@ bugs were not, and all three were found by running:
      struct is a cast, so no grep for one finds it. `src/ovl7/ovl7_3.c` had
      already written the rule down ("the hitbox-descriptor slot stays a u32
      host-address cell so the record keeps the N64's `f32[8]`/32-byte shape");
-     this was the last of four callers still declaring a pointer. The same
+     `helper.c` was the last of four callers declaring a pointer. The same
      shape appears as a plain wrong constant in `src/ovl1/ovl1_2_2.c`, which
      wrote a `DObj *` at generator-node `+0x48` — the N64 offset of that slot,
      where LP64 puts `frame`, `dobj` having moved to `+0x50`.
@@ -291,20 +289,19 @@ bugs were not, and all three were found by running:
    a runtime probe prints nothing at all while the arithmetic is already
    conclusive.
 
-A fourth bug was in the port's own scheduler and only showed up because LP64
-work made the boot go further: `dispatch()` derived the *outgoing* ucontext
-from `__osRunningThread`, which `pc_block_on` deliberately sets to NULL before
-switching away. The blocked thread's registers were saved into the boot context
-instead of its own slot, and the next thread to block overwrote them. It
+A related bug in the port's own scheduler (fixed; see the note above
+`dispatch()` in `src/pc/os_thread.c`): deriving the *outgoing* ucontext from
+`__osRunningThread`, which `pc_block_on` deliberately sets to NULL before
+switching away, saves the blocked thread's registers into the boot context
+instead of its own slot, and the next thread to block overwrites them. That
 survives with two alternating threads and crashes with eight.
 
 ## What does not work
 
 * **The analog stick does not move the player — and that is the ROM's own
-  behaviour, not a gap in the port.** This entry used to end "the gap is
-  inside the player code that should read `stickX`". There is no such code.
+  behaviour, not a gap in the port.** No player code reads `stickX`.
 
-  Measured at runtime first. `KIRBY_PC_PROBE=1` with counters in
+  Measured at runtime: `KIRBY_PC_PROBE=1` with counters in
   `src/ovl1/util.c` (`#ifdef PORT`, ROM byte-identical), world 1-1, stick held
   at `0x50` for 340 s:
 
@@ -323,7 +320,7 @@ survives with two alternating threads and crashes with eight.
   The same run with D-RIGHT held instead reads `held=0100`, `vel=5.0000`, and
   walks.
 
-  Then confirmed over the whole 32 MB ROM image, which is the only way to
+  Confirmed over the whole 32 MB ROM image, which is the only way to
   make an absence claim honestly. A scan that tracks `lui`/`addiu`/`addu`
   bases through every instruction word and resolves each load/store's
   effective address reports:
@@ -356,9 +353,8 @@ survives with two alternating threads and crashes with eight.
   engine still asking for full speed: `node=3 t=0.517857 vel=5.0000
   acc=0.6250 held=0100`, unchanged for 275 s.
 
-  The previous note here reasoned that the *exactness* made it "a clamp
-  against a datum, not a wall". That is disproved. `-1480.00` is exact because
-  it is a plane constant read straight out of the level's collision data:
+  `-1480.00` is exact because it is a plane constant read straight out of the
+  level's collision data:
 
   ```
   (gdb) print *(struct Normal *) <the blocking record's plane>
@@ -391,7 +387,7 @@ survives with two alternating threads and crashes with eight.
   while `vel` is 5.0. It is **not** the `[0,1]` clamp in `func_800F8A24` (its
   out-of-range arm never fires), **not** the node hop declining
   (`func_800F8B1C` is entered 8239 times and hops 0 more times), and **not**
-  `func_800F8570`, which an earlier lane had already ruled out.
+  `func_800F8570` (also ruled out).
 
   **And the level wants a jump.** Same script plus an `A` pulse every two
   seconds
@@ -404,19 +400,17 @@ survives with two alternating threads and crashes with eight.
   | +88 s | `-1224.80` | 3 | 0.631785 |
   | +93 s | `-947.75` | 3 | 0.757700 |
 
-  So `-1480.00` is an ordinary ledge, the corridor was never a corridor, and
-  the port plays the level. What made it look like a wall for two lanes is
-  that both the plain `DRIGHT` script and the built-in `play` program jump on
-  a clock that does not happen to line up with arriving at it. `play` now
-  presses `A` on a short repeating cycle for that reason.
+  So `-1480.00` is an ordinary ledge, not the end of a corridor, and the port
+  plays the level. A plain `DRIGHT` script never jumps, and jumps at fixed
+  times rarely coincide with arriving at the ledge, so either looks like a
+  wall. `play` presses `A` on a short repeating cycle for that reason.
 
-* **Past the ledge was unrun ground, and three separate LP64 layout bugs
-  lived there. All three are fixed and the level now runs.** A
-  `g0:DRIGHT+SR` walk with a 2-second `A` cycle takes the player from the
-  spawn at `x = -2096` across the `-1480` ledge, off the end of track node 3
-  and onto node 4, for 330 wall seconds at `KIRBY_PC_TIMESCALE=8` with
-  `outcome=interrupted` and no SIGSEGV. What was found, in the order it
-  surfaced:
+* **Past the ledge: three LP64 layout bugs, all fixed.** A `g0:DRIGHT+SR`
+  walk with a 2-second `A` cycle takes the player from the spawn at
+  `x = -2096` across the `-1480` ledge, off the end of track node 3 and onto
+  node 4, for 330 wall seconds at `KIRBY_PC_TIMESCALE=8` with
+  `outcome=interrupted` and no SIGSEGV. The three bugs, each with the fault
+  it produced:
 
   1. **The spawn callback tables were emitted as scalar data.**
      `utilFuncTableJump (src/ovl1/util.c:151) <- func_800FCFF0
@@ -440,11 +434,10 @@ survives with two alternating threads and crashes with eight.
      `spawn.c` with a bound equal to their own length (3, 0xE, 0x2C against
      3, 14, 44 words).
 
-     The two siblings this document previously listed with them, `D_801242D0`
-     and `D_80124488`, were **already correct** and needed nothing:
+     The sibling tables `D_801242D0` and `D_80124488` need nothing:
      `D_801242D0` carries four symbolic refs (indices 42, 47, 62, 103) and
-     `D_80124488` six, so both already satisfied the old rule. That claim is
-     withdrawn.
+     `D_80124488` six, so the relocation-reference rule already widens
+     both.
 
   2. **`func_80218520_ovl9`'s draft cleared the wrong array element**, which
      showed up as a hard WEDGE at `x = -536.54` — not a crash: the process
@@ -509,23 +502,23 @@ survives with two alternating threads and crashes with eight.
   than leaving it. Getting further needs a route (whatever world 1-1 wants
   there — an inhale, a door, a switch) in the cue list, not a longer hold.
 
-  A related trap worth knowing: `kPlayProgram`'s walk cue used to hold for
-  `60000` frames, which is 1000 GAME seconds — only ~125 wall seconds at
-  `KIRBY_PC_TIMESCALE=8`. A run that outlives its own hold freezes with
-  `vel=0.0000` and looks exactly like a wedge. `held=0000 stick=0` in the
-  `[playerpos]` line is the tell. The cue now holds for `360000`.
+  A related trap: a run that outlives its walk cue's hold freezes with
+  `vel=0.0000` and looks exactly like a wedge; `held=0000 stick=0` in the
+  `[playerpos]` line is the tell. `60000` frames is only 1000 GAME seconds,
+  ~125 wall seconds at `KIRBY_PC_TIMESCALE=8`, so `kPlayProgram`'s walk cue
+  holds for `360000`.
 
-* **`play` keeps time in simulated frames now, and its route ends in
-  player action 14.** The cue times in `src/pc/pc_input_script.c` are game
-  seconds. The clock behind them used to be the count register, which
-  `KIRBY_PC_TIMESCALE` scales while nothing scales the simulation; on
-  llvmpipe at timescale 8 the register ran 8x and the game drew 57.5
-  frames/s, so `play`'s cues fired eight times earlier in the level than
-  written — the `g52` B cue landed at `x = -1943.47`, before the ledge, and
-  Kirby stood in action 14 with `vel = 0.0000` for the remaining 190 s of a
-  240 s run. The clock is now an accumulator over `gtlDrawnFrameCounter`
-  (`src/main/gtl.c`: one bump per drawn frame, zeroed at scene setup, which
-  the accumulator absorbs). Same program, same machine, after the change:
+* **`play` keeps time in simulated frames, and its route ends in player
+  action 14.** The cue times in `src/pc/pc_input_script.c` are game seconds,
+  counted by an accumulator over `gtlDrawnFrameCounter` (`src/main/gtl.c`:
+  one bump per drawn frame, zeroed at scene setup, which the accumulator
+  absorbs). The count register is not used as the clock because
+  `KIRBY_PC_TIMESCALE` scales it while nothing scales the simulation: on
+  llvmpipe at timescale 8 the register runs 8x while the game draws 57.5
+  frames/s, so register-timed cues fire eight times earlier in the level than
+  written (the `g52` B cue lands at `x = -1943.47`, before the ledge, and
+  Kirby stands in action 14 with `vel = 0.0000` for the remaining 190 s of a
+  240 s run). With the frame clock, same program and machine:
 
       [verdict] outcome=interrupted stage=gameplay stage_at=28.76 elapsed=240.01
                 gamestate=15 frames=7614 route=0>1>2>3>10>11>12>15 render=raster
@@ -547,7 +540,7 @@ survives with two alternating threads and crashes with eight.
   with Kirby still walking (action 3) after it, then `DDOWN+SD` (g57) and
   the START pause/unpause pair (g62, g68), and action 14 at the next sample;
   which of those three enters it was not isolated. Not traced further;
-  `src/ovl3/kirby.c` is being worked by a decompilation lane. The `walk`
+  `src/ovl3/kirby.c` is still being decompiled. The `walk`
   route presses none of them and never hits it.
 * **Audio is absent.** `src/pc/pc_audio_thread.c` stands in for
   `auThreadMain`: it posts the init message and consumes the audio flags, and
@@ -591,59 +584,59 @@ survives with two alternating threads and crashes with eight.
   integration point for replacing that, not something the game depends on.
   (`audio.yml` extracts as plain BLOBs because the fork's Torch has no BK64
   factory — see docs/PC_PORT_ASSETS.md.)
-* **The world 1-1 sky was black, and it took four bugs on two sides to be.**
-  Fixed 2026-09-02; the frame now carries the cyan gradient, a cloud layer
-  and the hill band. The camera clear really is black (`SETFILLCOLOR
+* **The world 1-1 sky draws only with four fixes on two sides (patch and
+  PORT arms).** The frame carries the cyan gradient, a cloud layer and the
+  hill band. The camera clear really is black (`SETFILLCOLOR
   0x00010001` from colour record 127 of `D_800D478C`, which is zero in the
   ROM data), so the sky is the three skybox layers `src/ovl2/ovl2_6.c`
-  emits as S2DEX `G_BG_1CYC` commands, and `KIRBY_PC_SKYDEBUG=1` shows they
-  were emitted every frame. What kept them off the screen, in the order
-  found:
+  emits as S2DEX `G_BG_1CYC` commands every frame (`KIRBY_PC_SKYDEBUG=1`
+  shows them). Each of the four would keep them off the screen:
 
-  1. **`Gfxs2dexBg1cyc` took `frameW/frameH` as the far corner.** The fork
-     (and upstream) passed them straight to `GfxDpTextureRectangle` as
-     `lrx/lry`; they are the frame's size. Only a frame at the origin worked,
+  1. **`Gfxs2dexBg1cyc` must not take `frameW/frameH` as the far corner.**
+     The fork (and upstream) pass them straight to `GfxDpTextureRectangle` as
+     `lrx/lry`; they are the frame's size. Only a frame at the origin works,
      and Kirby's layers sit inside the 3D view (`frameX=40 frameY=308
-     frameH=192`), so each came out as an inverted rectangle above its own
-     top edge — the "sprite fragments along the top edge". Now
-     `frameX + frameW`, `frameY + frameH`, and `scaleW/scaleH` are the
-     rectangle's `dsdx/dtdy` as in `guS2DEmuBgRect1Cyc` (the PORT arm sets
-     them to `1024/scale + 0.5`, which is what the ROM's own emitter
-     `func_800FF9B4` computes at `0x800FFCB4`). In the patch.
-  2. **The skybox pitch parallax saw a camera eye at the origin.** The three
+     frameH=192`), so each comes out as an inverted rectangle above its own
+     top edge (sprite fragments along the top edge). The patch uses
+     `frameX + frameW` and `frameY + frameH` as the far corner, and
+     `scaleW/scaleH` as the rectangle's `dsdx/dtdy` as in
+     `guS2DEmuBgRect1Cyc` (the PORT arm sets them to `1024/scale + 0.5`,
+     which is what the ROM's own emitter `func_800FF9B4` computes at
+     `0x800FFCB4`).
+  2. **The skybox pitch parallax needs the real camera eye.** The three
      layers are placed 50–85 px below the view top and scrolled up by
      `rect[1] * pitchFrac`, and `pitchFrac` comes from the at/eye snapshot
      `D_800D7B20`. The ROM writes its eye half by the interior name
-     `D_800D7B2C`; `gen_data.py` emitted the two as separate objects, so the
-     eye stayed `(0,0,0)`, `pitchFrac` read `+0.03` instead of `-0.38`, and
-     the layers sat 60 px too low — under the ground. `D_800D7B20`
+     `D_800D7B2C`; emitted by `gen_data.py` as two separate objects, the
+     eye stays `(0,0,0)`, `pitchFrac` reads `+0.03` instead of `-0.38`, and
+     the layers sit 60 px too low — under the ground. `D_800D7B20`
      (0x18) and `D_800D7B38` (0x30: the previous pair plus the six-float
      park block `func_800FC62C` writes at `+0x18`, which a 24-byte object
      overran) are now whole in `src/pc/pc_bss_whole.c` with `D_800D7B2C`
      aliased at `+0xC`. Measured: `[skycam] snap eye=(0.0,0.0,0.0)
-     pitchFrac=0.0323` before, `eye=(-1357.0,180.0,476.8) pitchFrac=-0.3827`
-     after, the layers at `y = -5.8 .. 42`.
-  3. **A layer clipped at the view top showed its top rows, not the rows
-     under the clip.** The PORT arm now offsets `imageX/imageY` (u10.5) by
+     pitchFrac=0.0323` split, `eye=(-1357.0,180.0,476.8) pitchFrac=-0.3827`
+     whole, the layers at `y = -5.8 .. 42`.
+  3. **A layer clipped at the view top must show the rows under the clip,
+     not its top rows.** The PORT arm offsets `imageX/imageY` (u10.5) by
      the clipped amount over the layer scale; `Gfxs2dexBg1cyc` passes them
-     to the rectangle unshifted (both are u10.5; the old `<< 3` was harmless
-     only while they were always 0).
-  4. **Every 4-bit `LOADBLOCK` recorded 0 bytes.** `GfxDpLoadBlock` kept
-     its texel-to-byte shift in a `uint32_t`; the 4-bit case's `-1` compared
-     `> 0` and shifted left by 4294967295. The CI4 hill layer therefore
-     decoded as 0 rows (`[dlog import] ... siz=0 ... size=0` every frame; the
-     texture-upload census never saw its address). Signed now; the same
-     `LOADBLOCK` reports `size=1024` and the census shows `CI4 64x32
-     rgb_nz=1.00 a_nz=0.80`. The render tile's `line` for a 4-bit image was
-     0 for the same reason (`width * siz` with `siz` an enum); it is
-     `((texels << siz) / 2 + 7) / 8` now.
+     to the rectangle unshifted (both are u10.5; a `<< 3` there is harmless
+     only while they are always 0).
+  4. **A 4-bit `LOADBLOCK` must not record 0 bytes.** With
+     `GfxDpLoadBlock`'s texel-to-byte shift in a `uint32_t`, the 4-bit
+     case's `-1` compares `> 0` and shifts left by 4294967295, so the CI4
+     hill layer decodes as 0 rows (`[dlog import] ... siz=0 ... size=0` every
+     frame; the texture-upload census never sees its address). The patch
+     makes it signed; the same `LOADBLOCK` reports `size=1024` and the census
+     shows `CI4 64x32 rgb_nz=1.00 a_nz=0.80`. The render tile's `line` for a
+     4-bit image is 0 for the same reason (`width * siz` with `siz` an enum);
+     the patch computes `((texels << siz) / 2 + 7) / 8`.
 
   Still wrong in the same family: Ribbon's face in the opening movie is a
   noise-pattern texture, and Kirby's own face texture is absent in-level
-  (flat pink body). Neither is traced; `KIRBY_PC_TEXCENSUS=1` now also
-  prints one `[dlog import]` line per `ImportTexture` call (format, size,
-  TLUT mode, palette, tile, bytes), which is how the 0-byte load above was
-  found.
+  (flat pink body). Neither is traced; `KIRBY_PC_TEXCENSUS=1` also prints
+  one `[dlog import]` line per `ImportTexture` call (format, size, TLUT mode,
+  palette, tile, bytes), which is where a 0-byte load like the one above
+  shows up.
 
 ## Building libultraship here
 
@@ -653,7 +646,7 @@ survives with two alternating threads and crashes with eight.
    fork is an SDL2 codebase (`imgui_impl_sdl2`, `SDL_OpenAudio`); upstream
    libultraship moved to SDL3 and this fork did not.
 2. **The fork, plus one patch.** `JRickey/libultraship` branch `ssb64`
-   (cdb279c, 2026-08-11, at the time of writing) with
+   (cdb279c, 2026-08-11, pinned in `build.sh` as `LUS_REF`) with
    `patches/libultraship-jrickey-kirby.patch` applied — Kirby's additions to
    `fast/interpreter.cpp` and `Gui.cpp`: the texture-census hooks, the
    low-pointer `Vtx` rule, S2DEX background and sprite handling, rectangle
@@ -665,11 +658,9 @@ survives with two alternating threads and crashes with eight.
    `libzip-targets.cmake` that imports `libzip::zipcmp`/`zipmerge`/`ziptool`
    as executables and fails the configure when `/usr/bin/zipcmp` is absent,
    although LUS never runs them. `build.sh` writes `#!/bin/sh` / `exit 0` at
-   each missing path; that is exactly what was on disk when the library
-   built here.
+   each missing path, which satisfies the import.
 
-The `stb_image.h` download in `cmake/dependencies/common.cmake` came through
-this environment's proxy intact (284,733 bytes); `common.cmake` has a fallback
-path (`torch/lib/n64graphics/stb_image.h` in the checkout) for when it does
+The `stb_image.h` download in `cmake/dependencies/common.cmake` is 284,733
+bytes; `common.cmake` has a fallback path (`torch/lib/n64graphics/stb_image.h` in the checkout) for when it does
 not. Everything else (ImGui, prism, thread-pool, glslang, SPIRV-Cross, tinycc,
 hidapi) is fetched by CMake from GitHub over git.

@@ -70,14 +70,13 @@ def drop_superseded(lu_objs, game_syms):
     """Reuse of libreultra is per translation unit, so decide per TU.
 
     The decompilation keeps landing functions that a reused libreultra object
-    also defines. A static list of which ones to drop goes stale the moment
-    another lane matches a function, so ask the linker's question instead.
+    also defines. A static list of which ones to drop goes stale whenever a
+    function is matched, so ask the linker's question instead.
 
       * every global superseded -> drop the object.
       * none superseded        -> link it as it is.
-      * SOME superseded        -> the half-superseded case, which used to be
-        reported as "needs a human" and stopped the link dead. It does not
-        need a human. The two definitions are the same routine -- Kirby's copy
+      * SOME superseded        -> the half-superseded case. It needs no human
+        decision. The two definitions are the same routine -- Kirby's copy
         of libnaudio and Nintendo's copy of libnaudio -- so the question is
         only which one wins, and the answer is always the game's: it is the
         one the ROM actually runs. Weakening libreultra's copy says exactly
@@ -175,10 +174,9 @@ def report(stderr):
 
     # Anything ld said that is NOT one of those two shapes -- a multiple
     # definition, a relocation overflow, a missing library -- has to be shown
-    # verbatim. An earlier version of this function extracted the undefined
-    # references and printed only those, which hid a genuine "multiple
-    # definition of n_alEvtqPostEvent" behind a tidy list of missing functions
-    # and made a broken link look like a waiting one.
+    # verbatim. Printing only the undefined references would hide a genuine
+    # "multiple definition of n_alEvtqPostEvent" behind a tidy list of missing
+    # functions and make a broken link look like a waiting one.
     BENIGN = ('undefined reference to',      # the message itself
               'referenced in expression',    # a --defsym with a dead base
               'in function `',               # its location line

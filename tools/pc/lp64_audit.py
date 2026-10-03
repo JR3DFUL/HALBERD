@@ -10,8 +10,7 @@ it is a pointer that lost its top 32 bits. Host pointers are 8 bytes and the
 game's decompiled signatures often say `s32` where the ROM had a 4-byte
 address, so the value arrives sign-extended garbage and the first dereference
 segfaults -- 8 seconds into a boot, in a function that is not the one at
-fault. The first crash the port hit after it started booting was exactly this:
-src/ovl2/ovl2_7.c's CollisionState wrapper family forwards its trailing
+fault. A representative case: src/ovl2/ovl2_7.c's CollisionState wrapper family forwards its trailing
 arguments to callees whose parameters are pointers, and every one of those
 arguments is declared `s32`.
 
@@ -53,15 +52,15 @@ WHAT IT CANNOT SEE, said plainly because an auditor that overstates its
 coverage is worse than none. A call made through a CAST function pointer
 type-checks against the cast, not against the real definition, so the compiler
 has nothing to warn about and this reports nothing. That is not a corner case:
-it is how the port's first crash actually arrived. src/ovl2/ovl2_5.c casts
+the CollisionState truncation above arrives this way. src/ovl2/ovl2_5.c casts
 `castFn` to `void (*)(Vector *, Vector *, void *, void *, void *)` and calls
 func_80104958 through it, whose definition takes three `s32`; the truncation
 happens in silence and only the wrappers' OWN forwarding calls show up here.
 So a clean file is not a proof. Treat the ranking as "where to look first",
 and read the crash backtrace from tools/pc/smoke.py for the rest.
 
-Nothing here edits anything. It names files and functions; the lane that owns
-the file makes the change, and the N64 build must stay byte-exact across it --
+Nothing here edits anything. It names files and functions; whoever owns the
+file makes the change, and the N64 build must stay byte-exact across it --
 these are PORT-side call sites, so the sha1 gate is the acceptance test.
 """
 import argparse
@@ -83,8 +82,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 #
 # -w IS NOT HERE AND MUST NOT BE. gcc's -w suppresses warnings enabled by
 # LATER -W flags too, so `-w -Wint-conversion` prints nothing at all -- which
-# looks exactly like a clean tree and was how the first version of this tool
-# reported 163 files with zero findings. The default warning set comes along
+# looks exactly like a clean tree (163 files, zero findings). The default warning set comes along
 # as a result; the regexes below select only the four shapes that matter.
 BASE = [
     'gcc', '-m64', '-fno-pie', '-std=gnu90', '-fsigned-char', '-O1',
@@ -103,8 +101,9 @@ BASE = [
 # gcc quotes identifiers with U+2018/U+2019 under a UTF-8 locale and with
 # ASCII apostrophes under LC_ALL=C, and -fdiagnostics-plain-output does not
 # change that. compile_one() forces LC_ALL=C, and the pattern accepts both
-# anyway -- this cost an hour of a tool reporting a clean tree because every
-# regex silently missed, which is the worst possible failure for an auditor.
+# anyway: a pattern that accepts only one quoting silently misses every
+# diagnostic and reports a clean tree, the worst possible failure for an
+# auditor.
 QUOTE = u"['‘’]"
 ARG_RE = re.compile(
     r"^(?P<file>[^:]+):(?P<line>\d+):\d+: warning: "

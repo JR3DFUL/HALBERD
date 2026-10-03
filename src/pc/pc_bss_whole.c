@@ -8,27 +8,25 @@
  * indexes the base as u16[] out to at least [0x271A] (byte 0x4E34), far past
  * the first splinter, and func_800BDE0C row-walks the whole arena.
  *
- * THE END OF THIS ARENA WAS WRONG UNTIL IT CORRUPTED THE PLATFORM LAYER, and
- * the mistake is worth spelling out because the same shape will recur in
- * every other region in this file.
+ * THE ARENA ENDS AT D_800F4D14, NOT AT D_800F4324, and the distinction is
+ * worth spelling out because the same shape will recur in every other region
+ * in this file.
  *
- * It used to be declared 0x6E14 bytes, ending at D_800F4324 -- but
  * D_800F4324 is an INTERIOR LABEL of the arena, not its end, and so is
  * D_800F4D10 beyond it. The first symbol that genuinely belongs to something
  * else is D_800F4D14, which is what actually bounds the region and what
  * ovl1_13.c reads as a separate flag. Taking the first interior label for the
- * end made the object 0x9F0 bytes short.
+ * end (0x6E14 bytes) makes the object 0x9F0 bytes short.
  *
- * func_800BDE0C then DMAs a HUD theme into the base -- func_800A8934 sizes
- * the read from the asset table and it comes to 0x7800 bytes, which fits
- * 0x7804 exactly and overran 0x6E14 by 0x9F0. The overrun landed in the
+ * func_800BDE0C DMAs a HUD theme into the base -- func_800A8934 sizes the
+ * read from the asset table and it comes to 0x7800 bytes, which fits 0x7804
+ * exactly and overruns 0x6E14 by 0x9F0. Such an overrun lands in the
  * platform layer's own .bss: the pc_dbg counters first, then the scripted
- * controller's statics, which is how it was caught -- src/pc/pc_input_script.c
- * printed an elapsed time of 390317930 seconds because its epoch had been
- * overwritten with the 16-bit HUD fill pattern (0xCBD4CBD4CBD4CBD4,
- * 0xFFBEFFBEFFBEFFBE). Nothing else in the process noticed, and nothing
- * would have: a wild write into a neighbouring static is silent until the
- * value it hit is used.
+ * controller's statics, where src/pc/pc_input_script.c's clock check reports
+ * an elapsed time of 390317930 seconds because its state is overwritten with
+ * the 16-bit HUD fill pattern (0xCBD4CBD4CBD4CBD4, 0xFFBEFFBEFFBEFFBE).
+ * Nothing else in the process notices: a wild write into a neighbouring
+ * static is silent until the value it hit is used.
  *
  * SO THE RULE FOR THIS FILE: a region ends at the first symbol that is not
  * one of its own interior labels, and the way to tell is that the region's

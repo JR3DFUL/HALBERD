@@ -17,12 +17,10 @@ symbol plus a byte offset:
 `ld --defsym` takes exactly that form, so the native link gets the same
 aliasing the N64 link gets, without the game sources knowing anything about it.
 
-The residue does not resolve this way, but NOT for the reason first assumed. It
-was written up as 77 "ROM file offsets ... asset pointers", and that claim was
-carried into the DMA design brief before anyone checked it. Only 6 are ROM file
-offsets. The other 71 are VRAM addresses in 0x8012E000-0x8013xxxx that fall
-outside every asm/data block, so a cartridge-reading path could never have
-satisfied them. They are reported rather than emitted as something plausible
+The residue (77 symbols) does not resolve this way, and it is not mostly ROM
+file offsets: only 6 are. The other 71 are VRAM addresses in 0x8012E000-0x8013xxxx that fall
+outside every asm/data block, so a cartridge-reading path cannot satisfy
+them. They are reported rather than emitted as something plausible
 but wrong.
 
 Usage: gen_defsyms.py [-o build/pc/defsyms.txt]
@@ -40,8 +38,8 @@ def named_blocks(skip):
 
     A dlabel only exists while a block is still assembly. Once a block is
     migrated into C the listing goes away, and any datatodo symbol pointing
-    INTO it becomes unresolvable -- which is exactly what happened to the six
-    entries hand-added for D_800D7178 and D_800D71E8. symbol_addrs.txt still
+    INTO it becomes unresolvable, as with the six entries hand-added for
+    D_800D7178 and D_800D71E8. symbol_addrs.txt still
     carries the address and usually a `// size:0xNN`, so it covers the gap.
 
     `skip` is the set of names datatodo.txt itself defines; using one of those
@@ -182,10 +180,10 @@ def segment_bounds():
     # A BLOCK'S ADDRESS COMES OUT OF ITS OWN LISTING, not out of any symbol
     # map. The listing writes it on every line -- `/* 801F4D30 */ .space 0x18`
     # -- so this needs no matched build and cannot go stale. Going through
-    # tools/pc/vram_syms.txt instead lost two bounds: that file is keyed by
+    # tools/pc/vram_syms.txt instead loses two bounds: that file is keyed by
     # ADDRESS and keeps one name per address, so D_8015A7C0_ovl6 is simply not
-    # in it (something else at 0x8015A7C0 was written first) and ovl6_BSS_END
-    # had nothing to hang off on a machine with no elf.
+    # in it (something else at 0x8015A7C0 is listed first) and ovl6_BSS_END
+    # has nothing to hang off on a machine with no elf.
     line_addr = re.compile(r'/\*\s*([0-9A-F]{8})\s*\*/')
     ends = {}      # n64 address -> (symbol, host offset from that symbol)
     for f in sorted(glob.glob('asm/data/**/*.s', recursive=True)):
@@ -264,10 +262,10 @@ def already_defined():
     """Every symbol some object in this build already defines.
 
     A --defsym for a symbol that an object also defines is not a harmless
-    duplicate, it is `ld: multiple definition` and the link stops. That was
-    latent while every emitted entry came from a data block (a block cannot be
-    both translated and absolute), and it stopped being latent the moment the
-    PORT_SPANS fallback started resolving addresses INTO src/pc's RAM window:
+    duplicate, it is `ld: multiple definition` and the link stops. An entry
+    from a data block cannot collide (a block cannot be both translated and
+    absolute), but the PORT_SPANS fallback resolves addresses INTO src/pc's
+    RAM window:
     five of datatodo.txt's absolutes -- D_8012EB00, D_8022FB50, gFrameBuffer,
     D_803D6900, D_803DA800 -- are the very labels that window defines.
 

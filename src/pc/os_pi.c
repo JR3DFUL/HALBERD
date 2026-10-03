@@ -249,8 +249,8 @@ OSMesgQueue *osPiGetCmdQueue(void) {
  *
  * _etext alone is not enough, and the difference is not academic: the second
  * overlay's descriptor resolves its RAMStart into .eh_frame (0x4c5bb9, past
- * _etext at 0x4b974d and with no symbol on it), and a guard that stopped at
- * _etext waved that straight through into a SIGSEGV. */
+ * _etext at 0x4b974d and with no symbol on it), and a guard that stops at
+ * _etext lets that straight through into a SIGSEGV. */
 extern char __executable_start[];
 extern char _etext[];
 extern char __data_start[];
@@ -265,14 +265,14 @@ static int lands_in_own_image(const void *p, u32 size) {
 /* PROVE THE GUARD IS WIRED TO THE REAL LINKER SYMBOLS, at startup, once.
  *
  * ld defines __executable_start and _etext only when nothing else does, and a
- * WEAK definition counts as something else. tools/pc/gen_stubs.py used to emit
- * weak abort stubs for both (they are undefined symbols in os_pi.o like any
- * other), so the two ended up 21 bytes apart inside the stub blob and this
- * guard answered "no" for every address in the program. The consequence was a
+ * WEAK definition counts as something else. They are undefined symbols in
+ * os_pi.o like any other, so if tools/pc/gen_stubs.py emits weak abort stubs
+ * for them the two end up 21 bytes apart inside the stub blob and this guard
+ * answers "no" for every address in the program. The consequence is a
  * SIGSEGV inside memcpy 200 ms into the run, with a backtrace pointing at
  * dma_overlay_load and nothing pointing here.
  *
- * The generator no longer stubs them. This is the check that says so out loud
+ * The generator does not stub them. This is the check that says so out loud
  * if that ever regresses: the address of a function in this very file must
  * land inside the range the guard is testing against. */
 static void check_image_guard(void) {
@@ -319,9 +319,9 @@ static s32 do_transfer(OSPiHandle *h, s32 dir, u32 devAddr, void *ram,
      * ram == NULL alone is not enough, because dma_copy() SPLITS a transfer
      * into 0x10000-byte chunks and advances the address between them: given a
      * NULL buffer the first chunk is skipped here and the second arrives as
-     * 0x10000, which is still unmapped but no longer zero. That is exactly how
-     * the port died -- memcpy to 0x10000, with dma_read()'s caller three
-     * frames up holding a buffer that a stubbed allocator never allocated.
+     * 0x10000, which is still unmapped but not zero. The result is a memcpy
+     * to 0x10000, with dma_read()'s caller three frames up holding a buffer
+     * that a stubbed allocator never allocated.
      *
      * This binary links -no-pie at 0x400000, so nothing the game can legally
      * write to lives below that. Refusing the whole range turns "the allocator
@@ -333,7 +333,7 @@ static s32 do_transfer(OSPiHandle *h, s32 dir, u32 devAddr, void *ram,
      * failed osEPiStartDma as `fatal_printf("dma pi full ...")`, which calls
      * faultWaitButton, which spins on crash_screen_sleep waiting for a button
      * that a headless run will never see -- at gtl process priority 250, above
-     * everything else. The port then sat there forever with the VI ticking
+     * everything else. The port then hangs forever with the VI ticking
      * happily, which is a far more confusing state than a skipped read. */
     if ((const char *)ram < __executable_start) {
         pc_trace(PC_TR_DMA,

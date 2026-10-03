@@ -101,18 +101,18 @@ void pc_time_init(void) {
 
 /* THE FREE-RUNNING COUNTER, AND NOTHING MAY REBASE IT.
  *
- * osSetTime used to move this, and that single line of coupling stopped the
- * port dead. src/main/fault.c's crash_screen_sleep() is
+ * If osSetTime moved this, that single line of coupling would stop the port
+ * dead. src/main/fault.c's crash_screen_sleep() is
  *
  *     osSetTime(0);
  *     while (osGetTime() < cycles) { }
  *
  * and faultWaitButton() calls it every iteration while it waits for a button.
- * Each osSetTime(0) sent pc_count64() back to zero, so src/pc/os_vi.c's
- * sNextRetraceAt -- computed from the value BEFORE the reset -- was suddenly
- * far in the future, `now >= sNextRetraceAt` was false, and pc_vi_tick()
- * stopped firing retraces. Not slowed: stopped, until the raw clock climbed
- * back past it, at which point the next reset did it again. Measured at 46
+ * Each osSetTime(0) would send pc_count64() back to zero, so src/pc/os_vi.c's
+ * sNextRetraceAt -- computed from the value BEFORE the reset -- would suddenly
+ * be far in the future, `now >= sNextRetraceAt` false, and pc_vi_tick() would
+ * stop firing retraces. Not slowed: stopped, until the raw clock climbs back
+ * past it, at which point the next reset does it again. Measured at 46
  * retraces in 20 seconds instead of 1200.
  *
  * On hardware the two are genuinely separate. osSetTime writes

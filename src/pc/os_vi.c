@@ -181,9 +181,9 @@ void pc_vi_tick(void) {
      * The loop above only ever moves sNextRetraceAt forward, so a clock that
      * jumps BACKWARDS leaves a deadline that no amount of waiting will reach,
      * and the retrace simply stops -- silently, with every other guard in this
-     * file still reading healthy. That is precisely how the port hung: the
-     * clock was rebased by osSetTime (see the note in src/pc/os_time.c) and
-     * this function went quiet without a single early return being taken.
+     * file still reading healthy. A clock rebased by osSetTime does exactly
+     * this (see the note in src/pc/os_time.c): the function goes quiet
+     * without a single early return being taken.
      *
      * The clock is fixed at the source, so this cannot fire today. It stays
      * because a stopped VI is the most expensive failure this port has: it

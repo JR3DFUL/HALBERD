@@ -96,11 +96,11 @@ void pcb_gfx_run(const void *displayList);
 /* -------------------------------------------------------------------------
  * DID IT DRAW ANYTHING? -- the question pcb_has_renderer() does not answer.
  *
- * A whole day of measurement was once reported as port progress from runs
- * linked against pc_backend_null.c, whose osSpTaskLoad says "no RSP" and
- * whose pcb_gfx_run is empty. Those runs are a game-logic trace and say
- * nothing about rendering, and nothing in the output distinguished them from
- * a rendering run. This is the seam that makes the difference reportable.
+ * Runs linked against pc_backend_null.c, whose osSpTaskLoad says "no RSP"
+ * and whose pcb_gfx_run is empty, are a game-logic trace and say nothing
+ * about rendering, yet without this nothing in the output distinguishes them
+ * from a rendering run. This is the seam that makes the difference
+ * reportable.
  *
  * Returns 1 if this backend RASTERISES. Then the counters are filled in and
  * mean something. Returns 0 for a backend that draws nothing, and then the

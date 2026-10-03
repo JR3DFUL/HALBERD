@@ -1,7 +1,7 @@
 /* The RCP register window.
  *
- * FOUND BY RUNNING, not by reading the symbol table, and worth recording
- * because it is a whole category the gap measurement cannot see.
+ * ONLY RUNNING FINDS THIS, not reading the symbol table: it is a whole
+ * category the gap measurement cannot see.
  *
  * `make -f Makefile.pc gap` counts undefined SYMBOLS. Game code that pokes
  * hardware directly has no symbol:
@@ -13,9 +13,9 @@
  *     }
  *
  * That is a load from 0xA4001000. It links perfectly and segfaults instantly,
- * and it is exactly where the boot got to once the scheduler, the message
- * queues, the VI, the PI and the cartridge DMA were all working. Nothing in
- * the platform layer's 82 symbols would ever have revealed it.
+ * and it is the first thing the boot hits once the scheduler, the message
+ * queues, the VI, the PI and the cartridge DMA all work. Nothing in the
+ * platform layer's symbols reveals it.
  *
  * WHAT THIS FILE DOES. It reserves the RCP's MMIO range as ordinary anonymous
  * memory at the addresses the game expects, so those accesses read and write

@@ -12,10 +12,11 @@
  * overrides them when KIRBY_PC_INPUT is set.
  *
  * TIME IS GAME TIME, NOT WALL TIME, and that is the one design decision here
- * that matters. Script times are read against pc_count64(), the same scaled
- * count register the game itself sees, so a script written once behaves
- * identically at KIRBY_PC_TIMESCALE=1 and =8. Against wall time an
- * accelerated run would race past every cue.
+ * that matters. Script times are game seconds counted off the game's own
+ * drawn-frame counter (see script_clock()), so a script written once behaves
+ * identically at any KIRBY_PC_TIMESCALE and at any rendering speed. Against
+ * wall time a run whose simulation rate differs from real time would miss
+ * every cue.
  *
  * THE FORMAT
  *
@@ -42,10 +43,8 @@
  *       defaults the answer to YES, moves it to NO on D-LEFT (buttonPressed
  *       & 0x200) and back to YES on D-RIGHT, and CONFIRMS on A or START.
  *       `autostart` presses only START and A, so it confirms YES at every
- *       re-prompt and the cutscene replays for ever. That is the loop
- *       previously recorded as "does not reach gGameState 15, whether that
- *       is an overlay-18 bug is the open question" -- it is not a bug, it is
- *       a prompt nobody was answering.
+ *       re-prompt and the cutscene replays for ever. That loop is not an
+ *       overlay-18 bug; it is a prompt nobody is answering.
  *
  *       The table is in button_for_state() below. The important entry is
  *       states 11 and 14, where the prompt lives: a two-second cycle presses
@@ -66,9 +65,8 @@
  *       up or down instead of pressing a button. They combine with buttons:
  *       `DRIGHT+SR` is "walk right on both inputs".
  *
- *       WRITE DRIGHT, NOT SR, FOR MOVEMENT. This file used to say the
- *       opposite -- that the D-pad only drives menus and the player is read
- *       from the stick -- and that is not true of this build: measured with
+ *       WRITE DRIGHT, NOT SR, FOR MOVEMENT. The D-pad moves the player and
+ *       the stick does not: measured with
  *       KIRBY_PC_PLAYERPOS, a held stick leaves the player at his spawn X
  *       for the whole run at any deflection, and a held D-pad walks him.
  *       The full measurement is in the stick note at the bottom of this
@@ -81,8 +79,7 @@
  *       the world 1-1 cutscene prompt, and how many times that prompt has to
  *       be answered -- at about 90 seconds of cutscene per turn -- varies
  *       run to run, so the wall second at which a level starts is not a
- *       constant. Measured over the two runs that produced this note it
- *       moved by more than a minute. A `g`-relative cue lands in the same
+ *       constant. Measured over two runs it moved by more than a minute. A `g`-relative cue lands in the same
  *       place in the level every time.
  *
  *       Listing ANY `g` cue also switches the menus onto `advance`'s
@@ -177,20 +174,19 @@ static const char kPlayProgram[] =
                             * 60000 frames is 1000 GAME seconds, i.e. only
                             * ~125 wall seconds at KIRBY_PC_TIMESCALE=8, and
                             * a run that outlives its own hold stops
-                            * measuring without saying so. Measured on the
-                            * old value: the player froze at x = 420.49,
+                            * measuring without saying so. Measured with a
+                            * 60000 hold: the player froze at x = 420.49,
                             * vel = 0.0000, held=0000 stick=0 at +157.46s
                             * and stayed there for the remaining 170 s of a
                             * 330 s run. That reads exactly like a wedge and
                             * is not one -- `held=0000` is the tell. */
-    /* JUMP ON A SHORT CYCLE, and this is the fix for the wedge this program
-     * carried. Kirby 64's world 1-1 has a solid ledge whose collision plane
-     * is x = -1480 (normal (-1,0,0), collisionType 0 -- read out of the
-     * level data with a debugger, see docs/PC_PORT_LIBULTRASHIP.md). A
-     * walking Kirby stops dead against it, which two lanes read as the level
-     * ending or the engine clamping. It is neither: he has to jump, and the
-     * old program's jumps at g8/g24/g52 simply never coincided with standing
-     * at the ledge. A 2-second cycle always does. Measured with the same
+    /* JUMP ON A SHORT CYCLE. Kirby 64's world 1-1 has a solid ledge whose
+     * collision plane is x = -1480 (normal (-1,0,0), collisionType 0 -- read
+     * out of the level data with a debugger, see
+     * docs/PC_PORT_LIBULTRASHIP.md). A walking Kirby stops dead against it.
+     * That is neither the level ending nor the engine clamping: he has to
+     * jump, and jumps at sparse fixed times (g8/g24/g52) never coincide with
+     * standing at the ledge. A 2-second cycle always does. Measured with the same
      * cycle bolted onto a plain DRIGHT script: -2096.47 -> -1480.00 ->
      * -1224.80 -> -947.75, i.e. straight over. */
     "g2:A:12,g4:A:12,g6:A:12,g8:A:12,"
@@ -198,19 +194,18 @@ static const char kPlayProgram[] =
     "g20:A:12,g22:A:12,g24:A:12,g26:A:12,g28:A:12,"
     "g30:A:12,g32:A:12,g34:A:12,g36:A:12,g38:A:12,"
     "g40:A:12,g42:A:12,g44:A:12,g46:A:12,g48:A:12,"
-    /* AND THE OTHER ACTIONS COME AFTER THE WALKING, which is the second half
-     * of the fix. With B at g14 and DDOWN at g19 -- where they used to be --
-     * Kirby arrives at the ledge in action 14 with vel = 0.0000, and a held
+    /* AND THE OTHER ACTIONS COME AFTER THE WALKING. With B at g14 and DDOWN
+     * at g19, Kirby arrives at the ledge in action 14 with vel = 0.0000, and a held
      * D-RIGHT does not restart him: measured at +87, +96, +104, +112, +120
      * and +128 s, all six samples identical at x = -1480.00 t = 0.517857
      * vel = 0.0000 action = 14 with held = 0100 the whole time. Jumping
      * cannot help from there because he never walks into the ledge again.
      * Walk first, act later.
      *
-     * The tail keeps driving to the end of the run on purpose: an earlier
-     * program ran out of cues at g129 and left the pad neutral for two
-     * thirds of the run, which showed up as distinct=123 of 474 sampled
-     * frames against a walking run's 450 of 452. A script that stops driving
+     * The tail keeps driving to the end of the run on purpose: a program
+     * that runs out of cues at g129 leaves the pad neutral for two thirds of
+     * the run, which shows up as distinct=123 of 474 sampled frames against
+     * a walking run's 450 of 452. A script that stops driving
      * stops measuring. */
     "g52:B:120,"          /* inhale: the suction effect and what it catches */
     "g57:DDOWN+SD:60,"    /* swallow / crouch */
@@ -220,10 +215,9 @@ static const char kPlayProgram[] =
     "g80:B:120,"
     "g86:A:12,g88:A:12,g90:A:12,g92:A:12,g94:A:12,"
     "g96:A:12,g98:A:12,"
-    /* AND KEEP JUMPING PAST g98. The program used to end here, which was
-     * fine while nothing survived past x = -947; it does not survive
-     * contact with a port that now walks the whole of world 1-1's node 3
-     * and loops on node 4. Every cue past this point is another 2 s jump,
+    /* AND KEEP JUMPING PAST g98: the port walks the whole of world 1-1's
+     * node 3 and loops on node 4, so the cues have to last. Every cue past
+     * this point is another 2 s jump,
      * up to MAX_CUES (64) -- this list is exactly 63 of them, so anything
      * added here has to displace something. */
     "g100:A:12,g102:A:12,g104:A:12,g106:A:12,g108:A:12,"
@@ -232,20 +226,21 @@ static const char kPlayProgram[] =
     "g130:A:12,g132:A:12,g134:A:12,g136:A:12,g138:A:12,"
     "g140:A:12,g142:A:12,g144:A:12";
 
-/* WHERE THIS PROGRAM NOW ENDS, so the next lane does not re-find it.
+/* WHERE THIS PROGRAM ENDS.
  *
- * IT NO LONGER ENDS IN A CRASH. Both faults this note used to record are
- * fixed, and a `g0:DRIGHT+SR` walk with a 2 s A cycle now runs world 1-1
+ * NOT IN A CRASH. A `g0:DRIGHT+SR` walk with a 2 s A cycle runs world 1-1
  * from the spawn at x = -2096 across the -1480 ledge, off the end of track
  * node 3 and onto node 4, for 330 wall seconds at KIRBY_PC_TIMESCALE=8 with
- * outcome=interrupted and no SIGSEGV. The two that were fixed:
+ * outcome=interrupted and no SIGSEGV. Three faults on that stretch are
+ * fixed; the two crashes were independent LP64 layout bugs reachable only
+ * past the ledge (details in docs/PC_PORT_LIBULTRASHIP.md):
  *
  *   utilFuncTableJump (util.c:151) <- func_800FCFF0 (spawn.c:201), at
  *       x = -947.75. The spawn callback tables D_8012447C / D_801244A4 /
  *       D_801244DC are runs of RAW cross-overlay addresses in the decomp's
  *       listing, with no symbolic ref among them, so tools/pc/gen_data.py
  *       read them as scalar data and emitted u32[] -- dense 4-byte slots
- *       indexed at LP64 pointer stride. FIXED in gen_data.py, which now
+ *       indexed at LP64 pointer stride. FIXED in gen_data.py, which
  *       recognises an all-.word block whose every word is an exact `func_`
  *       symbol. Image-wide that rule fires on exactly those three blocks
  *       out of 2085 candidates.
@@ -257,25 +252,22 @@ static const char kPlayProgram[] =
  *       CollSlot's pointers slide its unk24 from 40 to 48 at LP64. FIXED in
  *       the decomp under #ifdef PORT.
  *
- * A third failure showed up in between and is also fixed: a hard WEDGE (not
- * a crash -- the process lives, renders, and stops advancing) at x = -536.54.
- * Three gdb stack samples two seconds apart were identical,
- * func_80218520_ovl9 <- utilFuncTableJump(idx=1, max=3) <- func_802180D8_ovl9
- * (a `while (1)`), because that draft cleared gEntityFuncListIDArray at
- * [objId*4] instead of [objId] and the loop's state id never changed.
+ *   A hard WEDGE (not a crash -- the process lives, renders, and stops
+ *       advancing) at x = -536.54. Three gdb stack samples two seconds
+ *       apart were identical, func_80218520_ovl9 <- utilFuncTableJump(idx=1,
+ *       max=3) <- func_802180D8_ovl9 (a `while (1)`), because that draft
+ *       cleared gEntityFuncListIDArray at [objId*4] instead of [objId] and
+ *       the loop's state id never changed. FIXED in the decomp.
  *
- * WHAT STOPS THE RUN NOW IS THE LEVEL, NOT A FAULT. On node 4 the player's
+ * WHAT STOPS THE RUN IS THE LEVEL, NOT A FAULT. On node 4 the player's
  * track parameter t oscillates -- 0.4755, 0.3043, 0.2908, 0.3077, 0.3954,
  * 0.2255, 0.4984 at 5 s intervals, vel a steady 5.0000, face +1 throughout --
  * so held-DRIGHT alone loops him around that node rather than leaving it.
  * Getting further needs a route, not a longer hold: whatever world 1-1 wants
  * at that point (an inhale, a door, a switch) has to be in the cue list.
  *
- * Two things this note previously asserted are withdrawn. `play` wedging at
- * x = -2198.29 never reproduced on any tree this repository can rebuild. And
- * the pair of faults was read as "a region of the level the port has not run
- * before"; they were two independent LP64 layout bugs that happened to be
- * reachable only past the ledge. */
+ * A `play` wedge at x = -2198.29 has not reproduced on any tree this
+ * repository can rebuild. */
 
 static u32 button_of(const char *name, size_t n) {
     static const struct { const char *name; u32 bit; } kNames[] = {
@@ -634,17 +626,17 @@ void pc_input_script_apply(PCPad *pads, int n) {
         }
     }
 
-    /* THIS CLOCK IS A CANARY, and it has already earned its keep once.
+    /* THIS CLOCK IS A CANARY.
      *
      * The script's statics sit in the platform layer's .bss, a few hundred
      * bytes past the end of the game's own bss objects, and a game-side
      * buffer overrun lands on them before it lands on anything that
-     * complains. That is exactly how the HUD arena overrun in
-     * src/pc/pc_bss_whole.c was found: this timer started reporting
-     * 390317930 seconds because its epoch had been overwritten with a
-     * repeating 16-bit fill pattern. Nothing else in the process had
-     * noticed. The clock is now the frame accumulator in script_clock(),
-     * which lives in the same .bss and trips the same check.
+     * complains. A HUD arena overrun (see src/pc/pc_bss_whole.c) shows up
+     * here as an elapsed time of 390317930 seconds, because the clock's
+     * state is overwritten with a repeating 16-bit fill pattern, while
+     * nothing else in the process notices. The clock is the frame
+     * accumulator in script_clock(), which lives in the same .bss and trips
+     * this check.
      *
      * A run cannot plausibly last a year, so say so rather than printing an
      * absurd number and hoping somebody looks twice. Once only -- if the bss
@@ -686,8 +678,7 @@ void pc_input_script_apply(PCPad *pads, int n) {
      * it. Everything between this function and there can drop a press: the
      * SI read, the errno check, the channel map, a game tick that does not
      * run. Printing only the button this script asked for therefore proves
-     * nothing about whether any screen could have seen it, and an hour went
-     * into "the D-pad does not work" before that distinction was drawn.
+     * nothing about whether any screen could have seen it.
      *
      * Declared here as u16[] on purpose: that is the view the game's own
      * menu code takes of the same storage (see ovl18/code_239080.c, which
@@ -713,16 +704,11 @@ void pc_input_script_apply(PCPad *pads, int n) {
 
     pads[0].button = (u16)(mask & ~STICK_MASK);
     pads[0].present = 1;
-    /* THE STICK, NOT THE D-PAD, IS WHAT MOVES KIRBY. The D-pad in Kirby 64
-     * drives menus; in gameplay the player is read from the analog stick, so
-     * a walk script that only sets buttons produces a Kirby standing
-     * perfectly still with the mask visibly latched. 0x50 is a firm push
-     * without being the extreme the real hardware rarely reaches. */
-    /* AND THE STICK DOES NOT ACTUALLY MOVE KIRBY IN THIS BUILD. The note
-     * above is what the port believed, and `walk` appeared to confirm it --
-     * but `walk` also sets CONT_RIGHT in its mask, and CONT_RIGHT is what
-     * was doing the work. Measured with KIRBY_PC_PLAYERPOS (pc_progress.c),
-     * three runs, world 1-1, stick held for 150 wall seconds:
+    /* THE D-PAD, NOT THE STICK, IS WHAT MOVES KIRBY. `walk` sets the stick
+     * (0x50, a firm push without being the extreme the real hardware rarely
+     * reaches) but also CONT_RIGHT in its mask, and CONT_RIGHT is what does
+     * the work. Measured with KIRBY_PC_PLAYERPOS (pc_progress.c), three
+     * runs, world 1-1, stick held for 150 wall seconds:
      *
      *   KIRBY_PC_INPUT=g0:DRIGHT:60000   D-pad only, no stick
      *       x walks -2946.79 -> -1480.00
@@ -731,9 +717,8 @@ void pc_input_script_apply(PCPad *pads, int n) {
      *   the same at full deflection 0x7F
      *       x stays -2959.92
      *
-     * So it is not a deadzone. That note ended "the gap is inside the player
-     * code that should read stickX". THERE IS NO SUCH CODE, and the search
-     * for it is over.
+     * So it is not a deadzone, and THERE IS NO PLAYER CODE THAT READS
+     * stickX.
      *
      * The stick arrives perfectly: probes in src/ovl1/util.c counted
      * utilSetPlayerContPad 8274 times over a 340 s stick-held run and

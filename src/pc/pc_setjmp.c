@@ -17,13 +17,13 @@
  *   - Calling the host's setjmp() inside a wrapper saves the WRAPPER's frame,
  *     not the caller's. glibc's jmp_buf is also 200 bytes and the game's
  *     buffer is 0x6C, so it does not even fit.
- *   - ucontext has the identical flaw. I built that version first, on the
- *     reasoning that getcontext/setcontext save the stack pointer and so
- *     survive being called from a wrapper. They do save it -- and what they
- *     save is still the wrapper's frame, which has returned by the time
- *     anything longjmps, and whose stack memory the longjmp call itself is
- *     busy overwriting. It failed exactly as a wrapped setjmp would: the
- *     transfer did not happen and setcontext returned.
+ *   - ucontext has the identical flaw. getcontext/setcontext do save the
+ *     stack pointer, which makes them look as if they survive being called
+ *     from a wrapper -- but what they save is still the wrapper's frame,
+ *     which has returned by the time anything longjmps, and whose stack
+ *     memory the longjmp call itself is busy overwriting. A ucontext version
+ *     fails exactly as a wrapped setjmp does: the transfer does not happen
+ *     and setcontext returns.
  *
  * The primitive has to BE the function the game calls, saving the state of
  * whoever called it. That is what these do. 8 quadwords is 64 bytes and fits

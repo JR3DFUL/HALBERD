@@ -13,10 +13,10 @@ regression check. --deep adds the synthetic controller from
 src/pc/pc_input_script.c and measures how far the port can actually be driven,
 which is the right thing when you are hunting the next crash.
 
-WHY THIS EXISTS. The port links and boots, so the question stopped being
-"which symbol is missing" -- tools/pc/gap.py answers that -- and became "which
-frame does it die on". That answer was only available by hand: run the binary,
-wait a minute, read a gdb backtrace. A number nobody can produce twice is not
+WHY THIS EXISTS. tools/pc/gap.py answers "which symbol is missing"; for a
+port that links and boots the question is "which frame does it die on", and
+by hand that means running the binary, waiting a minute and reading a gdb
+backtrace. A number nobody can produce twice is not
 a measurement, so this turns the boot into one line that a make target prints
 and a person can compare against the last one.
 
@@ -78,8 +78,8 @@ STAGES = [
     'gameplay',
 ]
 
-# THE RATCHET. Raise this only after MEASURING the new stage, and say what
-# changed to earn it. The history is the useful part of this comment:
+# THE RATCHET. Raise this only after MEASURING the new stage. What each rung
+# means, and what had to be fixed to reach it:
 #
 #   attract-demo-1  the port boots through the HAL/Nintendo logos, the opening
 #                   movie and the title screen, and enters the first attract
@@ -111,8 +111,8 @@ EXPECTED_STAGE = 'attract-loop-complete'
 #
 #   intro-cutscene  title -> file select -> world select -> the world 1-1
 #                   opening cutscene (overlay 18), held for 150s / 32915
-#                   frames with no crash, driven by `autostart`. It did not
-#                   reach gGameState 15 because `autostart` presses only
+#                   frames with no crash, driven by `autostart`, which cannot
+#                   reach gGameState 15 because it presses only
 #                   START and A, and A answers YES to the watch-the-cutscene
 #                   prompt every time it comes round (src/pc/pc_input_script.c
 #                   has the mechanism). Not a bug: a prompt nobody answered.
@@ -122,7 +122,7 @@ EXPECTED_STAGE = 'attract-loop-complete'
 #                   plus a held D-RIGHT in-level), timescale 8: gameplay at
 #                   45.33 s, route 0>1>2>3>10>11>12>15, render=raster,
 #                   drawn=19965 sampled=2495 nonblank=2489 distinct=2485,
-#                   300 s with no fault. --deep now drives with `advance`.
+#                   300 s with no fault. --deep drives with `advance`.
 DEEP_EXPECTED_STAGE = 'gameplay'
 
 # Beyond the expected stage there is nothing to wait for: with no controller
@@ -333,9 +333,8 @@ def main():
     # WHAT THE STAGE NUMBER DOES NOT SAY. Every line above this one is game
     # LOGIC: milestones, gGameState, gtlDrawnFrameCounter. All of them count
     # up exactly the same on a build linked against src/pc/pc_backend_null.c,
-    # which draws nothing at all -- and a day of such runs was once reported
-    # as rendering progress because the output never mentioned the
-    # difference. render= is that missing fact, straight from pcb_gfx_stats.
+    # which draws nothing at all, and without render= the output does not
+    # mention the difference. render= comes straight from pcb_gfx_stats.
     render = v.get('render')
     if render is None:
         print('smoke: this binary predates render= in the verdict line; it '

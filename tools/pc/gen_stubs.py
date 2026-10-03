@@ -58,9 +58,8 @@ def missing():
 # A libc name that reaches the emitter fails in one of two ways, and BOTH are
 # worse than the symbol simply resolving to libc. If the host header declared
 # it, the emitted `long f(void)` conflicts with the real prototype and stubs.c
-# does not compile -- that is what `atexit` (called by the fatal-signal
-# reporter in src/pc/pc_progress.c) did the first time link.sh was run after
-# that reporter landed. If the header did NOT declare it, the stub links and
+# does not compile (`atexit`, called by the fatal-signal reporter in
+# src/pc/pc_progress.c, is an example). If the header did NOT declare it, the stub links and
 # silently WINS over libc, so a routine the port genuinely relies on aborts.
 #
 # The list is deliberately wider than what is undefined today: a name here
@@ -105,15 +104,14 @@ LINKER_PROVIDED = frozenset((
 def host_symbols():
     """Everything the host's C library actually defines.
 
-    The hand-written list above was enough while the only undefined symbols
-    came from game code. It stopped being enough the moment src/pc/ appeared:
-    a platform layer calls fopen, getenv, snprintf, clock_gettime,
+    The hand-written list above covers undefined symbols from game code only.
+    A platform layer calls fopen, getenv, snprintf, clock_gettime,
     swapcontext, and references stderr, and a `void stderr(void)` stub does
     not merely shadow the real one -- it fails to compile against <stdio.h>.
 
     Reading the real symbol table instead of maintaining a list means this
-    cannot drift again. Falls back to the regex if the libraries are not
-    where they are expected, which only costs the old behaviour.
+    cannot drift. Falls back to the regex if the libraries are not where
+    they are expected, which covers game code only.
     """
     names = set()
     for lib in ('libc.so.6', 'libm.so.6', 'libpthread.so.0', 'librt.so.1'):
@@ -140,9 +138,9 @@ def declared_objects():
     The name-prefix heuristic below (D_, g, ovlN_) covers the symbols splat
     invented names for, and misses every symbol the decompilation has since
     given a real name to. `extern u8 *auSoundPriority;` starts with an 'a', so
-    it was being emitted as `void auSoundPriority(void) { ... }` -- a weak
-    FUNCTION, living in .text. The port then took SIGSEGV on the perfectly
-    ordinary `auSoundPriority = buf;`, because that is a store into read-only
+    the heuristic alone emits it as `void auSoundPriority(void) { ... }` -- a
+    weak FUNCTION, living in .text. The port then takes SIGSEGV on the
+    perfectly ordinary `auSoundPriority = buf;`, because that is a store into read-only
     code, and the crash names the assignment rather than the stub.
 
     A prefix cannot answer this question; the declaration can, and the

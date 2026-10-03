@@ -148,9 +148,8 @@ void pcb_frame_end(void);
 
 /* Hand a display list to the renderer. Returns when it has been consumed,
  * so the caller can then raise SP-done and DP-done in the right order.
- * (The sizeHint once sketched here was never needed: Fast3D walks the list
- * to its gsSPEndDisplayList, so the real surface -- pc_backend.h and the
- * .cpp -- takes only the list head.) */
+ * (No size hint: Fast3D walks the list to its gsSPEndDisplayList, so the
+ * real surface -- pc_backend.h and the .cpp -- takes only the list head.) */
 void pcb_gfx_run(const void *displayList);
 
 #endif /* PC_BACKEND_LUS_H */

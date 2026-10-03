@@ -31,9 +31,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 os.chdir(REPO)
 
 # Directives can be preceded by an address comment, so anchoring on the start
-# of the line silently loses ALL of them. The first version of this tool did
-# exactly that and dropped 15000+ entries -- .short, .float, .byte, .asciz and
-# .double -- producing blocks that were correct-looking but short.
+# of the line silently loses ALL of them: 15000+ entries -- .short, .float,
+# .byte, .asciz and .double -- producing blocks that are correct-looking but
+# short.
 DIRECTIVE = re.compile(r'(?:/\*[^*]*\*/)?\s*'
                        r'\.(word|short|byte|float|double|asciz|space)\s+(.+?)\s*$')
 INCBIN = re.compile(r'^\s*\.incbin\s+"([^"]+)"')
@@ -420,10 +420,10 @@ def render_mixed_widened(sym, section, entries, refs):
     """A descriptor block splat mis-parsed as strings+words: emit 8-byte cells.
 
     The game reads these through LP64 structs (struct Sub800E1B50_Unk88 and
-    friends) whose PORT overlays assume one 8-byte cell per N64 word. The old
-    packed-struct emission was wrong twice over: it dropped the .align padding
+    friends) whose PORT overlays assume one 8-byte cell per N64 word. A
+    packed-struct emission is wrong twice over: it drops the .align padding
     after each .asciz (splat writes a float word 0x3F000000 as `.asciz "?"`
-    plus alignment, and the padding IS data here), and packed pointers at
+    plus alignment, and the padding IS data here), and packs pointers at
     byte offsets no reader struct has. Rebuild the exact N64 byte stream,
     then cut it into big-endian words, one cell each; relocated words stay
     native pointers. Sub-word fields are read back with the same big-endian
@@ -500,7 +500,7 @@ def render_mixed_widened(sym, section, entries, refs):
 # that reads it back as a u32, and WRONG for anything that reads it as u16s,
 # because little-endian storage swaps the two halves of every word.
 #
-# The rumble command streams are the case that found it. src/ovl1/ovl1_10.c's
+# The rumble command streams are the case in point. src/ovl1/ovl1_10.c's
 # func_800BAA64 walks one with a `u16 *`:
 #
 #     switch (*ptr >> 13) { case 3: ptr++; case 4: ptr = arg0->unk0C; ... }
@@ -557,9 +557,9 @@ def render_widened(sym, section, entries):
 # rule keeps each PIECE big enough, but game code both indexes the BASE with
 # LP64 8-byte slots (D_800D79B0[idx] = obj) and reads the INTERIOR labels as
 # scalars (D_800D79BC is N64 base+12, i.e. index 3) -- and no doubling of the
-# split pieces can satisfy both views at once. func_800A7394 found it: the
-# world-map camera callback read D_800D79BC, which sat 24 bytes past where
-# D_800D79B0[3] was written. The hand-written file defines each array whole
+# split pieces can satisfy both views at once. Example: func_800A7394, the
+# world-map camera callback, reads D_800D79BC, which split emission puts 24
+# bytes past where D_800D79B0[3] is written. The hand-written file defines each array whole
 # and aliases the interior labels at index*8.
 SUPPRESS_BSS = {
     'D_800D79B0', 'D_800D79B4', 'D_800D79B8', 'D_800D79BC',
@@ -604,8 +604,8 @@ SUPPRESS_BSS = {
     # D_800D7B20 + 0xC on N64 (the eye half; ovl2_3.c/ovl17.c/ovl1_2.c write
     # it by that name while ovl2_6.c's skybox parallax reads D_800D7B20[3..5]),
     # and func_800FC62C parks six floats at D_800D7B38 + 0x18, past the 24
-    # bytes a split object had. Split, the eye stayed 0 and the skybox pitch
-    # parallax was computed against an eye at the origin.
+    # bytes a split object has. Split, the eye stays 0 and the skybox pitch
+    # parallax is computed against an eye at the origin.
     'D_800D7B20', 'D_800D7B2C', 'D_800D7B38',
 }
 
@@ -696,16 +696,15 @@ def render(sym, section, entries, refs):
 
     # .bss -- plain zeroed storage, and it must NOT be const.
     #
-    # DOUBLED, and this is not caution, it is a correctness fix found by a
-    # crash. The listing records the size the symbol had on N64, where a
+    # DOUBLED, and this is not caution, it is a correctness fix. The listing records the size the symbol had on N64, where a
     # pointer is 4 bytes. This build is LP64. Every bss object that holds
     # pointers is therefore too small by exactly the number of pointers in it,
     # and the game writes past the end of it into whatever the linker put next.
     #
-    # The one that found it: sched.c declares `OSMesg D_80048C98[8]` and the
-    # listing says `.space 32`. At LP64 an OSMesg is 8 bytes, so the queue
-    # needs 64 -- and the 32 bytes it ran into were scTaskMQ, whose mtqueue
-    # field became the message value 1. osSendMesg then dereferenced 0x1.
+    # Example: sched.c declares `OSMesg D_80048C98[8]` and the listing says
+    # `.space 32`. At LP64 an OSMesg is 8 bytes, so the queue needs 64 -- and
+    # at 32 it runs into scTaskMQ, whose mtqueue field becomes the message
+    # value 1, and osSendMesg then dereferences 0x1.
     #
     # 2x is an exact upper bound rather than a guess: the only thing that grows
     # is a pointer, 4 -> 8, and alignment inside these structs never exceeds 8,
@@ -727,9 +726,9 @@ def render(sym, section, entries, refs):
 
     # A block that is BOTH pointer-bearing and mixed-width cannot be an array
     # of anything. 24 blocks are like this -- string tables where inline .asciz
-    # data sits next to pointer words (sSoundNames, D_80192F50_ovl3, ...). An
-    # earlier version emitted a void* array with a placeholder for each string,
-    # which lost the string AND shifted every later index, because a 9-byte
+    # data sits next to pointer words (sSoundNames, D_80192F50_ovl3, ...). A
+    # void* array with a placeholder for each string would lose the string AND
+    # shift every later index, because a 9-byte
     # string is not one pointer slot. A packed struct is the only faithful
     # form, and it also beats byte-serialisation for the 41 mixed-width blocks
     # with no pointers, since it keeps the pointers and the values both.
@@ -868,13 +867,12 @@ def render_pointer_run(run, refs):
     and LP64 makes it worse -- the elements are 8 bytes here, so even the
     offsets between the labels are no longer the ROM's.
 
-    src/ovl1/ovl1_2.c:46 is the loop that found it:
+    src/ovl1/ovl1_2.c:46 is such a loop:
 
         for (i = 0; i < 10; i++) {  ...  *D_800BF8F0[i] = 0;  }
 
-    D_800BF8F0[2] read the padding after a one-element object, got NULL, and
-    the port died storing through it -- during scene setup, several frames into
-    a boot that had just started working.
+    Unmerged, D_800BF8F0[2] reads the padding after a one-element object, gets
+    NULL, and the port faults storing through it during scene setup.
 
     So a run of adjacent pointer blocks becomes ONE array, and every label
     after the first becomes a symbol at its offset inside it. C cannot name a
@@ -945,12 +943,12 @@ def main():
     # PRUNE GENERATED FILES WHOSE LISTING NO LONGER EXISTS.
     #
     # This directory is generated but never emptied, so a subsegment RENAME
-    # leaves the old file behind and the port links both. The ovl3 rodata
-    # migration renamed asm/data/ovl3/F7A30 to ovl3/plyshot and split off
-    # ovl3/plyshot_2; the stale ovl3_F7A30.c stayed, and the link died on
-    # eleven "multiple definition of D_801971xx_ovl3" plus a duplicated jump
-    # table. Nothing in the error named F7A30 as stale -- it read as the
-    # migration having emitted a constant twice.
+    # leaves the old file behind and the port links both. Example: renaming
+    # asm/data/ovl3/F7A30 to ovl3/plyshot (splitting off ovl3/plyshot_2)
+    # leaves a stale ovl3_F7A30.c, and the link fails on eleven "multiple
+    # definition of D_801971xx_ovl3" plus a duplicated jump table. Nothing in
+    # the error names F7A30 as stale -- it reads as a constant emitted
+    # twice.
     #
     # A generated .c is live iff the .s it came from is still on disk. Its .o
     # goes with it, or make links the object without ever regenerating it.
@@ -995,8 +993,7 @@ def main():
         if not live:
             live = None
 
-    # NOT-IN-kirby.ld IS NOT THE SAME AS NOT-NEEDED, and conflating the two
-    # cost a whole link.
+    # NOT-IN-kirby.ld IS NOT THE SAME AS NOT-NEEDED.
     #
     # A `.rodata` subsegment written DOTTED in kirby64.yaml
     # (`[0xF7B60, .rodata, ovl3/plyeff]`) belongs to the C file: the N64 build
@@ -1004,12 +1001,12 @@ def main():
     # GLOBAL_ASM pragmas, so there is no `build/asm/data/....o` for it and it
     # never appears in kirby.ld. The native build compiles that same file with
     # plain gcc, which knows nothing about the pragmas, so nothing defines
-    # those symbols at all. Measured: moving ovl3's 0xF7B60 rodata from
-    # plyshot to a dotted plyeff subsegment left `D_80197160_ovl3` -- read by
-    # plyeff.c itself through an `extern f32` -- undefined, and the native
-    # link failed on that one symbol.
+    # those symbols at all. Example: with ovl3's 0xF7B60 rodata in a dotted
+    # plyeff subsegment, `D_80197160_ovl3` -- read by plyeff.c itself through
+    # an `extern f32` -- is left undefined unless that listing is admitted,
+    # and the native link fails on that one symbol.
     #
-    # The stale-duplicate case the `live` filter exists for is still excluded,
+    # The stale-duplicate case the `live` filter exists for is excluded,
     # and by the property that actually distinguishes it: a stale twin's
     # symbols are ALSO defined by the live listing that superseded it. So a
     # non-live listing is admitted only when it defines something nothing else

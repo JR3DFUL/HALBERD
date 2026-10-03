@@ -173,12 +173,11 @@ static bool sInitOk;
  * LUS::ControlDeck::GetPads() returns mPads, and mPads is only ever assigned
  * inside WriteToOSContPad(pad) -- it is a cached copy of whatever pointer the
  * game last handed in, not storage the deck owns. Asking for the pads before
- * ever writing to them therefore returns nullptr forever, which is exactly
- * the loop this backend was once stuck in: GetPads() -> nullptr -> skip the
- * write -> GetPads() still nullptr. Every port reported "no controller", the
- * game's boot check in func_800A3058 found contChannelMap all -1, and it
- * entered scene 4 -- the "no controllers connected" error screen -- instead
- * of the title sequence.
+ * ever writing to them therefore returns nullptr forever: GetPads() ->
+ * nullptr -> skip the write -> GetPads() still nullptr. Every port then
+ * reports "no controller", the game's boot check in func_800A3058 finds
+ * contChannelMap all -1, and it enters scene 4 -- the "no controllers
+ * connected" error screen -- instead of the title sequence.
  *
  * The buffer lives here. WriteToPad() fills it; GetPads() is not used at all.
  * NOTE the element type is the FORK's OSContPad (0x24 bytes, gyro and right
@@ -431,10 +430,10 @@ static bool lus_init(void) {
 
         /* LUS::ControlDeck is the concrete N64 deck (Ship::ControlDeck is
          * abstract; WriteToPad is pure virtual), and it is what turns host
-         * gamepads into OSContPad. The fork's default constructor is now
-         * safe to call before the window exists -- the old fork's
-         * constructor-time ConsoleVariable dereference is gone, and
-         * InitControlDeck only stores the deck. Port-1 default bindings are
+         * gamepads into OSContPad. The fork's default constructor is safe
+         * to call before the window exists -- it has no constructor-time
+         * ConsoleVariable dereference -- and InitControlDeck only stores the
+         * deck. Port-1 default bindings are
          * installed by Init(&bits), called after InitWindow below. */
         sControlDeck = std::make_shared<LUS::ControlDeck>();
         if (!sContext->InitControlDeck(sControlDeck)) {
@@ -820,21 +819,19 @@ void pcb_frame_end(void) {
          * window simply keeps its last presented contents. Before the first
          * frame, keep repainting so the window doesn't look hung at boot.
          *
-         * THE `sFramesDrawn == 0` GUARD IS ON THE WHOLE BLOCK, and moving it
-         * there is what turned a port that looked wedged into one that boots.
-         * It used to guard only the RunGuiOnly fallback, so
-         * PresentCurrentFramebuffer ran on EVERY empty retrace for the whole
+         * THE `sFramesDrawn == 0` GUARD IS ON THE WHOLE BLOCK, and it must
+         * stay there. Guarding only the RunGuiOnly fallback makes
+         * PresentCurrentFramebuffer run on EVERY empty retrace for the whole
          * life of the process -- and an empty retrace is the common case,
          * ~120 of them per second against a game frame every couple of
          * seconds. That call is not cheap: it enters Ship::Gui::StartDraw,
          * where ImGui's SDL2 backend re-enumerates monitors (an
          * XGetWindowProperty round trip), and ends in glXSwapBuffers ->
-         * XSync, another round trip. Sampling the scheduler thread found it
-         * inside that path in two samples out of three, and the game managed
-         * 6 frames in 60 seconds. With the guard where this comment always
-         * said it was, the same run boots through the logos and the opening
-         * movie. Nothing is lost: X11 keeps the last presented contents
-         * without being told again. */
+         * XSync, another round trip. Measured that way, the scheduler thread
+         * was inside that path in two samples out of three and the game drew
+         * 6 frames in 60 seconds; with the guard on the whole block the same
+         * run boots through the logos and the opening movie. Nothing is lost:
+         * X11 keeps the last presented contents without being told again. */
         if (!sWindow->PresentCurrentFramebuffer()) {
             sWindow->RunGuiOnly();
         }

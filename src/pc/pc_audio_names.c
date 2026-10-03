@@ -22,8 +22,8 @@
  * undefined only because the draft spelled them differently.
  *
  * THE REAL FIX IS ONE CHARACTER-FOR-CHARACTER EDIT IN src/main/libn_audio.c,
- * which this lane does not own; it is reported rather than made. These
- * forwarders let the native link close in the meantime, and they are not
+ * in the decomp tree rather than in the port. These forwarders let the
+ * native link close in the meantime, and they are not
  * stubs: each one calls the game's own code and returns what it returns. When
  * the draft is corrected this file stops being referenced and can go.
  *

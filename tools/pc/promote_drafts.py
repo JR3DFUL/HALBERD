@@ -33,7 +33,7 @@ exactly the set that was mis-filed.
 TWO COMPILERS, BOTH REQUIRED
 
   CC_CHECK      gcc -fsyntax-only -m32 ...  the repo's own gate; if a draft
-                fails this, promoting it breaks `make` for every agent.
+                fails this, promoting it breaks `make` for everyone.
   PORT          gcc -m64 -DPORT ...         the port is LP64 and CC_CHECK is
                 not. A draft can pass the 32-bit syntax check and still fail
                 at -m64 (pointer-width casts, mostly).
@@ -45,8 +45,8 @@ Usage:
     promote_drafts.py --apply    move them
     promote_drafts.py --apply --file src/ovl1/ovl1_10.c
 
-Files that are dirty in git are SKIPPED unless --force: other agents edit this
-tree continuously and rewriting a file mid-edit destroys their work.
+Files that are dirty in git are SKIPPED unless --force: a dirty file is
+someone's work in progress, and rewriting it mid-edit destroys that work.
 """
 import glob, os, re, subprocess, sys
 
@@ -87,7 +87,7 @@ def port_supplied():
     longjmp, hand-written in MIPS assembly in the ROM and in x86-64 System V
     assembly in src/pc/pc_setjmp.c. A promoted MIPS-shaped draft of longjmp is
     not merely wrong on x86-64, it is a duplicate definition and the link
-    fails outright -- which is how this was found.
+    fails outright.
 
     Read from the built objects rather than a hand-kept list, so it cannot go
     stale as the platform layer grows.

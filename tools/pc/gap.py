@@ -25,8 +25,8 @@ accounting convenience. Those symbols are not missing from anything: the host
 libc and libm define them, or ld's own script does, or tools/pc/hostmain.c
 does. link_verified() proves it by handing every one of them to a real link
 before the bucket is filled, and anything that fails comes back in a WARNING
-line rather than being quietly excused. Counting them made the port look
-fifty symbols further from a binary than it was.
+line rather than being quietly excused. Counting them would make the port
+look fifty symbols further from a binary than it is.
 
 Usage: gap.py [--list CATEGORY]
 """
@@ -65,7 +65,7 @@ CATS = [
     ('libultra os/io',          r'^(os|__os)'),
     ('audio library',           r'^(al|n_al)'),
     ('gu math',                 r'^gu'),
-    # NOT GAPS, and no longer counted in the headline number. Everything in
+    # NOT GAPS, and not counted in the headline number. Everything in
     # this bucket is supplied by the link itself: the host libc and libm, the
     # symbols ld's own script defines, and tools/pc/hostmain.c's entry point.
     # Every member is PROVED to resolve -- link_verified() links them for real
@@ -86,11 +86,11 @@ CATS = [
 def host_supplied():
     """Symbols the host toolchain resolves at link time, read rather than listed.
 
-    A hand-maintained list was fine while every undefined symbol came from
-    game code. The platform layer under src/pc/ broke that: it calls fopen,
-    getenv, mmap, snprintf, clock_gettime, swapcontext and references stderr,
-    and thirty such names were landing in "libc / other" and being counted as
-    remaining PORTING work. They are not -- the link resolves every one of
+    A hand-maintained list covers only undefined symbols from game code. The
+    platform layer under src/pc/ calls fopen, getenv, mmap, snprintf,
+    clock_gettime, swapcontext and references stderr, and without this some
+    thirty such names land in "libc / other" and are counted as remaining
+    PORTING work. They are not -- the link resolves every one of
     them today.
 
     Three sources, all authoritative rather than guessed:

@@ -60,11 +60,11 @@ extern void func_801DB1E0_ovl11();
  * $a0 untouched, so calling func_801DB200_ovl12 directly is not a substitute
  * for the entry, it IS the entry.
  *
- * The name existed here until kirby64.yaml gained a `pad` subsegment at
- * 0x1EB520 and the guard block came out of src/ovl12/code_1EB520.c, at which
- * point this file was the last reference to it in the whole tree and the port
- * stopped linking. Fill cannot be decompiled and must not be stubbed; the
- * fall-through is the only correct translation. */
+ * kirby64.yaml declares a `pad` subsegment at 0x1EB520 and
+ * src/ovl12/code_1EB520.c has no guard block for it, so nothing defines the
+ * name and a reference to it here would break the link. Fill cannot be
+ * decompiled and must not be stubbed; the fall-through is the only correct
+ * translation. */
 extern void func_801DB200_ovl12(void *);
 extern void func_801DB1E0_ovl13();
 extern void func_801DB1E0_ovl14();

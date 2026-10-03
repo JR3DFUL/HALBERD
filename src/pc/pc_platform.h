@@ -154,10 +154,9 @@ void pc_stub_notice(const char *file, int line, const char *what);
  * ------------------------------------------------------------------------- */
 /* ONE RUNG PER gGameState THROUGH THE ATTRACT LOOP, and that granularity is
  * load-bearing rather than tidy. A single "attract-demo" rung covering states
- * 4, 6 and 8 reported PASS both before and after the fix that carried the
- * port from dying inside demo 2 to completing all three demos and wrapping
- * back to the opening movie -- a ratchet that cannot see the largest single
- * improvement the port has had is not a ratchet. */
+ * 4, 6 and 8 reports PASS both for a port that dies inside demo 2 and for one
+ * that completes all three demos and wraps back to the opening movie -- a
+ * ratchet that cannot see that difference is not a ratchet. */
 #define PC_STAGE_START        0
 #define PC_STAGE_OSINIT       1
 #define PC_STAGE_THREAD       2

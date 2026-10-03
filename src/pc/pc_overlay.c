@@ -9,7 +9,7 @@
  *
  * which expands (include/segments.h) to the nine symbols defined below. The
  * N64 link supplies them from kirby.ld; a native link has no such script, and
- * they were showing up as the "overlay segment bounds" bucket in
+ * without this file they show up as the "overlay segment bounds" bucket in
  * `make -f Makefile.pc gap`.
  *
  * WHY THEY CANNOT SIMPLY BE ZEROED. src/main/dma.c's dma_overlay_load()

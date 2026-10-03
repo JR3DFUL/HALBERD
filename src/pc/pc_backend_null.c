@@ -74,9 +74,9 @@ void pcb_gfx_set_native_ucodes(const void *f3dex2, const void *s2dex2) {
 /* 0: THIS BACKEND RASTERISES NOTHING, and saying so is the whole point of
  * the function. pcb_gfx_run above is empty and src/pc/os_sp.c's osSpTaskLoad
  * prints "no RSP", so a run linked this way reaches whatever milestone the
- * game LOGIC reaches and draws not one pixel on the way. A day of such runs
- * was once reported as rendering progress; this return value is what lets
- * tools/pc/smoke.py refuse to do that again. See pc_backend.h. */
+ * game LOGIC reaches and draws not one pixel on the way. This return value
+ * is what lets tools/pc/smoke.py refuse to report such a run as rendering
+ * progress. See pc_backend.h. */
 int pcb_gfx_stats(unsigned *framesDrawn, unsigned *framesSampled,
                   unsigned *framesNonBlank, unsigned *distinct,
                   unsigned long long *lastHash) {

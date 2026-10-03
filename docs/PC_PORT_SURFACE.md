@@ -24,11 +24,10 @@ symbols. The other 1301 are decompilation work that has to happen anyway.
 
 ## The game's own C already builds natively
 
-All 151 files in `src/` compile with host gcc, today, with no source changes.
-That was worth checking early and the result was better than expected.
+All 151 files in `src/` compile with host gcc.
 
-**The port is 32-bit, and that was measured rather than chosen.** At `-m64`
-three files fail:
+**Pointer width.** At `-m64`, without the three PORT-side changes in
+docs/PC_PORT_ARCHITECTURE.md ("Pointer width: LP64"), three files fail:
 
   * `rdp_reset.c` and `ovl4_1.c` -- `gbi.h` casts a pointer into a 32-bit
     display-list word inside a *static initializer*, which stops being a
@@ -36,11 +35,11 @@ three files fail:
   * `fault.c` -- `va_list` is an array type on x86-64, so `(va_list)ALIGN4(...)`
     is an invalid cast.
 
-At `-m32` all 151 compile clean. ILP32 also keeps every struct layout and every
-pointer-bearing data table bit-identical in shape to the N64's, which is what
-lets the translated data tables link at all. Going 64-bit later means reworking
-segmented addressing and the display-list format -- a real project, and not a
-prerequisite for anything.
+At `-m32` all 151 compile clean with no source changes, and ILP32 keeps every
+struct layout and every pointer-bearing data table bit-identical in shape to
+the N64's. The port is nonetheless LP64 (`Makefile.pc` builds `-m64 -DPORT`),
+because libultraship is a 64-bit library; docs/PC_PORT_LIBULTRASHIP.md, "LP64:
+what actually broke", covers what the wider pointers cost in data layout.
 
 ## The data listings translate mechanically
 
@@ -173,9 +172,8 @@ of porting work with no symbol attached at all: direct `HW_REG()` MMIO from
 game code.
 
 `check_sp_imem` in `src/main/main.c` is `*(volatile u32 *)0xA4001000`. No
-symbol, no relocation, nothing for `gap.py` to report -- and it stayed
-completely invisible until the native boot got far enough to execute it and
-segfault. It was found by running, not by reading.
+symbol, no relocation, nothing for `gap.py` to report -- it is invisible
+until the native boot executes it and segfaults. Only running finds it.
 
 `src/pc/pc_mmio.c` reserves the RCP register window (0xA3F00000-0xA4900000) as
 anonymous memory seeded with the values the boot self-tests expect. That is a
