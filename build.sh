@@ -6,7 +6,8 @@
 # Produces ./out/halberd plus staged assets, then prints the run command.
 # Every stage is idempotent: rerun after a failure and it resumes.
 #
-# STATUS: beta. This encodes the exact chain the development container uses.
+# STATUS: beta. This encodes the exact build chain the port is developed and
+# measured with.
 #
 # The port reaches GAMEPLAY and renders. Driven by the scripted controller
 # (KIRBY_PC_INPUT=walk) it runs logos -> opening movie -> title -> file select
@@ -26,6 +27,10 @@
 #                      only the overlay is copied in, and a checkout that
 #                      already symlinks the overlay back at this tree is left
 #                      exactly as it is.
+#
+# DEPENDENCY PINS. libultraship and Torch are fetched at the commits this port
+# was verified against; the forks' ssb64 branches move, and the Kirby patch is
+# cut against LUS_REF. Override with LUS_REF=<sha> / TORCH_REF=<sha> (full SHA).
 set -euo pipefail
 
 ROM=${1:-baserom.us.z64}
@@ -37,11 +42,25 @@ JOBS=$(nproc)
 
 DECOMP_URL=https://github.com/JR3DFUL/kirby64_decomp
 DECOMP_REF=${DECOMP_REF:-5fb197749d0fefe61769bc1585166a0be9c1869c}
+LUS_URL=https://github.com/JRickey/libultraship
+LUS_REF=${LUS_REF:-cdb279c5550f2fd123bbe0f5d68a45f84ce2587c}
+TORCH_URL=https://github.com/JRickey/Torch
+TORCH_REF=${TORCH_REF:-c3565f1579728d3ab96e99a44ce7646a872d83ff}
 
 msg() { printf '\n== %s ==\n' "$*"; }
 # True when both paths resolve to the same file or directory (symlinks
 # followed). A missing path resolves to itself and so never matches.
 same_path() { [ "$(readlink -f "$1" 2>/dev/null)" = "$(readlink -f "$2" 2>/dev/null)" ]; }
+# pin_checkout DIR URL SHA: make DIR a checkout of SHA, fetching only that
+# commit when it is not already local. Discards local edits in DIR (these
+# clones belong to the script).
+pin_checkout() {
+    [ -d "$1/.git" ] || { mkdir -p "$1"; git -C "$1" init -q; git -C "$1" remote add origin "$2"; }
+    if ! git -C "$1" rev-parse -q --verify "$3^{commit}" >/dev/null 2>&1; then
+        git -C "$1" fetch --depth 1 origin "$3"
+    fi
+    git -C "$1" checkout -q -f --detach "$3"
+}
 
 msg "0/7 ROM check"
 [ -f "$ROM" ] || { echo "ROM not found: $ROM (pass the path as arg 1)"; exit 1; }
@@ -76,15 +95,12 @@ if [ ! -f "$WORK/sdl2-install/lib/libSDL2.so" ]; then
 fi
 
 msg "3/7 libultraship (JRickey ssb64 fork + Kirby patch)"
-if [ ! -d "$WORK/libultraship" ]; then
-    git clone --depth 1 -b ssb64 https://github.com/JRickey/libultraship "$WORK/libultraship"
-fi
-# Re-apply the current patch every run (reset first) so a pulled patch update
-# actually reaches the build; ninja then recompiles only what the patch
-# touched.
-git -C "$WORK/libultraship" checkout -- . 2>/dev/null || true
+# Check out the pinned commit (which also resets the previous patch) and
+# re-apply the current patch every run, so a pulled patch update reaches the
+# build; ninja then recompiles only what changed.
+pin_checkout "$WORK/libultraship" "$LUS_URL" "$LUS_REF"
 git -C "$WORK/libultraship" apply "$ROOT/patches/libultraship-jrickey-kirby.patch" || \
-    { echo "libultraship-jrickey-kirby.patch failed to apply"; exit 1; }
+    { echo "libultraship-jrickey-kirby.patch failed to apply at $LUS_REF"; exit 1; }
 if [ ! -f "$WORK/lus-build/build.ninja" ]; then
     cmake -S "$WORK/libultraship" -B "$WORK/lus-build" -G Ninja -DCMAKE_BUILD_TYPE=Release \
           -DGBI_UCODE=F3DEX_GBI_2 -DLUS_BUILD_TESTS=OFF \
@@ -146,12 +162,10 @@ msg "5/7 game build + link"
 cp "$DECOMP/build/pc/kirby64" "$OUT/halberd"
 
 msg "6/7 assets (Torch o2r + Fast3D shaders)"
-if [ ! -f "$WORK/torch-build/torch" ]; then
-    [ -d "$WORK/torch" ] || git clone --depth 1 -b ssb64 https://github.com/JRickey/Torch "$WORK/torch" \
-        || git clone --depth 1 https://github.com/JR3DFUL/Torch "$WORK/torch"
+pin_checkout "$WORK/torch" "$TORCH_URL" "$TORCH_REF"
+[ -f "$WORK/torch-build/build.ninja" ] || \
     cmake -S "$WORK/torch" -B "$WORK/torch-build" -G Ninja -DCMAKE_BUILD_TYPE=Release
-    ninja -C "$WORK/torch-build" -j"$JOBS" torch
-fi
+ninja -C "$WORK/torch-build" -j"$JOBS" torch
 mkdir -p "$OUT/port/o2r" "$OUT/port/assets/shaders/opengl"
 ( cd "$DECOMP" && "$WORK/torch-build/torch" o2r baserom.us.z64 -s port/yamls -d "$OUT/port/o2r" ) || \
   echo "WARN: torch o2r failed -- nothing in the port reads the archive yet, so the game still runs"
