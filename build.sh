@@ -41,7 +41,7 @@ OUT=$ROOT/out
 JOBS=$(nproc)
 
 DECOMP_URL=https://github.com/JR3DFUL/kirby64_decomp
-DECOMP_REF=${DECOMP_REF:-5f7a932b7d0ecdbd77755b4533d7ce6de9a69865}
+DECOMP_REF=${DECOMP_REF:-84d36018c9c3d1d913bf96bd802ec1966adbd0af}
 LUS_URL=https://github.com/JRickey/libultraship
 LUS_REF=${LUS_REF:-cdb279c5550f2fd123bbe0f5d68a45f84ce2587c}
 TORCH_URL=https://github.com/JRickey/Torch
