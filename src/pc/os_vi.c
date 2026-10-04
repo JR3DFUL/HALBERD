@@ -124,6 +124,8 @@ static void retrace(void) {
      * matter and still move exactly as before: sched.c picks a free buffer by
      * comparing against osViGetCurrentFramebuffer/osViGetNextFramebuffer, and
      * that logic is untouched by whether anything was drawn into them. */
+    /* Off unless KIRBY_PC_AUDIOTEST is set (src/pc/os_ai.c). */
+    pc_ai_selftest_frame();
     if (pcb_has_renderer()) {
         pcb_frame_end();
         pcb_frame_begin();

@@ -109,6 +109,7 @@
 #include <vector>
 
 #include "libultraship/libultraship.h"
+#include <SDL2/SDL.h>
 #include "fast/Fast3dWindow.h"
 #include "libultraship/controller/controldeck/ControlDeck.h"
 
@@ -517,19 +518,13 @@ static bool lus_init(void) {
             throw std::runtime_error("InitWindow failed");
         }
 
-        /* NOTE the frequency mismatch that is NOT resolved yet: the N64 AI
-         * runs at whatever osAiSetFrequency was asked for (Kirby 64 uses
-         * 32000 Hz) and the fork's AudioSettings defaults to 44100. Handing
-         * 32 kHz samples to a 44.1 kHz sink plays everything ~38% fast. This
-         * is left at the default because auThreadMain -- the only caller of
-         * osAiSetNextBuffer -- is still undecompiled, so there is no way to
-         * observe the real rate yet, and guessing it here would be a bug
-         * waiting to be believed. When the audio path lands, set
-         * AudioSettings::SampleRate the way BattleShip does
-         * (port/port.cpp:1007). */
-        if (!sContext->InitAudio(Ship::AudioSettings{})) {
-            throw std::runtime_error("InitAudio failed");
-        }
+        /* The Audio component is NOT created here. Its sample rate is fixed
+         * when it is created (AudioSettings::SampleRate, default 44100), and
+         * the N64 AI plays at whatever osAiSetFrequency asks for, so a sink
+         * opened now at a guessed rate would play the game's samples at the
+         * wrong speed. pcb_audio_init creates it at the game's rate on the
+         * first osAiSetFrequency (src/pc/os_ai.c); nothing in LUS reaches the
+         * Audio component before that. */
 
         if (!sContext->InitGfxDebugger()) {
             throw std::runtime_error("InitGfxDebugger failed");
@@ -907,19 +902,38 @@ void pcb_input_rumble(int port, int on) {
 
 /* --------------------------------------------------------------- audio */
 
+static int sAudioRate;
+
 void pcb_audio_init(int freq) {
-    (void)freq;
-    /* The Audio component is created by InitAudio during lus_init, at the
-     * sample rate in AudioSettings. Nothing to do here; see the rate-mismatch
-     * note at the InitAudio call. */
+    if (!sInitOk || sContext == nullptr || sAudioRate != 0 || freq <= 0) {
+        return;
+    }
+    Ship::AudioSettings settings{};
+    settings.SampleRate = freq;
+    if (!sContext->InitAudio(settings)) {
+        fprintf(stderr, "[lus] audio: InitAudio(%d Hz) failed; no sound\n", freq);
+        return;
+    }
+    sAudioRate = freq;
+    auto player = sContext->GetAudio() != nullptr ? sContext->GetAudio()->GetAudioPlayer() : nullptr;
+    fprintf(stderr, "[lus] audio: opened at %d Hz (%s, SDL driver %s)\n", freq,
+            player != nullptr && player->IsInitialized() ? "device ready" : "no device",
+            SDL_GetCurrentAudioDriver() != nullptr ? SDL_GetCurrentAudioDriver() : "none");
 }
 
 void pcb_audio_set_freq(int freq) {
-    (void)freq;
+    /* LUS fixes the device rate when the Audio component is created and has
+     * no call that reopens it at another one. The game sets the rate once
+     * (auCreatePlayers), so a later change is reported, not applied. */
+    static int sWarned;
+    if (sAudioRate != 0 && freq != sAudioRate && !sWarned) {
+        sWarned = 1;
+        fprintf(stderr, "[lus] audio: rate change %d -> %d Hz not applied\n", sAudioRate, freq);
+    }
 }
 
 void pcb_audio_queue(const void* samples, uint32_t bytes) {
-    if (!sInitOk) {
+    if (!sInitOk || sAudioRate == 0) {
         return;
     }
     /* osAiSetNextBuffer in src/pc/os_ai.c has already byte-swapped the samples
@@ -929,9 +943,13 @@ void pcb_audio_queue(const void* samples, uint32_t bytes) {
 }
 
 uint32_t pcb_audio_queued(void) {
-    if (!sInitOk) {
+    if (!sInitOk || sAudioRate == 0) {
         return 0;
     }
-    int32_t buffered = AudioPlayerBuffered();
-    return buffered > 0 ? (uint32_t)buffered : 0u;
+    /* AudioPlayerBuffered counts sample FRAMES (SDLAudioPlayer::Buffered is
+     * the queued byte count over 2 * channels); the AI's length register,
+     * which this stands in for, counts bytes. */
+    int32_t frames = AudioPlayerBuffered();
+    int32_t channels = GetNumAudioChannels();
+    return frames > 0 ? (uint32_t)frames * 2u * (uint32_t)(channels > 0 ? channels : 2) : 0u;
 }

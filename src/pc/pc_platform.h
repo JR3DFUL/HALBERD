@@ -111,6 +111,7 @@ int pc_quit_requested(void);
  * Per-subsystem host pumping, called from pc_pump_events(). */
 void pc_vi_tick(void);
 void pc_ai_tick(void);
+void pc_ai_selftest_frame(void);
 void pc_pi_tick(void);
 void pc_cont_tick(void);
 void pc_sp_tick(void);

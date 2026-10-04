@@ -20,15 +20,17 @@
  *   makes the thread render as fast as the CPU allows. The queued-bytes count
  *   from the host device stands in for the DMA length register.
  *
- * NOTE ON THE GAP MEASUREMENT: nothing in the tree calls these yet.
+ * NOTE ON THE GAP MEASUREMENT: no game code calls these yet.
  * docs/PC_PORT_SURFACE.md lists "audio sink -- 2", but osAiSetFrequency and
  * osAiSetNextBuffer do not appear in `make -f Makefile.pc gap` output, because
- * their only caller is auThreadMain, which is still undecompiled. They are
- * implemented here anyway -- they will be needed the day it lands, and
- * writing them now costs nothing.
+ * their only game caller is auThreadMain, which is still undecompiled. The
+ * KIRBY_PC_AUDIOTEST tone at the bottom of this file drives them meanwhile.
  */
 #include <ultra64.h>
+#include <math.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "pc/pc_platform.h"
@@ -137,4 +139,70 @@ u32 osAiGetStatus(void) {
         status |= 0x80000000u;
     }
     return status;
+}
+
+/* KIRBY_PC_AUDIOTEST=<tone Hz>: a sine tone pushed through the AI the way
+ * the audio thread will push the synthesizer's output -- osAiSetFrequency
+ * once, then 16-bit stereo BIG-ENDIAN buffers (the byte order the RSP
+ * writes) through osAiSetNextBuffer, paced on osAiGetLength. It exercises
+ * every stage below the synthesizer: the byte swap above, the backend's
+ * device open at the requested rate, and the host device's queue. Off unless
+ * set; KIRBY_PC_AUDIOTEST_RATE picks the AI rate (default 32000). Called once
+ * per retrace from src/pc/os_vi.c. */
+#define AI_TEST_MAX_FRAMES 2048
+
+void pc_ai_selftest_frame(void) {
+    static int sEnabled = -1;
+    static double sTone;
+    static double sPhase;
+    static int sRate;
+    static int sWhich;
+    static u16 sBuf[2][AI_TEST_MAX_FRAMES * 2];
+    u32 frames;
+    u32 i;
+    int n;
+
+    if (sEnabled < 0) {
+        const char *t = getenv("KIRBY_PC_AUDIOTEST");
+        const char *r = getenv("KIRBY_PC_AUDIOTEST_RATE");
+
+        sEnabled = (t != NULL && atof(t) > 0.0);
+        if (!sEnabled) {
+            return;
+        }
+        sTone = atof(t);
+        sRate = (r != NULL && atoi(r) > 0) ? atoi(r) : 32000;
+        osAiSetFrequency((u32)sRate);
+        fprintf(stderr, "[aitest] %.1f Hz tone at an AI rate of %d Hz\n", sTone, sRate);
+    }
+    if (!sEnabled) {
+        return;
+    }
+    /* One retrace's worth of samples, rounded up to 16 frames as the audio
+     * library sizes its buffers; keep about three retraces queued. */
+    frames = (u32)((sRate + 59) / 60 + 15) & ~15u;
+    if (frames > AI_TEST_MAX_FRAMES) {
+        frames = AI_TEST_MAX_FRAMES;
+    }
+    /* At most four buffers per retrace: a sink whose queue does not grow
+     * must not turn this into a loop with no OS call in it. */
+    for (n = 0; n < 4 && osAiGetLength() < frames * 4 * 3; n++) {
+        u16 *b = sBuf[sWhich];
+
+        sWhich ^= 1;
+        for (i = 0; i < frames; i++) {
+            s16 v = (s16)(8000.0 * sin(sPhase));
+            u16 be = (u16)(((u16)v >> 8) | ((u16)v << 8));
+
+            b[2 * i] = be;
+            b[2 * i + 1] = be;
+            sPhase += 2.0 * 3.14159265358979323846 * sTone / (double)sRate;
+            if (sPhase > 2.0 * 3.14159265358979323846) {
+                sPhase -= 2.0 * 3.14159265358979323846;
+            }
+        }
+        if (osAiSetNextBuffer(b, frames * 4) != 0) {
+            break;
+        }
+    }
 }
