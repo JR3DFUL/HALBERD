@@ -627,6 +627,14 @@ SUPPRESS_BSS = {
 # {id, effect} pairs from D_80196848+4) stay contiguous on PC.
 FUSE_INTO = {
     'D_8019684C_ovl3': 'D_80196848_ovl3',
+    # func_801DF52C_ovl15 (matched) ends with
+    # `gEntityFuncListIDArray[id] = D_801E65FC_ovl15[cell]` where the
+    # cell is whatever the phase-1 picker func_801DD7C8_ovl15 left, 0..8,
+    # and only 0..5 are switch cases. The six-word table's [6..8] are
+    # D_801E6614_ovl15[0..2] (state ids 2, 4, 2) on the N64; as separate
+    # objects the host's 16-byte array alignment puts [6..8] in padding
+    # and the boss's next state reads as 0, the intro drop.
+    'D_801E6614_ovl15': 'D_801E65FC_ovl15',
 }
 
 
