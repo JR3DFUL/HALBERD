@@ -71,7 +71,8 @@ The `play` route jumps, inhales, crouches and stands up again, and then
 stops on a SIGSEGV at its next jump (an enemy's collision test against an
 effect shape whose joint was never bound; the cause is in
 `src/ovl3/plyeff.c`, see the docs). Not working: audio (a stand-in thread;
-nothing plays); the analog stick does not move the player (the ROM's own
+nothing plays; the output path below the synthesizer is measured with a
+test tone, `KIRBY_PC_AUDIOTEST`); the analog stick does not move the player (the ROM's own
 behaviour -- use the D-pad); and a number of game-side functions carry
 behavioural (non-matching) PORT implementations pending genuine matches.
 `docs/PC_PORT_LIBULTRASHIP.md` carries the verdict lines and what is behind

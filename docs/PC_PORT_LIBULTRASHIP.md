@@ -20,6 +20,7 @@ This is a status document, not a plan. Everything asserted here was run.
     KIRBY_PC_BGDEBUG_FROM=<frame>    CI4/TLUT decode peeks from that task-frame on
     KIRBY_PC_TEXCENSUS=1             one line per texture import, upload and skipped SETTIMG
     KIRBY_PC_DRAWLOG=<lo>:<hi>       every draw and texture load for task-frames lo..hi
+    KIRBY_PC_AUDIOTEST=<Hz>          a sine tone through osAiSetFrequency/osAiSetNextBuffer
     python3 tools/pc/smoke.py ...    run it and print one [verdict] line
 
 ## The state in one paragraph
@@ -80,7 +81,9 @@ means any clock derived from the count register runs eight times faster than
 the level — see the `play` entry under "What does not work".
 
 Audio is absent: `src/pc/pc_audio_thread.c` stands in for `auThreadMain`,
-posts the init message and consumes the audio flags, and plays nothing.
+posts the init message and consumes the audio flags, and plays nothing; the
+output path below the synthesizer is measured with a test tone (see "What
+does not work").
 
 ## How LUS's main loop and the game's scheduler were reconciled
 
@@ -571,17 +574,74 @@ survives with two alternating threads and crashes with eight.
   `func_80168408_ovl3` (host-slot view as in `func_8011D4A4`, type decoded
   with `>> 24`).
 
-* **Audio is absent.** `src/pc/pc_audio_thread.c` stands in for
-  `auThreadMain`: it posts the init message and consumes the audio flags, and
-  that is all. What remains on this path is the audio-library call surface:
-  the first `au*` call dereferences the null sequence players that
-  `auCreatePlayers` (still a pragma) would have built. Guarding that surface
-  is porting work; implementing it is decompilation work.
-* **Audio is wired but never exercised.** `pcb_audio_queue` calls
-  `AudioPlayerPlayFrame`; nothing calls it, because `osAiSetNextBuffer`'s only
-  caller is `auThreadMain`. There is also a **known rate mismatch**: the N64 AI
-  runs at whatever `osAiSetFrequency` was asked for and LUS's `AudioSettings`
-  defaults to 44100. It is deliberately not "fixed" by guessing.
+* **Audio: nothing plays yet; the output path below the synthesizer is
+  measured.** `src/pc/pc_audio_thread.c` stands in for `auThreadMain`: it
+  posts the init message, consumes the audio flags and gives the BGM API
+  zeroed players, so no command list is built and no sample reaches the AI.
+
+  *What is measured.* `KIRBY_PC_AUDIOTEST=<Hz>` (`src/pc/os_ai.c`) feeds a
+  sine tone through the AI the way the audio thread will: one
+  `osAiSetFrequency` (`KIRBY_PC_AUDIOTEST_RATE`, default 32000), then 16-bit
+  stereo big-endian buffers through `osAiSetNextBuffer`, paced on
+  `osAiGetLength`, once per retrace. With SDL's disk driver
+  (`SDL_AUDIODRIVER=disk SDL_DISKAUDIOFILE=<file>`, `Window.AudioBackend`
+  set to `sdl`) a 20 s run on 2026-10-04 logged
+  `[lus] audio: opened at 32000 Hz (device ready, SDL driver disk)` and wrote
+  2,490,368 bytes: 19.46 s of 32 kHz stereo, both channels equal, peaks
+  +/-8000, 38,695 zero crossings, i.e. a 996 Hz tone for the 1000 Hz asked
+  (two underruns account for the difference: 11 ms at 0.12 s and 65 ms at
+  5.28 s, during scene loads). Two sink bugs were found this way and are
+  fixed in `src/pc/pc_backend_lus.cpp`:
+
+  1. *Rate.* The Audio component was created at startup with LUS's default
+     44100 Hz, which would play the game's 32 kHz output 38% fast. It is now
+     created on the first `osAiSetFrequency`, at that rate; LUS cannot
+     reopen a device at another rate, so a later change is logged and not
+     applied (the game sets it once, in `auCreatePlayers`).
+  2. *Units.* `AudioPlayerBuffered()` counts sample frames and
+     `osAiGetLength` counts bytes; `pcb_audio_queued` returned the frame
+     count, so the AI under-reported what was queued four times over. The
+     test's fill loop, waiting for the queue to reach three retraces of
+     bytes, never saw it (`SDLAudioPlayer` drops buffers past 6000 queued
+     frames) and spun without an OS call, wedging the cooperative scheduler
+     at the first retrace.
+
+  LUS writes `"Window.AudioBackend": "null"` into `halberd.cfg.json` the
+  first time it cannot open an SDL device (here: no audio device under
+  Xvfb), and every later run uses the null player until it is set back to
+  `"sdl"`.
+
+  *What remains, in order.*
+
+  1. **Decompilation: `auCreatePlayers`, `auThreadMain`, `func_800234F4`.**
+     `auCreatePlayers` (352-line listing) carves the players and the per-sound
+     arrays out of `auHeap`, calls `n_alInit` and sets the AI rate; of its
+     callees only `func_800234F4` (a `libn_audio.c` pragma) is missing from the
+     port binary. `auThreadMain` (760-line listing) calls `auCreatePlayers`
+     three times and 20 other functions, every one of which is defined in the
+     port binary (`nm`). `pc_audio_thread.c` goes when they land.
+  2. **The audio assets at LP64.** `auLoadAssets`' compiled arm hands the raw
+     big-endian bank and sequence files to `alBnkfNew`/`alSeqFileNew`
+     (`src/main/audio.c`), which turn 4-byte offsets into pointers in place --
+     in `ALBankFile`, `ALBank`, `ALInstrument`, `ALSound`, `ALWaveTable` and
+     `ALSeqFile`, whose pointer fields are 8 bytes on the host. This needs a
+     widening loader of the kind `func_800A94F4`'s PORT arm is for animation
+     blocks (host-layout copy, scalars byte-swapped, offsets rewritten as
+     pointers).
+  3. **The n_audio microcode.** `osSpTaskStartGo` completes an `M_AUDTASK`
+     without running it (`src/pc/os_sp.c`). The task's command list is host
+     `Acmd` (two `uintptr_t` per command, `include/PR/abi.h`) in the
+     `n_abi.h` command set (`libreultra/src/libnaudio/n_abi.h`: ADPCM decode,
+     pole filter, envelope mixer, interleave, load/save buffer, resample, set
+     volume, load ADPCM book, plus the standard clear/move/loop commands).
+     libultraship provides no microcode HLE; one has to be written. Its output
+     must match the AI's byte order: `osAiSetNextBuffer` swaps from
+     big-endian, so either the HLE writes big-endian samples as the RSP does
+     or the swap goes.
+  4. `alAudioFrame` stores its output pointer as `n_syn->sv_dramout =
+     (s32) lOutBuf`, which holds only while the buffer is below 2 GiB (the
+     game's arena is).
+
 * **Input is wired but never exercised**, for the same reason. Rumble is
   unimplemented rather than faked.
 * **Controller remappings may not persist.** Ship::Window and Ship::ControlDeck
