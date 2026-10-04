@@ -59,19 +59,23 @@ If your dump does not match the hash, it will not build.
 ## Current state
 
 Measured 2026-10-04 (Mesa llvmpipe under Xvfb, no GPU, 4 cores shared with
-other jobs at a load average of about 8). Driven by the scripted controller
+other jobs at a load average of about 7). Driven by the scripted controller
 (`KIRBY_PC_INPUT=walk`) the port boots through the logos, opening movie,
 title screen, file select (saves persist to `kirby64.eep`), galaxy map and
-planet map into world 1-1 and reaches gameplay at 52 s of a 240 s run; the
+planet map into world 1-1 and reaches gameplay at 39 s of a 240 s run; the
 level, its sky, HUD, Kirby (with his face) and enemies render
-(`render=raster`, 14468 frames drawn, 1791 of 1808 sampled frames
+(`render=raster`, 18688 frames drawn, 2317 of 2336 sampled frames
 non-blank), the player walks to the first ledge, and the run ends without a
 fault. Characters' faces draw in the opening movie and on the title screen.
-Not working: audio (a stand-in thread; nothing plays); the analog stick does
-not move the player (the ROM's own behaviour -- use the D-pad); and a number
-of game-side functions carry behavioural (non-matching) PORT implementations
-pending genuine matches. `docs/PC_PORT_LIBULTRASHIP.md` carries the verdict
-lines and what is behind each item.
+The `play` route jumps, inhales, crouches and stands up again, and then
+stops on a SIGSEGV at its next jump (an enemy's collision test against an
+effect shape whose joint was never bound; the cause is in
+`src/ovl3/plyeff.c`, see the docs). Not working: audio (a stand-in thread;
+nothing plays); the analog stick does not move the player (the ROM's own
+behaviour -- use the D-pad); and a number of game-side functions carry
+behavioural (non-matching) PORT implementations pending genuine matches.
+`docs/PC_PORT_LIBULTRASHIP.md` carries the verdict lines and what is behind
+each item.
 
 ## Relationship to the decomp
 

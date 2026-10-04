@@ -42,11 +42,12 @@ with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
     smoke: PASS -- reached gameplay, which is the recorded high-water mark
 
 The same command with `--timeout 240` on 2026-10-04, on 4 cores shared with
-other jobs (load average about 8), with the face fixes below:
+other jobs (load average about 7), with the face and `gKirbyState` fixes
+below:
 
-    [verdict] outcome=interrupted stage=gameplay stage_at=52.16 elapsed=240.10
-              gamestate=15 frames=10785 route=0>1>2>3>10>11>12>15 render=raster
-              drawn=14468 sampled=1808 nonblank=1791 distinct=1737
+    [verdict] outcome=interrupted stage=gameplay stage_at=39.14 elapsed=240.11
+              gamestate=15 frames=15004 route=0>1>2>3>10>11>12>15 render=raster
+              drawn=18688 sampled=2336 nonblank=2317 distinct=2265
 
 The route is logos, opening movie, title, file select, galaxy map (where
 `walk` answers the world 1-1 cutscene prompt with D-LEFT then A, so state 14
@@ -517,40 +518,59 @@ survives with two alternating threads and crashes with eight.
   ~125 wall seconds at `KIRBY_PC_TIMESCALE=8`, so `kPlayProgram`'s walk cue
   holds for `360000`.
 
-* **`play` keeps time in simulated frames, and its route ends in player
-  action 14.** The cue times in `src/pc/pc_input_script.c` are game seconds,
-  counted by an accumulator over `gtlDrawnFrameCounter` (`src/main/gtl.c`:
-  one bump per drawn frame, zeroed at scene setup, which the accumulator
-  absorbs). The count register is not used as the clock because
-  `KIRBY_PC_TIMESCALE` scales it while nothing scales the simulation: on
-  llvmpipe at timescale 8 the register runs 8x while the game draws 57.5
-  frames/s, so register-timed cues fire eight times earlier in the level than
-  written (the `g52` B cue lands at `x = -1943.47`, before the ledge, and
-  Kirby stands in action 14 with `vel = 0.0000` for the remaining 190 s of a
-  240 s run). With the frame clock, same program and machine:
+* **`play` keeps time in simulated frames.** The cue times in
+  `src/pc/pc_input_script.c` are game seconds, counted by an accumulator
+  over `gtlDrawnFrameCounter` (`src/main/gtl.c`: one bump per drawn frame,
+  zeroed at scene setup, which the accumulator absorbs). The count register
+  is not used as the clock because `KIRBY_PC_TIMESCALE` scales it while
+  nothing scales the simulation: on llvmpipe at timescale 8 the register
+  runs 8x while the game draws 57.5 frames/s, so register-timed cues fire
+  eight times earlier in the level than written.
 
-      [verdict] outcome=interrupted stage=gameplay stage_at=28.76 elapsed=240.01
-                gamestate=15 frames=7614 route=0>1>2>3>10>11>12>15 render=raster
-                drawn=14656 sampled=1832 nonblank=1768 distinct=792
+* **Action 14 is the crouch, and a D-DOWN press left Kirby in it for good:
+  `gKirbyState` was split into 24 objects (fixed).** Holding D-DOWN calls
+  `set_kirby_action_1(9, 0xE)`; start function 9 (`func_8016FD88_ovl3`)
+  waits for D-DOWN to be released, plays the stand-up animation and signals
+  the per-frame crouch tick (`func_8016FFF8_ovl3`) by incrementing
+  `*(s32 *)((u8 *)&D_8012E7E8 + 8)`, which on the N64 is
+  `gKirbyState.unk30`; the tick returns Kirby to action 1 once `unk30` is
+  non-zero. `gen_data.py` emitted `gKirbyState` (0x8012E7C0, 0x204 bytes)
+  as a 10-byte object and each of its 23 interior labels as an object of
+  its own, so the start function wrote one variable and the tick read
+  another. `[playerpos]` with `play`: `held=0500 action=14 vel=0.0000` at
+  the g57 `DDOWN+SD` cue, then `held=0100 action=14` for every sample to the end
+  of the run (32 s). `gKirbyState` is now whole in `src/pc/pc_bss_whole.c` at the
+  LP64 layout of `struct Player` (528 bytes; its one pointer, `unk114`,
+  moves every later field up by 8), with each label aliased on the field it
+  names. Same route after the fix: `held=0500 action=14` at the cue, then
+  `held=0100 action=3 vel=5.0000` one second later, walking. The script was
+  never driving an invalid sequence; the `walk` route presses no D-DOWN and
+  never reached the crouch.
 
-  Kirby is over the ledge at +38.8 s (`x = 41.57 y = 98.10 node = 4
-  action = 6`), falls at +58.8 s (`y = -3774.32`), respawns at node 0
-  (`x = -2912.42`), and from +78.8 s to the end of the run reads
-  `x = -2629.92 y = -1.90 vel = 0.0000 action = 14 held = 0100`. Action 14 is
-  entered by `func_801727D8_ovl3` (`src/ovl3/kirby.c`), which sets it, stores
-  an upward speed of 9.0 and a gravity of -0.980665 into the player's motion
-  slots and parks its coroutine; its per-frame entry
-  (`D_80196AE8_ovl3[14] = func_80172A3C_ovl3`) hops to action 6 as soon as
-  `gKirbyState.unk30` is non-zero, which the start function has just made
-  it. Neither the stored speed (y never leaves -1.90) nor the hop happens
-  here, so the player's per-frame tick is not running in that state, or
-  `set_kirby_action_1(6, 6)` does not take. The `[input]` log for the run
-  above puts the B cue at frame-clock +113.38 s (g52 exactly), a sample
-  with Kirby still walking (action 3) after it, then `DDOWN+SD` (g57) and
-  the START pause/unpause pair (g62, g68), and action 14 at the next sample;
-  which of those three enters it was not isolated. Not traced further;
-  `src/ovl3/kirby.c` is still being decompiled. The `walk`
-  route presses none of them and never hits it.
+* **`play` now stops on a SIGSEGV at its first jump after the crouch, in
+  `func_8010E5B0` (`src/ovl2/ovl2_8.c:137`), and the cause is in
+  `src/ovl3/plyeff.c`.** Backtrace: `func_8010E5B0` <- `func_8010E740` <-
+  `func_8010FC30` <- `func_80110FD4` <- `func_8019F650_ovl7` <-
+  `func_801F6C00_ovl9`: an enemy tests its shapes against Kirby's effect
+  shapes and one of those (capsule `(0,180,50)-(0,180,-50)`, ROM table
+  `D_80190F08_ovl3`, registered through `func_8016854C_ovl3` with
+  `D_80190F2C_ovl3`) still carries joint word 0, which `func_8010E740`
+  dereferences as a `DObj`. Joint 0 in the ROM data means "bind to the DObj
+  the caller passes", and `func_80168408_ovl3` does that binding -- reading
+  the `PlySlot` that `func_80111A04` returns at N64 offsets (`unk1C` at
+  0x1C, `unk20` at 0x20) where the LP64 slot has them at 40 and 48 (the
+  layout `func_8011D4A4`'s PORT arm in `plylib.c` already uses), and the
+  shape type as a byte at +4 where the PC data keeps it in bits 24-31 of the
+  head word. So the loop runs over a count read from padding and the joint
+  is never bound. Measured with a gdb breakpoint on `func_80111C4C` called
+  from `func_8016854C_ovl3`, six registrations in a `play` run: the slot's
+  shape count reads 1 at LP64 +40 and 0 at the N64 view's +0x1C, and the
+  one shape is `0x02000000` with joint 0 after the call every time. The crash is not new: the binary without the
+  `gKirbyState` fix, driven by `play` minus its `g57:DDOWN+SD` cue, takes
+  the same SIGSEGV at the same frame. The fix belongs in a PORT arm of
+  `func_80168408_ovl3` (host-slot view as in `func_8011D4A4`, type decoded
+  with `>> 24`).
+
 * **Audio is absent.** `src/pc/pc_audio_thread.c` stands in for
   `auThreadMain`: it posts the init message and consumes the audio flags, and
   that is all. What remains on this path is the audio-library call surface:
