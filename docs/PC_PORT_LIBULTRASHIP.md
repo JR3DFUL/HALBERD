@@ -18,6 +18,8 @@ This is a status document, not a plan. Everything asserted here was run.
     KIRBY_PC_PLAYERPOS=10            print the player's position every 10 s in-level
     KIRBY_PC_SKYDEBUG=1              skybox layers: placement, scale, camera parallax
     KIRBY_PC_BGDEBUG_FROM=<frame>    CI4/TLUT decode peeks from that task-frame on
+    KIRBY_PC_TEXCENSUS=1             one line per texture import, upload and skipped SETTIMG
+    KIRBY_PC_DRAWLOG=<lo>:<hi>       every draw and texture load for task-frames lo..hi
     python3 tools/pc/smoke.py ...    run it and print one [verdict] line
 
 ## The state in one paragraph
@@ -39,6 +41,13 @@ with Mesa llvmpipe under Xvfb (no GPU), fork `JRickey/libultraship` branch
     smoke: 15586 frame(s) rasterised, 1948 sampled, 1931 non-blank, 1877 distinct
     smoke: PASS -- reached gameplay, which is the recorded high-water mark
 
+The same command with `--timeout 240` on 2026-10-04, on 4 cores shared with
+other jobs (load average about 8), with the face fixes below:
+
+    [verdict] outcome=interrupted stage=gameplay stage_at=52.16 elapsed=240.10
+              gamestate=15 frames=10785 route=0>1>2>3>10>11>12>15 render=raster
+              drawn=14468 sampled=1808 nonblank=1791 distinct=1737
+
 The route is logos, opening movie, title, file select, galaxy map (where
 `walk` answers the world 1-1 cutscene prompt with D-LEFT then A, so state 14
 is not on the route), planet map, and gameplay at 44 s wall. `[playerpos]`
@@ -58,9 +67,9 @@ the unattended check prints FAIL on llvmpipe.
 those runs): the opening movie, the title screen, and world 1-1 with the HUD
 (lives, health bar, shard counter), Kirby, a Waddle Dee, the checkered blocks,
 fences and flowers, and the world 1-1 sky: the cyan
-gradient, a cloud and the light-green hill band at the horizon. **What they
-show wrong:** Ribbon's face in the opening movie is a noise-pattern texture.
-Nothing else was checked against hardware.
+gradient, a cloud and the light-green hill band at the horizon; characters
+draw their faces (title screen, opening movie, world 1-1). Nothing was
+checked against hardware.
 
 **Speed.** `KIRBY_PC_TIMESCALE=8` scales the count register eightfold, but
 nothing scales the rate at which frames are simulated, and on llvmpipe that
@@ -631,12 +640,42 @@ survives with two alternating threads and crashes with eight.
      4-bit image is 0 for the same reason (`width * siz` with `siz` an enum);
      the patch computes `((texels << siz) / 2 + 7) / 8`.
 
-  Still wrong in the same family: Ribbon's face in the opening movie is a
-  noise-pattern texture, and Kirby's own face texture is absent in-level
-  (flat pink body). Neither is traced; `KIRBY_PC_TEXCENSUS=1` also prints
-  one `[dlog import]` line per `ImportTexture` call (format, size, TLUT mode,
-  palette, tile, bytes), which is where a 0-byte load like the one above
-  shows up.
+* **Character faces draw only with two fixes (decomp PORT arm and patch).**
+  Faces, eyes and other animated materials are MObj textures: each frame
+  `renderLoadTextures` (`src/main/render.c`) builds one small list per
+  material (texture image, TLUT, tile size), points segment `0xE` at them,
+  and the model calls them as `gsSPDisplayList(0x0E000000 + 8 * i)`.
+  Without the two fixes Kirby has no face (title screen, attract demo,
+  world 1-1), his body is green with stripes in the world 1-1 intro
+  cutscene, and Waddle Dee's, Adeleine's and Ribbon's faces are striped
+  noise; with them all of these draw their faces (title screen, opening
+  movie, cutscene and level captures, 2026-10-04).
+
+  1. **The model-DL widening pass dropped the call.** `func_800A9250`'s
+     PORT arm (`src/ovl1/ovl1_3.c`) rebuilds a model's packed display
+     lists as 16-byte host commands and only followed segment-4 `G_DL`
+     targets; a call to `0x0E000000` became `G_SPNOOP`. The model then
+     loaded its face from whatever `SETTIMG` came before, which is the
+     TLUT's own address. `KIRBY_PC_DRAWLOG` shows it:
+     `settimg fmt=0 siz=2 addr=X`, `loadtlut src=X`, `loadblock src=X`.
+     The pass now keeps a call into a runtime segment (1..15, not 4)
+     segmented, as the RSP would; the fork's `G_DL` handler already maps a
+     segment-`0xE` byte offset onto the 16-byte host stride.
+  2. **The fork's `SETTIMG` guard skipped every texture below 256 MB that
+     is not inside a `dlopen`'d module.** The material texture tables point
+     into the game's arena in the executable's own bss (for example
+     `0x1755000`), so every one of those loads was dropped and the
+     previous texture stayed bound. The patch accepts an 8-byte-aligned
+     pointer inside the main image (extent read once from the program
+     headers); a stale segmented value outside the image is still skipped.
+     `KIRBY_PC_TEXCENSUS=1` prints one `[dlog settimg-skip]` line per
+     dropped load: 698 in a 33 s unattended run before, 0 in a 36 s run after.
+
+  `KIRBY_PC_DRAWLOG=<lo>:<hi>` logs every `SETTIMG`, `SETTILE`,
+  `LOADBLOCK` and `LOADTLUT` with its source address, next to the draws, for
+  task-frames `lo..hi`. `KIRBY_PC_TEXCENSUS=1` prints one `[dlog import]`
+  line per `ImportTexture` call (format, size, TLUT mode, palette, tile,
+  bytes) and one `[dlog tex]` line per upload.
 
 ## Building libultraship here
 
