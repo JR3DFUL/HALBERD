@@ -11,10 +11,73 @@ index 4e81ca7..4c5312d 100644
      void AdjustWidthHeightForScale(uint32_t& width, uint32_t& height, uint32_t nativeWidth,
                                     uint32_t nativeHeight) const;
 diff --git a/src/fast/interpreter.cpp b/src/fast/interpreter.cpp
-index 6aad126..9a4a928 100644
+index 6aad126..2dc3e13 100644
 --- a/src/fast/interpreter.cpp
 +++ b/src/fast/interpreter.cpp
-@@ -1463,6 +1463,45 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
+@@ -4,6 +4,7 @@
+ #include <windows.h>
+ #else
+ #include <dlfcn.h>
++#include <link.h>
+ #endif
+ 
+ #include <math.h>
+@@ -332,6 +333,54 @@ bool gfxPointerInLoadedModule(const void* ptr) {
+ #endif
+ }
+ 
++// Kirby port: is ptr inside the main executable's own image (its data or
++// bss)? The non-PIE game's arena and statics live there, below 256 MB. The
++// image's extent is read once from the program headers, so the per-command
++// test is two compares (dladdr walks the symbol table on every call).
++#ifndef _WIN32
++static int gfxMainImageExtentCb(struct dl_phdr_info* info, size_t, void* data) {
++    uintptr_t* ext = static_cast<uintptr_t*>(data);
++    for (int i = 0; i < info->dlpi_phnum; i++) {
++        const ElfW(Phdr)& ph = info->dlpi_phdr[i];
++        if (ph.p_type != PT_LOAD) {
++            continue;
++        }
++        uintptr_t lo = info->dlpi_addr + ph.p_vaddr;
++        uintptr_t hi = lo + ph.p_memsz;
++        if (ext[0] == 0 || lo < ext[0]) {
++            ext[0] = lo;
++        }
++        if (hi > ext[1]) {
++            ext[1] = hi;
++        }
++    }
++    return 1; // the first object reported is the main program
++}
++#endif
++
++bool gfxPointerInMainImage(const void* ptr) {
++    if (ptr == nullptr) {
++        return false;
++    }
++#ifdef _WIN32
++    HMODULE mod = nullptr;
++    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
++                           reinterpret_cast<LPCSTR>(ptr), &mod) == 0) {
++        return false;
++    }
++    return mod != nullptr && mod == GetModuleHandleA(nullptr);
++#else
++    static uintptr_t sExtent[2] = { 0, 0 };
++    static bool sInit = false;
++    if (!sInit) {
++        sInit = true;
++        dl_iterate_phdr(gfxMainImageExtentCb, sExtent);
++    }
++    uintptr_t p = reinterpret_cast<uintptr_t>(ptr);
++    return p >= sExtent[0] && p < sExtent[1];
++#endif
++}
++
+ bool gfxPointerHasReadableBytes(const void* ptr, size_t size) {
+     if (ptr == nullptr || size == 0) {
+         return false;
+@@ -1463,6 +1512,46 @@ static void Ssb64RenderDiagLogDraw(const RawTexMetadata* metadata, const void* a
          rawVMin, rawVMax, normUMin, normUMax, normVMin, normVMax, x0, y0, z0, w0, x1, y1, z1, w1, x2, y2, z2, w2);
  }
  
@@ -25,6 +88,7 @@ index 6aad126..9a4a928 100644
 +// from that frame on (a per-site budget of lines), so a level's own loads can be read instead of
 +// the boot screens' exhausting the count.
 +extern int gKirbyPcFrameNo;
++bool gKirbyPcDrawLogActive();
 +static bool kirbyBgDebugFrame(int& budget) {
 +    static long from = -2;
 +    if (from == -2) {
@@ -60,7 +124,7 @@ index 6aad126..9a4a928 100644
  void Interpreter::ImportTextureRgba16(int tile, bool importReplacement) {
      const RawTexMetadata* metadata = &mRdp->loaded_texture[mRdp->texture_tile[tile].tmem_index].raw_tex_metadata;
      const uint8_t* addr =
-@@ -1561,6 +1600,7 @@ void Interpreter::ImportTextureRgba16(int tile, bool importReplacement) {
+@@ -1561,6 +1650,7 @@ void Interpreter::ImportTextureRgba16(int tile, bool importReplacement) {
              }
          }
      }
@@ -68,7 +132,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1628,6 +1668,7 @@ void Interpreter::ImportTextureRgba32(int tile, bool importReplacement) {
+@@ -1628,6 +1718,7 @@ void Interpreter::ImportTextureRgba32(int tile, bool importReplacement) {
              }
          }
      }
@@ -76,7 +140,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1696,6 +1737,7 @@ void Interpreter::ImportTextureIA4(int tile, bool importReplacement) {
+@@ -1696,6 +1787,7 @@ void Interpreter::ImportTextureIA4(int tile, bool importReplacement) {
              }
          }
      }
@@ -84,7 +148,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1753,6 +1795,7 @@ void Interpreter::ImportTextureIA8(int tile, bool importReplacement) {
+@@ -1753,6 +1845,7 @@ void Interpreter::ImportTextureIA8(int tile, bool importReplacement) {
              }
          }
      }
@@ -92,7 +156,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1815,6 +1858,7 @@ void Interpreter::ImportTextureIA16(int tile, bool importReplacement) {
+@@ -1815,6 +1908,7 @@ void Interpreter::ImportTextureIA16(int tile, bool importReplacement) {
              }
          }
      }
@@ -100,7 +164,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1882,6 +1926,7 @@ void Interpreter::ImportTextureI4(int tile, bool importReplacement) {
+@@ -1882,6 +1976,7 @@ void Interpreter::ImportTextureI4(int tile, bool importReplacement) {
              }
          }
      }
@@ -108,7 +172,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1934,6 +1979,7 @@ void Interpreter::ImportTextureI8(int tile, bool importReplacement) {
+@@ -1934,6 +2029,7 @@ void Interpreter::ImportTextureI8(int tile, bool importReplacement) {
              }
          }
      }
@@ -116,7 +180,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -1975,6 +2021,24 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
+@@ -1975,6 +2071,24 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
      uint32_t width = resultLineSizeBytes * 2;
      uint32_t height = resultLineSizeBytes > 0 ? sizeBytes / resultLineSizeBytes : 0;
  
@@ -141,7 +205,7 @@ index 6aad126..9a4a928 100644
      // Clamp to tile dimensions from SetTileSize
      uint32_t tile_w = (uint32_t)((mRdp->texture_tile[tile].lrs - mRdp->texture_tile[tile].uls + 4) / 4);
      uint32_t tile_h = (uint32_t)((mRdp->texture_tile[tile].lrt - mRdp->texture_tile[tile].ult + 4) / 4);
-@@ -2044,6 +2108,7 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
+@@ -2044,6 +2158,7 @@ void Interpreter::ImportTextureCi4(int tile, bool importReplacement) {
              }
          }
      }
@@ -149,7 +213,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -2139,6 +2204,32 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
+@@ -2139,6 +2254,32 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
          }
      }
  
@@ -182,7 +246,7 @@ index 6aad126..9a4a928 100644
      Ssb64RenderDiagLogUpload("CI8", metadata, addr, tile, mRdp->texture_tile[tile].tmem_index, width, height);
      if (!importReplacement) {
          if (GfxHiResHookFn hook = gHiResHook) {
-@@ -2152,6 +2243,7 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
+@@ -2152,6 +2293,7 @@ void Interpreter::ImportTextureCi8(int tile, bool importReplacement) {
              }
          }
      }
@@ -190,7 +254,7 @@ index 6aad126..9a4a928 100644
      mRapi->UploadTexture(mTexUploadBuffer, width, height);
  }
  
-@@ -2417,6 +2509,14 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
+@@ -2417,6 +2559,14 @@ void Interpreter::ImportTexture(int i, int tile, bool importReplacement) {
                               mRdp->texture_tile[tile].ult, mRdp->texture_tile[tile].lrs, mRdp->texture_tile[tile].lrt,
                               importReplacement);
  
@@ -205,7 +269,7 @@ index 6aad126..9a4a928 100644
      if (TextureCacheLookup(i, key)) {
          Ssb64RenderDiagLogImport("cache-hit", metadata, origAddr, i, tile, tmemIdex, fmt, siz,
                                   mRdp->texture_tile[tile].cms, mRdp->texture_tile[tile].cmt,
-@@ -2954,6 +3054,59 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
+@@ -2954,6 +3104,59 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
      struct LoadedVertex* v3 = &mRsp->loaded_vertices[vtx3_idx];
      struct LoadedVertex* v_arr[3] = { v1, v2, v3 };
  
@@ -265,7 +329,7 @@ index 6aad126..9a4a928 100644
      // if (rand()%2) return;
  
      if (v1->clip_rej & v2->clip_rej & v3->clip_rej) {
-@@ -3053,6 +3206,15 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
+@@ -3053,6 +3256,15 @@ void Interpreter::GfxSpTri1(uint8_t vtx1_idx, uint8_t vtx2_idx, uint8_t vtx3_idx
      }
  
      if (mRdp->viewport_or_scissor_changed) {
@@ -281,7 +345,7 @@ index 6aad126..9a4a928 100644
          if (memcmp(&mRdp->viewport, &mRenderingState.viewport, sizeof(mRdp->viewport)) != 0) {
              Flush();
              mRapi->SetViewport(mRdp->viewport.x, mRdp->viewport.y, mRdp->viewport.width, mRdp->viewport.height);
-@@ -3672,6 +3834,9 @@ void Interpreter::AdjustVIewportOrScissor(XYWidthHeight* area) {
+@@ -3672,6 +3884,9 @@ void Interpreter::AdjustVIewportOrScissor(XYWidthHeight* area) {
  }
  
  void Interpreter::CalcAndSetViewport(const F3DVp_t* viewport) {
@@ -291,7 +355,7 @@ index 6aad126..9a4a928 100644
      // 2 bits fraction
      float width = 2.0f * viewport->vscale[0] / 4.0f;
      float height = 2.0f * viewport->vscale[1] / 4.0f;
-@@ -3683,7 +3848,17 @@ void Interpreter::CalcAndSetViewport(const F3DVp_t* viewport) {
+@@ -3683,7 +3898,17 @@ void Interpreter::CalcAndSetViewport(const F3DVp_t* viewport) {
      mRdp->viewport.width = width;
      mRdp->viewport.height = height;
  
@@ -309,7 +373,7 @@ index 6aad126..9a4a928 100644
  
      mRdp->viewport_or_scissor_changed = true;
  }
-@@ -3895,11 +4070,30 @@ void Interpreter::GfxSpTexture(uint16_t sc, uint16_t tc, uint8_t level, uint8_t
+@@ -3895,11 +4120,30 @@ void Interpreter::GfxSpTexture(uint16_t sc, uint16_t tc, uint8_t level, uint8_t
  }
  
  void Interpreter::GfxDpSetScissor(uint32_t mode, uint32_t ulx, uint32_t uly, uint32_t lrx, uint32_t lry) {
@@ -340,7 +404,50 @@ index 6aad126..9a4a928 100644
      mRdp->scissor.x = x;
      mRdp->scissor.y = y;
      mRdp->scissor.width = width;
-@@ -4107,8 +4301,13 @@ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint3
+@@ -3934,6 +4178,9 @@ void Interpreter::GfxDpSetScissor(uint32_t mode, uint32_t ulx, uint32_t uly, uin
+ 
+ void Interpreter::GfxDpSetTextureImage(uint32_t format, uint32_t size, uint32_t width, const char* texPath,
+                                        uint32_t texFlags, RawTexMetadata rawTexMetdata, const void* addr) {
++    if (gKirbyPcDrawLogActive()) {
++        fprintf(stderr, "[dlog settimg] fmt=%u siz=%u w=%u addr=%p\n", format, size, width, addr);
++    }
+     // fprintf(stderr, "GfxDpSetTextureImage: %s (width=%d; size=0x%X)\n",
+     //         rawTexMetdata.resource ? rawTexMetdata.resource->GetInitData()->Path.c_str() : nullptr, width, size);
+     mRdp->texture_to_load.addr = (const uint8_t*)addr;
+@@ -3946,6 +4193,10 @@ void Interpreter::GfxDpSetTextureImage(uint32_t format, uint32_t size, uint32_t
+ void Interpreter::GfxDpSetTile(uint8_t fmt, uint32_t siz, uint32_t line, uint32_t tmem, uint8_t tile, uint32_t palette,
+                                uint32_t cmt, uint32_t maskt, uint32_t shiftt, uint32_t cms, uint32_t masks,
+                                uint32_t shifts) {
++    if (gKirbyPcDrawLogActive()) {
++        fprintf(stderr, "[dlog settile] tile=%u fmt=%u siz=%u line=%u tmem=%u pal=%u\n", tile, fmt, siz, line, tmem,
++                palette);
++    }
+     // OTRTODO:
+     // SUPPORT_CHECK(tmem == 0 || tmem == 256);
+ 
+@@ -3987,6 +4238,10 @@ void Interpreter::GfxDpSetTileSize(uint8_t tile, uint16_t uls, uint16_t ult, uin
+ }
+ 
+ void Interpreter::GfxDpLoadTlut(uint8_t tile, uint32_t high_index) {
++    if (gKirbyPcDrawLogActive()) {
++        fprintf(stderr, "[dlog loadtlut] tile=%u hi=%u tmem=%u src=%p\n", tile, high_index,
++                mRdp->texture_tile[tile].tmem, (const void*)mRdp->texture_to_load.addr);
++    }
+     // PORT: real N64 RDP LOADTLUT always transfers 16-bit TLUT entries
+     // regardless of the SetTextureImage siz, so a non-16b siz is hardware-
+     // tolerated rather than fatal. libultraship's hard SUPPORT_CHECK turned it
+@@ -4089,6 +4344,10 @@ void Interpreter::GfxDpLoadTlut(uint8_t tile, uint32_t high_index) {
+ }
+ 
+ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint32_t lrs, uint32_t dxt) {
++    if (gKirbyPcDrawLogActive()) {
++        fprintf(stderr, "[dlog loadblock] tile=%u lrs=%u dxt=%u src=%p siz=%u tmem=%u\n", tile, lrs, dxt,
++                (const void*)mRdp->texture_to_load.addr, mRdp->texture_to_load.siz, mRdp->texture_tile[tile].tmem);
++    }
+     SUPPORT_CHECK(uls == 0);
+     SUPPORT_CHECK(ult == 0);
+ 
+@@ -4107,8 +4366,13 @@ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint3
          return;
      }
  
@@ -356,7 +463,7 @@ index 6aad126..9a4a928 100644
      switch (mRdp->texture_to_load.siz) {
          case G_IM_SIZ_4b:
              word_size_shift = -1;
-@@ -4123,8 +4322,7 @@ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint3
+@@ -4123,8 +4387,7 @@ void Interpreter::GfxDpLoadBlock(uint8_t tile, uint32_t uls, uint32_t ult, uint3
              word_size_shift = 2;
              break;
      }
@@ -366,7 +473,7 @@ index 6aad126..9a4a928 100644
      uint32_t size_bytes = orig_size_bytes;
      if (mRdp->texture_to_load.raw_tex_metadata.h_byte_scale != 1 ||
          mRdp->texture_to_load.raw_tex_metadata.v_pixel_scale != 1) {
-@@ -4458,6 +4656,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+@@ -4458,6 +4721,20 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
  
      AdjustVIewportOrScissor(&default_viewport);
  
@@ -387,7 +494,7 @@ index 6aad126..9a4a928 100644
      mRdp->viewport = default_viewport;
      mRdp->viewport_or_scissor_changed = true;
      mRsp->geometry_mode = 0;
-@@ -4487,6 +4699,29 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
+@@ -4487,6 +4764,29 @@ void Interpreter::GfxDrawRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_
  
  void Interpreter::GfxDpTextureRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry, uint8_t tile, int16_t uls,
                                          int16_t ult, int16_t dsdx, int16_t dtdy, bool flip) {
@@ -417,7 +524,7 @@ index 6aad126..9a4a928 100644
      // Skip draws targeting the Z buffer.  N64 game code sometimes flips the
      // color image to the Z buffer address, draws a texture or fill to it to
      // manipulate depth values (e.g. for an alpha-based stencil that a
-@@ -4615,6 +4850,28 @@ void Interpreter::GfxDpImageRectangle(int32_t tile, int32_t w, int32_t h, int32_
+@@ -4615,6 +4915,28 @@ void Interpreter::GfxDpImageRectangle(int32_t tile, int32_t w, int32_t h, int32_
  }
  
  void Interpreter::GfxDpFillRectangle(int32_t ulx, int32_t uly, int32_t lrx, int32_t lry) {
@@ -446,7 +553,7 @@ index 6aad126..9a4a928 100644
      if (RdpColorImageIsZBuffer()) {
          // PORT: color-image-redirect fill — the game is writing a constant
          // 16-bit value into the Z buffer through the color path (per-camera
-@@ -4756,11 +5013,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -4756,11 +5078,29 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
          uls = (bg->b.imageW - bg->b.imageX) << 3;
      }
  
@@ -480,7 +587,7 @@ index 6aad126..9a4a928 100644
      GfxDpSetTileSize(G_TX_RENDERTILE, 0, 0, bg->b.imageW, bg->b.imageH);
      GfxDpTextureRectangle(bg->b.frameX, bg->b.frameY, bg->b.frameX + bg->b.imageW - 4, bg->b.frameY + bg->b.imageH - 4,
                            G_TX_RENDERTILE, uls, bg->b.imageY << 3, dsdx, 1 << 10, false);
-@@ -4768,6 +5043,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
+@@ -4768,6 +5108,13 @@ void Interpreter::Gfxs2dexBgCopy(F3DuObjBg* bg) {
  
  void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
      uintptr_t data = (uintptr_t)bg->b.imagePtr;
@@ -494,7 +601,7 @@ index 6aad126..9a4a928 100644
  
      uint32_t texFlags = 0;
      RawTexMetadata rawTexMetadata = {};
-@@ -4785,28 +5067,43 @@ void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
+@@ -4785,28 +5132,43 @@ void Interpreter::Gfxs2dexBg1cyc(F3DuObjBg* bg) {
          data = (uintptr_t) reinterpret_cast<char*>(tex->ImageData);
      }
  
@@ -551,7 +658,7 @@ index 6aad126..9a4a928 100644
  }
  
  void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
-@@ -4828,11 +5125,69 @@ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
+@@ -4828,11 +5190,69 @@ void Interpreter::Gfxs2dexRecyCopy(F3DuObjSprite* spr) {
      int testX = (realX + (realW / realSW));
      int testY = (realY + (realH / realSH));
  
@@ -622,7 +729,7 @@ index 6aad126..9a4a928 100644
  void* Interpreter::SegAddr(uintptr_t w1) {
      if (w1 <= UINT32_MAX) {
          void* relocPtr = portRelocTryResolvePointer((uint32_t)w1);
-@@ -5102,6 +5457,16 @@ bool gfx_movemem_handler_f3dex2(F3DGfx** cmd0) {
+@@ -5102,6 +5522,16 @@ bool gfx_movemem_handler_f3dex2(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *cmd0;
  
@@ -639,11 +746,16 @@ index 6aad126..9a4a928 100644
      gfx->GfxSpMovememF3dex2(C0(0, 8), C0(8, 8) * 8, gfx->SegAddr(cmd->words.w1));
  
      return false;
-@@ -5251,7 +5616,20 @@ static inline bool gfx_vtx_addr_is_unresolved(const void* addr) {
+@@ -5251,7 +5681,25 @@ static inline bool gfx_vtx_addr_is_unresolved(const void* addr) {
          return false;
      }
  #endif
 -    return !gfxPointerInLoadedModule(addr);
++    // Kirby port: game vertex data in the executable's own bss (cheap range
++    // test, ahead of the dladdr-based module check).
++    if ((i & 7) == 0 && gfxPointerInMainImage(addr)) {
++        return false;
++    }
 +    if (gfxPointerInLoadedModule(addr)) {
 +        return false;
 +    }
@@ -661,7 +773,31 @@ index 6aad126..9a4a928 100644
  }
  
  // Almost all versions of the microcode have their own version of this opcode
-@@ -6292,6 +6670,88 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
+@@ -5808,7 +6256,22 @@ bool gfx_set_timg_handler_rdp(F3DGfx** cmd0) {
+     // real `.rodata` texture from a TCC mod whose DLL got loaded at a low
+     // preferred base. Accepting those lets mods use static texture data
+     // without a heap-copy workaround.
+-    if (i <= 0x0FFFFFFF && !gfxPointerInLoadedModule(reinterpret_cast<const void*>(i))) {
++    //
++    // Kirby port: the non-PIE game keeps texture images it loads at runtime
++    // (the model material textures and palettes renderLoadTextures points
++    // SETTIMG at, image bank blocks) in its low-VA arena inside the
++    // executable's own bss, which the module check deliberately excludes. A
++    // low pointer that lies inside the main image and is 8-byte aligned (the
++    // RDP's DRAM alignment for a texture image) is real data; a stale
++    // segmented value outside the image is still skipped.
++    if (i <= 0x0FFFFFFF && !((i & 7) == 0 && gfxPointerInMainImage(reinterpret_cast<const void*>(i))) &&
++        !gfxPointerInLoadedModule(reinterpret_cast<const void*>(i))) {
++        static const bool census = getenv("KIRBY_PC_TEXCENSUS") != nullptr;
++        if (census) {
++            fprintf(stderr, "[dlog settimg-skip] w1=%#llx resolved=%#llx fmt=%u siz=%u\n",
++                    (unsigned long long)cmd->words.w1, (unsigned long long)i, (unsigned)C0(21, 3),
++                    (unsigned)C0(19, 2));
++        }
+         return false;
+     }
+ 
+@@ -6292,6 +6755,88 @@ bool gfx_rdp_set_other_mode_rdp(F3DGfx** cmd0) {
      return false;
  }
  
@@ -750,7 +886,7 @@ index 6aad126..9a4a928 100644
  bool gfx_bg_copy_handler_s2dex(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6320,6 +6780,75 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
+@@ -6320,6 +6865,75 @@ bool gfx_obj_rectangle_handler_s2dex(F3DGfx** cmd0) {
      return false;
  }
  
@@ -826,7 +962,7 @@ index 6aad126..9a4a928 100644
  bool gfx_extra_geometry_mode_handler_custom(F3DGfx** cmd0) {
      Interpreter* gfx = mInstance.lock().get();
      F3DGfx* cmd = *(cmd0);
-@@ -6462,6 +6991,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
+@@ -6462,6 +7076,10 @@ static constexpr UcodeHandler f3dex2Handlers = {
      // The RSP was already running the right ucode from task setup; on PC we handle them here.
      { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
@@ -837,7 +973,7 @@ index 6aad126..9a4a928 100644
  };
  
  static constexpr UcodeHandler f3dexHandlers = {
-@@ -6515,10 +7048,23 @@ static constexpr UcodeHandler s2dexHandlers = {
+@@ -6515,10 +7133,23 @@ static constexpr UcodeHandler s2dexHandlers = {
      { F3DEX2_G_BG_COPY, { "G_BG_COPY", gfx_bg_copy_handler_s2dex } },
      { F3DEX2_G_BG_1CYC, { "G_BG_1CYC", gfx_bg_1cyc_handler_s2dex } },
      { F3DEX2_G_OBJ_RENDERMODE, { "G_OBJ_RENDERMODE", gfx_stubbed_command_handler } },
@@ -862,7 +998,7 @@ index 6aad126..9a4a928 100644
  };
  
  static constexpr std::array ucode_handlers = {
-@@ -6846,6 +7392,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
+@@ -6846,6 +7477,23 @@ bool Interpreter::ViewportMatchesRendererResolution() {
      if (mForceRenderToFb) {
          return false;
      }
@@ -886,7 +1022,7 @@ index 6aad126..9a4a928 100644
      if (mCurDimensions.width == mGameWindowViewport.width && mCurDimensions.height == mGameWindowViewport.height) {
          return true;
      }
-@@ -7003,7 +7566,28 @@ void Interpreter::RunGuiOnly() {
+@@ -7003,7 +7651,28 @@ void Interpreter::RunGuiOnly() {
      }
  }
  
