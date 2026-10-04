@@ -121,3 +121,42 @@ u8 D_800D7B20[0x18] __attribute__((aligned(8)));
 u8 D_800D7B38[0x30] __attribute__((aligned(8)));
 
 ALIAS(D_800D7B2C, D_800D7B20, 0xC)
+
+/* Player state gKirbyState (struct Player, include/Player.h): one N64 object
+ * of 0x204 bytes at 0x8012E7C0, cut by splat at 23 interior labels that
+ * compiled code reads and writes by name -- `*(s32 *)((u8 *)&D_8012E7E8 + 8)`
+ * is gKirbyState.unk30, D_8012E7C5 is .action, gPositionState is the tail
+ * from +0x1A8. Split into separate objects, the two spellings of one field
+ * were two variables: the crouch coroutine (func_8016FD88_ovl3) signalled
+ * "stand up" through D_8012E7E8 + 8 while the crouch tick (func_8016FFF8_ovl3)
+ * waited on gKirbyState.unk30, so a D-DOWN press left Kirby crouched (action
+ * 14, vel 0) for good. Defined whole at the LP64 layout: struct Player's one
+ * pointer (unk114, N64 +0x114) moves to +0x118 and every later field 8 bytes
+ * up, so labels below +0x114 sit at their N64 offset and the rest at N64 + 8,
+ * each on the field it names (`ptype /o struct Player` on the binary: total
+ * 528, unk114 at 280, unk144 at 332, unk1A8 at 432). */
+u8 gKirbyState[0x210] __attribute__((aligned(8)));
+
+ALIAS(D_8012E7C5, gKirbyState, 0x05)     /* action */
+ALIAS(D_8012E7D7, gKirbyState, 0x17)     /* unk17 */
+ALIAS(D_8012E7DC, gKirbyState, 0x1C)     /* floatTimer */
+ALIAS(D_8012E7E8, gKirbyState, 0x28)     /* unk28; +8 is unk30 */
+ALIAS(D_8012E7FC, gKirbyState, 0x3C)     /* unk3C; [2] is unk44 */
+ALIAS(D_8012E80C, gKirbyState, 0x4C)     /* unk4C */
+ALIAS(D_8012E818, gKirbyState, 0x58)
+ALIAS(D_8012E81C, gKirbyState, 0x5C)
+ALIAS(D_8012E820, gKirbyState, 0x60)
+ALIAS(D_8012E824, gKirbyState, 0x64)
+ALIAS(D_8012E828, gKirbyState, 0x68)
+ALIAS(D_8012E850, gKirbyState, 0x90)     /* ability */
+ALIAS(D_8012E860, gKirbyState, 0xA0)     /* abilityInUse */
+ALIAS(D_8012E894, gKirbyState, 0xD4)     /* damageType */
+ALIAS(D_8012E8C2, gKirbyState, 0x102)    /* floorType */
+ALIAS(D_8012E8CA, gKirbyState, 0x10A)
+ALIAS(D_8012E904, gKirbyState, 0x14C)    /* unk144 */
+ALIAS(D_8012E908, gKirbyState, 0x150)    /* unk148 */
+ALIAS(D_8012E90C, gKirbyState, 0x154)    /* unk14C */
+ALIAS(D_8012E922, gKirbyState, 0x16A)    /* unk162 */
+ALIAS(D_8012E944, gKirbyState, 0x18C)    /* _184 */
+ALIAS(gPositionState, gKirbyState, 0x1B0) /* unk1A8: struct PositionState */
+ALIAS(D_8012E9B8, gKirbyState, 0x200)    /* unk1F8 */

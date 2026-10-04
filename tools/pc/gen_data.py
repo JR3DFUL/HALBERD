@@ -607,6 +607,16 @@ SUPPRESS_BSS = {
     # bytes a split object has. Split, the eye stays 0 and the skybox pitch
     # parallax is computed against an eye at the origin.
     'D_800D7B20', 'D_800D7B2C', 'D_800D7B38',
+    # The player state gKirbyState (struct Player, include/Player.h) and the
+    # 23 interior labels splat cut it at, whole in pc_bss_whole.c. Split, the
+    # crouch coroutine bumped `*(s32 *)((u8 *)&D_8012E7E8 + 8)` -- unk30 by
+    # its N64 address -- in one object while the crouch tick read
+    # gKirbyState.unk30 in another, so releasing D-DOWN never stood Kirby up.
+    'gKirbyState', 'D_8012E7C5', 'D_8012E7D7', 'D_8012E7DC', 'D_8012E7E8',
+    'D_8012E7FC', 'D_8012E80C', 'D_8012E818', 'D_8012E81C', 'D_8012E820',
+    'D_8012E824', 'D_8012E828', 'D_8012E850', 'D_8012E860', 'D_8012E894',
+    'D_8012E8C2', 'D_8012E8CA', 'D_8012E904', 'D_8012E908', 'D_8012E90C',
+    'D_8012E922', 'D_8012E944', 'gPositionState', 'D_8012E9B8',
 }
 
 

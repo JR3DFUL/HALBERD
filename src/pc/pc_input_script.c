@@ -194,13 +194,11 @@ static const char kPlayProgram[] =
     "g20:A:12,g22:A:12,g24:A:12,g26:A:12,g28:A:12,"
     "g30:A:12,g32:A:12,g34:A:12,g36:A:12,g38:A:12,"
     "g40:A:12,g42:A:12,g44:A:12,g46:A:12,g48:A:12,"
-    /* AND THE OTHER ACTIONS COME AFTER THE WALKING. With B at g14 and DDOWN
-     * at g19, Kirby arrives at the ledge in action 14 with vel = 0.0000, and a held
-     * D-RIGHT does not restart him: measured at +87, +96, +104, +112, +120
-     * and +128 s, all six samples identical at x = -1480.00 t = 0.517857
-     * vel = 0.0000 action = 14 with held = 0100 the whole time. Jumping
-     * cannot help from there because he never walks into the ledge again.
-     * Walk first, act later.
+    /* AND THE OTHER ACTIONS COME AFTER THE WALKING. The DDOWN cue crouches
+     * Kirby (action 14) and releasing it stands him up again; a crouch that
+     * never ended (vel = 0.0000, action = 14, held = 0100 for the rest of the
+     * run) was the split gKirbyState that src/pc/pc_bss_whole.c now defines
+     * whole, not this sequence.
      *
      * The tail keeps driving to the end of the run on purpose: a program
      * that runs out of cues at g129 leaves the pad neutral for two thirds of
@@ -498,8 +496,7 @@ void pc_input_script_init(void) {
  * 17256 frames in 300 wall seconds (57.5/s, about 1x) while the count
  * register ran at 8x. With the register as the clock, `play`'s cues fired
  * eight times earlier in the level than written: the g52 inhale landed at
- * x = -1943.47, before the -1480 ledge, and left Kirby in action 14 with
- * vel = 0.0000 for the rest of a 240 s run.
+ * x = -1943.47, before the -1480 ledge.
  *
  * gtlDrawnFrameCounter (src/main/gtl.c) is incremented once per drawn frame
  * and zeroed when a scene is set up, so it is accumulated here into a
